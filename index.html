@@ -371,7 +371,7 @@ function tryC(id){if(!A.peer||A.peer.destroyed||id===A.myId||A.conns.get(id)?.op
 function setupC(c){
   c.on('open',()=>{A.conns.set(c.peer,c);c.send({t:'HI',...myPres()});syncP(c.peer);deliverR(c.peer);offerRH(c.peer);sR();updateB();});
   c.on('data',m=>onData(c.peer,m));
-  c.on('close',()=>{A.conns.delete(c.peer);const p=A.peers.get(c.peer);if(p){if(p._ot)clearTimeout(p._ot);p._ot=setTimeout(()=>{if(!A.conns.get(c.peer)?.open){p.online=false;sR();}},8e3);}sR();});
+  c.on('close',()=>{A.conns.delete(c.peer);const p=A.peers.get(c.peer);if(p){if(p._ot)clearTimeout(p._ot);p._ot=setTimeout(()=>{if(!A.conns.get(c.peer)?.open){p.online=false;sR();}},8e3);}});
   c.on('error',()=>{A.conns.delete(c.peer);});}
 function send(id,msg){const c=A.conns.get(id);if(c?.open){try{c.send(msg);return;}catch(e){}}
   if(A.offlineQ.length>=100)A.offlineQ.shift();const mid=['INV','HC','PC','BM','DM','JR','JY','JN'].includes(msg.t)?uid():null;
@@ -403,18 +403,8 @@ function syncP(id){const c=A.conns.get(id);if(!c?.open)return;
   // 1. Re-send open posts
   A.myJobs.filter(j=>j.status==='open'&&j.creatorId===A.myId).forEach(j=>{
     const ts={...j,imageData:null};try{c.send({t:'INV',job:{...ts,fromContact:true}});}catch(e){}});
-  // 2. Re-send status for active/pending jobs involving this peer
+  // 2. Send BS sync for shared jobs (silent status update, no notifications)
   A.myJobs.forEach(j=>{
-    // Re-send accept if I'm owner and peer is the helper
-    if(j.creatorId===A.myId&&j.helperId===id&&j.status==='active')
-      try{c.send({t:'JY',jid:j.id,name:A.myName});}catch(e){}
-    // Re-send done confirmation if I confirmed but peer may have missed
-    if(j.creatorId===A.myId&&j.helperId===id&&j.status==='done')
-      try{c.send({t:'PC',jid:j.id});}catch(e){}
-    // Re-send helper-done if I'm helper and owner is this peer
-    if(j.isHelper&&j.creatorId===id&&j.status==='pending_review')
-      try{c.send({t:'HC',jid:j.id});}catch(e){}
-    // Send BS sync for shared jobs
     if(j.creatorId===id||j.helperId===id)
       try{c.send({t:'BS',jid:j.id,status:j.status,helperId:j.helperId,helperName:j.helperName});}catch(e){}
   });flushQ();deliverR(id);}
@@ -467,7 +457,7 @@ function handleD(from,m){try{switch(m.t){
   case 'JY':{const j=A.myJobs.find(x=>x.id===m.jid);if(j&&j.status==='pending'){j.helperId=from;j.helperName=m.name;j.status='active';
     notify('✅ Godkjent!',esc(m.name));persist();}sR();break;}
   case 'JN':{const j=A.myJobs.find(x=>x.id===m.jid);if(j?.isHelper)j.status='declined';persist();sR();break;}
-  case 'HC':{const j=A.myJobs.find(x=>x.id===m.jid);if(j){j.helperDone=true;j.status='pending_review';
+  case 'HC':{const j=A.myJobs.find(x=>x.id===m.jid);if(j&&j.status!=='pending_review'&&j.status!=='done'){j.helperDone=true;j.status='pending_review';
     notify('🔔 Ferdigmeldt!',esc(j.title?.substr(0,30)));persist();}sR();break;}
   case 'PC':{const j=A.myJobs.find(x=>x.id===m.jid);if(j&&j.status!=='done'){j.status='done';A.completedCount++;ss('oDone',A.completedCount);
     notify('🎉 Godkjent!','Fullført!');persist();}sR();break;}
