@@ -399,7 +399,7 @@ function setupC(c){
   c.on('close',()=>{A._pending.delete(c.peer);A.conns.delete(c.peer);const p=A.peers.get(c.peer);if(p){if(p._ot)clearTimeout(p._ot);p._ot=setTimeout(()=>{if(!A.conns.get(c.peer)?.open){p.online=false;sR();}},8e3);}});
   c.on('error',()=>{A._pending.delete(c.peer);A.conns.delete(c.peer);});}
 function send(id,msg){const c=A.conns.get(id);if(c?.open){try{c.send(msg);return;}catch(e){}}
-  if(A.offlineQ.length>=100)A.offlineQ.shift();const mid=['INV','HC','PC','BM','DM','JR','JY','JN'].includes(msg.t)?uid():null;
+  if(A.offlineQ.length>=100)A.offlineQ.shift();const mid=['INV','HC','PC','BM','DM','JR','JY','JN','RJ'].includes(msg.t)?uid():null;
   A.offlineQ.push({to:id,msg,ts:now(),mid});persist();if(mid)relayM(id,msg,mid);tryC(id);}
 function bcast(msg){A.conns.forEach((c,id)=>{if(c.open&&id!==msg.from)try{c.send(msg);}catch(e){}});}
 function gossip(p){const msg={t:'GS',id:uid(),ttl:6,from:A.myId,origin:A.myId,p};
@@ -466,7 +466,7 @@ function applyG(p){if(!p)return;if(p.t==='TAKE'||p.t==='CANCEL'){A.openJobs.dele
     A.openJobs.set(p.job.id,{...p.job,isFromContact:false,isPublic:true});sR();}}
   if(p.t==='GRP'&&p.group?.id&&/^g[a-zA-Z0-9]{1,20}$/.test(p.group.id)&&!p.group.private){A.knownGroups.set(p.group.id,p.group);}}
 
-function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI'].includes(m.t))console.log('[MSG]',m.t,{from,jid:m.jid||m.job?.id});switch(m.t){
+function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ'].includes(m.t))console.log('[MSG]',m.t,{from,jid:m.jid||m.job?.id});switch(m.t){
   case 'INV':{if(!m.job?.id||!/^[a-zA-Z0-9_-]{1,50}$/.test(m.job.id)||!m.job.creatorId||!/^[a-zA-Z0-9_-]{1,50}$/.test(m.job.creatorId))break;
     if(A.myJobs.find(j=>j.id===m.job.id)||A.openJobs.has(m.job.id))break;
     if(A.blocked.has(m.job.creatorId)||(m.job.expiresAt&&m.job.expiresAt<=now()))break;
@@ -478,10 +478,10 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI'].inclu
     if(!m.job.groupId&&!A.contacts.find(c=>c.id===m.job.creatorId))A.contacts.push({id:m.job.creatorId,name:m.job.creatorName||m.job.creatorId.substr(0,12),alias:m.job.creatorName});
     if(m.job.groupId&&m.job.groupName){const g=A.groups.find(x=>x.id===m.job.groupId);if(g&&(!g.name||g.name===g.id||g.name==='Gruppe...'))g.name=m.job.groupName;}
     notify('📩 '+esc(m.job.creatorName),esc(m.job.title?.substr(0,40)),()=>go('jobDetail',{jobId:m.job.id}));
-    A.unreadChat++;updateB();sR();break;}
+    updateB();sR();break;}
   case 'JR':{const j=A.myJobs.find(x=>x.id===m.jid);if(j&&['open','accepting'].includes(j.status)){
     if(!j.interests)j.interests=[];if(!j.interests.find(x=>x.id===from))j.interests.push({id:from,name:m.name,msg:m.message||'',ts:now()});
-    j.status='accepting';notify('⚡ '+esc(m.name),'Vil hjelpe!',()=>go('jobDetail',{jobId:m.jid}));A.unreadChat++;persist();}sR();break;}
+    j.status='accepting';notify('⚡ '+esc(m.name),'Vil hjelpe!',()=>go('jobDetail',{jobId:m.jid}));persist();}sR();break;}
   case 'JY':{const j=A.myJobs.find(x=>x.id===m.jid);if(j&&j.status==='pending'){j.helperId=from;j.helperName=m.name;j.status='active';
     notify('✅ Godkjent!',esc(m.name));persist();}sR();break;}
   case 'JN':{const j=A.myJobs.find(x=>x.id===m.jid);if(j?.isHelper)j.status='declined';persist();sR();break;}
@@ -527,8 +527,12 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI'].inclu
     var found=false;Object.values(A.jobChats).forEach(msgs=>{if(found)return;const msg=msgs.find(x=>x._mid===m._mid);if(msg){msg._status='delivered';found=true;}});
     if(!found)Object.values(A.dms).forEach(msgs=>{if(found)return;const msg=msgs.find(x=>x._mid===m._mid);if(msg){msg._status='delivered';found=true;}});
     if(found){persist();sR();}break;}
+  case 'RJ':{const j=A.myJobs.find(x=>x.id===m.jid);
+    if(j&&(j.status==='pending_review'||j.status==='done')){j.status='active';j.helperDone=false;
+      notify('↩️','Eieren ber deg prøve igjen');persist();sR();}break;}
   case 'GI':{if(!m.gid||!m.gname)break;if(A.groups.find(g=>g.id===m.gid))break;
     showConfirm('🏘️ Gruppeinvitasjon',esc(m.fromName)+' inviterer deg til gruppen "'+esc(m.gname)+'". Vil du bli med?','Bli med',()=>{
+      if(A.groups.find(g=>g.id===m.gid)){notify('ℹ️','Du er allerede med i denne gruppen');return;}
       A.groups.push({id:m.gid,name:m.gname,desc:m.gdesc||'',creatorId:'',createdTs:now(),isGroup:true,private:m.gprivate||false});
       persist();bcast({t:'HI',...myPres()});fsJoinGroup(m.gid,A.myId);
       fsReadGroup(m.gid).then(data=>{if(data){var g=A.groups.find(x=>x.id===m.gid);if(g&&data.name)g.name=data.name;persist();sR();}});
@@ -565,7 +569,7 @@ function render(){const el=$('app');if(!el)return;if(D())console.log('[R]',A.scr
   const map={onboarding:vOB,setup:vSetup,feed:vFeed,create:vCreate,mine:vMine,jobDetail:vDetail,interests:vInterests,
     chatHub:vChatHub,jobChat:vJobChat,dm:vDM,contacts:vContacts,repProfile:vRep,profile:vProfile,settings:vSettings,
     groups:vGroups,groupDetail:vGroupDetail,createGroup:vCreateGroup,groupCreated:vGroupCreated,search:vSearch};
-  try{el.innerHTML=(map[A.screen]||vFeed)();}
+  try{const newHtml=(map[A.screen]||vFeed)();if(el._lastHtml===newHtml)return;el._lastHtml=newHtml;el.innerHTML=newHtml;}
   catch(e){console.error('[render]',A.screen,e);el.innerHTML='<div class="scr"><button class="bk" onclick="go(\'feed\')">Tilbake</button><div class="emp"><div class="emp-i">⚠️</div><div class="emp-t">Noe gikk galt.</div></div></div>';}
   updateB();if(['jobChat','dm'].includes(A.screen))setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},60);}
 let _rTimer=null;function sR(){if(!_rTimer)_rTimer=setTimeout(()=>{_rTimer=null;render();},400);}
@@ -775,7 +779,7 @@ window.handleImg=async inp=>{if(!inp.files[0])return;try{A.nb.imageData=await co
 window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if(!t){notify('⚠️','Skriv en tittel');return;}if(!A.nb.desc?.trim()){notify('⚠️','Skriv en beskrivelse');return;}
   if(A.nb.vis==='group'&&!A.nb.groupId){notify('⚠️','Velg en gruppe');return;}
   if(A.nb.vis==='direct'&&!(A.nb.targetIds||[]).length){notify('⚠️','Velg minst én person');return;}
-  if(!A.nb.expiry)A.nb.expiry=7;window._postBusy=true;
+  if(!A.nb.expiry)A.nb.expiry=30;window._postBusy=true;
   try{const jobId='j'+now().toString(36)+Math.random().toString(36).substr(2,4);
   let imageUrl=null;
   // Upload to Firebase if available, otherwise keep inline
@@ -836,7 +840,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   if(isH&&j.status==='active')b+=`<button class="btn bs" style="margin-top:8px" onclick="go('jobChat',{jobId:'${escA(j.id)}'})">💬 Åpne chat</button>`;
   if(isO&&j.status==='pending_review')b+=`<div class="cd" style="border-color:var(--gbb);background:var(--gb)"><div style="font-size:14px;font-weight:700;color:var(--g2);margin-bottom:8px">Hjelper sier det er ferdig!</div>
     <div class="brow"><button class="btn bg" style="flex:1" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='done';A.completedCount++;ss('oDone',A.completedCount);if(x.helperId)send(x.helperId,{t:'PC',jid:'${escA(j.id)}'});persist();render();}">✅ Godkjenn</button>
-    <button class="btn br" style="flex:1" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='active';x.helperDone=false;if(x.helperId)send(x.helperId,{t:'BS',jid:'${escA(j.id)}',status:'active',helperId:x.helperId,helperName:x.helperName});persist();render();}">❌ Ikke ferdig</button></div></div>`;
+    <button class="btn br" style="flex:1" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='active';x.helperDone=false;if(x.helperId)send(x.helperId,{t:'RJ',jid:'${escA(j.id)}'});persist();render();}">❌ Ikke ferdig</button></div></div>`;
   if(j.status==='done'){b+=`<div style="text-align:center;padding:20px 0"><div style="font-size:48px;margin-bottom:8px">🎉</div><div style="font-size:24px;font-weight:800">Fullført!</div></div>`;
     if(!rated){const tid=isO?j.helperId:j.creatorId;const tn=isO?j.helperName:j.creatorName;
       b+=`<div class="cd"><div class="slbl">Vurder ${esc(tn||'?')}</div><div class="stars">${[1,2,3,4,5].map(n=>`<button class="star${(A.nb.rating||0)>=n?' act':''}" onclick="A.nb.rating=${n};render()">★</button>`).join('')}</div>
@@ -1059,7 +1063,7 @@ function vSettings(){
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">📱 LAGRING</div>
   <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px">Du har ${A.openJobs.size+A.myJobs.length} innlegg og ${Object.keys(A.jobChats).length+Object.keys(A.dms).length} samtaler lagret.</div>
-  <button class="btn bs" onclick="showConfirm('Rydd opp?','Sletter innlegg eldre enn 30 dager og samtaler eldre enn 60 dager. Frigjør plass.','Rydd opp',()=>{var n=now();var d30=n-30*864e5,d60=n-60*864e5;A.openJobs.forEach((j,id)=>{if(j.ts<d30)A.openJobs.delete(id);});A.myJobs=A.myJobs.filter(j=>j.ts>d30||['active','pending_review'].includes(j.status));Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)&&(!A.jobChats[k].length||A.jobChats[k][A.jobChats[k].length-1].ts<d60))delete A.jobChats[k];});Object.keys(A.dms).forEach(k=>{if(!A.dms[k].length||A.dms[k][A.dms[k].length-1].ts<d60)delete A.dms[k];});persist();notify('✅','Ryddet opp!');render();})">🧹 Rydd opp</button>
+  <button class="btn bs" onclick="showConfirm('Rydd opp?','Sletter innlegg eldre enn 30 dager og samtaler eldre enn 60 dager. Frigjør plass.','Rydd opp',()=>{var n=now();var d30=n-30*864e5,d60=n-60*864e5;A.openJobs.forEach((j,id)=>{if(j.ts<d30)A.openJobs.delete(id);});A.myJobs=A.myJobs.filter(j=>j.ts>d30||['open','accepting','active','pending_review'].includes(j.status));Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)&&(!A.jobChats[k].length||A.jobChats[k][A.jobChats[k].length-1].ts<d60))delete A.jobChats[k];});Object.keys(A.dms).forEach(k=>{if(!A.dms[k].length||A.dms[k][A.dms[k].length-1].ts<d60)delete A.dms[k];});persist();notify('✅','Ryddet opp!');render();})">🧹 Rydd opp</button>
   <div style="font-size:11px;color:var(--t3);margin-top:6px">Sletter innlegg eldre enn 30 dager og samtaler eldre enn 60 dager.</div>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">${t('lang').toUpperCase()}</div>
