@@ -102,8 +102,8 @@ input,textarea,select{font-family:inherit;outline:none;-webkit-appearance:none;b
     <button class="nb act" id="nb-feed" onclick="go('feed')"><span class="ni">🏠</span>Hjem</button>
     <button class="nb" id="nb-grp" onclick="go('groups')"><span class="ni">🏘️</span>Grupper</button>
     <div class="nf" onclick="go('create')"><div class="fab">+</div></div>
-    <button class="nb" id="nb-chat" onclick="go('chatHub')"><span class="ni">💬</span>Chat<span class="bdg" id="bdg-c" style="display:none"></span></button>
-    <button class="nb" id="nb-prof" onclick="go('profile')"><span class="ni">👤</span>Profil</button>
+    <button class="nb" id="nb-mine" onclick="go('mine')"><span class="ni">📋</span>Mine</button>
+    <button class="nb" id="nb-prof" onclick="go('profile')"><span class="ni">👤</span>Profil<span class="bdg" id="bdg-c" style="display:none"></span></button>
   </div>
 </div>
 <script>
@@ -399,7 +399,7 @@ function setupC(c){
   c.on('close',()=>{A._pending.delete(c.peer);A.conns.delete(c.peer);const p=A.peers.get(c.peer);if(p){if(p._ot)clearTimeout(p._ot);p._ot=setTimeout(()=>{if(!A.conns.get(c.peer)?.open){p.online=false;sR();}},8e3);}});
   c.on('error',()=>{A._pending.delete(c.peer);A.conns.delete(c.peer);});}
 function send(id,msg){const c=A.conns.get(id);if(c?.open){try{c.send(msg);return;}catch(e){}}
-  if(A.offlineQ.length>=100)A.offlineQ.shift();const mid=['INV','HC','PC','BM','DM','JR','JY','JN','RJ'].includes(msg.t)?uid():null;
+  if(A.offlineQ.length>=100)A.offlineQ.shift();const mid=['INV','HC','PC','BM','DM','JR','JY','JN','RJ','JW'].includes(msg.t)?uid():null;
   A.offlineQ.push({to:id,msg,ts:now(),mid});persist();if(mid)relayM(id,msg,mid);tryC(id);}
 function bcast(msg){A.conns.forEach((c,id)=>{if(c.open&&id!==msg.from)try{c.send(msg);}catch(e){}});}
 function gossip(p){const msg={t:'GS',id:uid(),ttl:6,from:A.myId,origin:A.myId,p};
@@ -466,7 +466,7 @@ function applyG(p){if(!p)return;if(p.t==='TAKE'||p.t==='CANCEL'){A.openJobs.dele
     A.openJobs.set(p.job.id,{...p.job,isFromContact:false,isPublic:true});sR();}}
   if(p.t==='GRP'&&p.group?.id&&/^g[a-zA-Z0-9]{1,20}$/.test(p.group.id)&&!p.group.private){A.knownGroups.set(p.group.id,p.group);}}
 
-function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ'].includes(m.t))console.log('[MSG]',m.t,{from,jid:m.jid||m.job?.id});switch(m.t){
+function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','JW'].includes(m.t))console.log('[MSG]',m.t,{from,jid:m.jid||m.job?.id});switch(m.t){
   case 'INV':{if(!m.job?.id||!/^[a-zA-Z0-9_-]{1,50}$/.test(m.job.id)||!m.job.creatorId||!/^[a-zA-Z0-9_-]{1,50}$/.test(m.job.creatorId))break;
     if(A.myJobs.find(j=>j.id===m.job.id)||A.openJobs.has(m.job.id))break;
     if(A.blocked.has(m.job.creatorId)||(m.job.expiresAt&&m.job.expiresAt<=now()))break;
@@ -527,6 +527,10 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ'].
     var found=false;Object.values(A.jobChats).forEach(msgs=>{if(found)return;const msg=msgs.find(x=>x._mid===m._mid);if(msg){msg._status='delivered';found=true;}});
     if(!found)Object.values(A.dms).forEach(msgs=>{if(found)return;const msg=msgs.find(x=>x._mid===m._mid);if(msg){msg._status='delivered';found=true;}});
     if(found){persist();sR();}break;}
+  case 'JW':{const j=A.myJobs.find(x=>x.id===m.jid);
+    if(j&&j.interests){j.interests=j.interests.filter(x=>x.id!==from);
+      if(j.interests.length===0&&j.status==='accepting')j.status='open';
+      notify('↩️',esc(dn(from))+' trakk seg');persist();sR();}break;}
   case 'RJ':{const j=A.myJobs.find(x=>x.id===m.jid);
     if(j&&(j.status==='pending_review'||j.status==='done')){j.status='active';j.helperDone=false;
       notify('↩️','Eieren ber deg prøve igjen');persist();sR();}break;}
@@ -561,8 +565,8 @@ function updateB(){const cb=$('bdg-c');if(cb){cb.style.display=A.unreadChat?'fle
 window.go=(s,p)=>{if(A.screen==='create'&&s!=='create'&&s!=='setup')A.nb={};A.prevScreen=A.screen;A.screen=s;A.params=p||{};
   const nav=$('nav');const noNav=['setup','onboarding','create','groupCreated','jobChat','dm'];
   if(nav)nav.style.display=noNav.includes(s)?'none':'block';
-  ['feed','grp','chat','prof'].forEach(k=>{const el=$('nb-'+k);if(!el)return;
-    const act=(s==='feed'&&k==='feed')||(['groups','groupDetail','createGroup','groupCreated'].includes(s)&&k==='grp')||(['chatHub','dm','jobChat'].includes(s)&&k==='chat')||(['profile','mine','contacts','repProfile','settings','search'].includes(s)&&k==='prof');
+  ['feed','grp','mine','prof'].forEach(k=>{const el=$('nb-'+k);if(!el)return;
+    const act=(s==='feed'&&k==='feed')||(['groups','groupDetail','createGroup','groupCreated'].includes(s)&&k==='grp')||(s==='mine'&&k==='mine')||(['profile','chatHub','dm','jobChat','contacts','repProfile','settings','search'].includes(s)&&k==='prof');
     el.className='nb'+(act?' act':'');});
   if(s==='chatHub')A.unreadChat=0;render();window.scrollTo(0,0);};
 function render(){const el=$('app');if(!el)return;if(D())console.log('[R]',A.screen,new Date().toISOString().substr(11,12));
@@ -846,6 +850,8 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
       b+=`<div class="cd"><div class="slbl">Vurder ${esc(tn||'?')}</div><div class="stars">${[1,2,3,4,5].map(n=>`<button class="star${(A.nb.rating||0)>=n?' act':''}" onclick="A.nb.rating=${n};render()">★</button>`).join('')}</div>
       <textarea class="fi" id="rc" rows="2" placeholder="Kommentar..." style="margin:8px 0" oninput="A.nb._rc=this.value"></textarea>
       <button class="btn bp" onclick="doRate('${escA(j.id)}','${escA(tid)}')">Send vurdering ✓</button></div>`;}else b+=`<div class="ibox" style="text-align:center">✓ Vurdering sendt!</div>`;}
+  if(isH&&j.status==='pending')b+=`<div class="ibox">⏳ Venter på svar fra eieren...</div>
+    <button class="btn br" style="margin-bottom:10px" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){A.myJobs=A.myJobs.filter(z=>z.id!=='${escA(j.id)}');send('${escA(j.creatorId)}',{t:'JW',jid:'${escA(j.id)}'});persist();notify('↩️','Trukket tilbake');go('feed');}">↩️ Trekk tilbake</button>`;
   if(isH&&j.status==='pending_review')b+=`<div class="ibox">⏳ Venter på at eieren godkjenner...</div>`;
   if(isH&&j.status==='active'&&j.helperDone===false)b+=`<div class="wbox">Eieren mener det ikke er helt ferdig ennå. Dere kan snakke sammen i chatten.</div>`;
   if(j.status==='never_done')b+=`<div style="background:var(--rb);border:2px solid var(--rd);border-radius:12px;padding:12px;font-size:13px;color:var(--rd);font-weight:700;margin-bottom:12px">❌ Aldri gjort opp — permanent merke</div>`;
@@ -899,10 +905,11 @@ function vMine(){const posted=A.myJobs.filter(j=>j.creatorId===A.myId&&['open','
     <span style="font-size:14px;font-weight:600;flex:1;line-height:1.4">${esc(j.title||'—')}</span><span class="badge ${cls}">${lbl}</span></div>
     <div style="font-size:12px;color:var(--t3)">${isO?'Du posted':'Hjelper '+esc(j.creatorName||'?')} · ${ago(j.ts)}</div>
     ${sD?`<button class="btn bs bsm" style="margin-top:8px;padding:6px;font-size:11px" onclick="event.stopPropagation();A.myJobs=A.myJobs.filter(x=>x.id!=='${escA(j.id)}');persist();render()">🗑 Fjern</button>`:''}</div>`;};
-  return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('profile')">Tilbake</button><div class="pgt">Mine ting</div><div style="font-weight:800;color:var(--g2);font-size:13px">${A.completedCount} fullført</div></div>
+  return`<div class="scr"><div class="hdr"><div style="font-size:22px;font-weight:800">Mine ting</div><div style="font-weight:800;color:var(--g2);font-size:13px">${A.completedCount} fullført</div></div>
   ${posted.length?`<span class="slbl">Mine innlegg (${posted.length})</span>${posted.map(mc).join('')}`:''}
   ${helping.length?`<span class="slbl" style="margin-top:16px;display:block">Jeg hjelper (${helping.length})</span>${helping.map(mc).join('')}`:''}
-  ${done.length?`<span class="slbl" style="margin-top:16px;display:block">Avsluttet (${done.length})</span>${done.map(mc).join('')}`:''}
+  ${done.length?`<span class="slbl" style="margin-top:16px;display:block">Avsluttet (${done.length})</span>${done.map(mc).join('')}
+    <button class="btn bs bsm" style="margin-top:8px" onclick="showConfirm('Rydde opp?','Fjerner alle fullførte og kansellerte fra listen.','Rydd opp',()=>{A.myJobs=A.myJobs.filter(j=>!['done','cancelled','never_done','declined'].includes(j.status));persist();render();notify('✅','Ryddet opp!');})">🧹 Rydd opp</button>`:''}
   ${!A.myJobs.length?`<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Du har ikke lagt ut noe ennå.<br>Trykk + for å legge ut.</div></div>`:''}</div>`;}
 
 // ═══ CHAT HUB ═══
@@ -1038,7 +1045,7 @@ function vProfile(){const pr=avgR(A.myId);const loc=[A.myBy,FYLKER.find(f=>f.id=
   <div class="psts"><div class="ps"><div class="psn" style="color:var(--g2)">${A.completedCount}</div><div class="psl">Fullført</div></div>
   <div class="ps"><div class="psn">${A.myJobs.length}</div><div class="psl">Innlegg</div></div>
   <div class="ps"><div class="psn">${A.contacts.length}</div><div class="psl">Venner</div></div></div></div>
-  <button class="btn bs" style="margin-bottom:8px" onclick="go('mine')">📋 Mine ting</button>
+  <button class="btn bs" style="margin-bottom:8px" onclick="go('chatHub')">💬 Mine samtaler${A.unreadChat?' ('+A.unreadChat+')':''}</button>
   <button class="btn bs" style="margin-bottom:8px" onclick="go('repProfile',{uid:'${escA(A.myId)}',name:'${escA(A.myName)}'})">⭐ Mitt rykte</button>
   <button class="btn bs" style="margin-bottom:8px" onclick="go('contacts')">👥 Venner</button>
   <button class="btn bs" style="margin-bottom:8px" onclick="go('settings')">⚙️ Innstillinger</button>
