@@ -426,9 +426,10 @@ function offerRH(hid){const c=A.conns.get(hid);if(!c?.open||!A.contacts.find(x=>
       i.fwd.push(hid);}catch(e){}});}
 function syncP(id){const c=A.conns.get(id);if(!c?.open)return;
   const ls2=A._lastSync.get(id)||0;if(now()-ls2<3e4)return;A._lastSync.set(id,now());
-  // 1. Re-send open posts
-  A.myJobs.filter(j=>j.status==='open'&&j.creatorId===A.myId).forEach(j=>{
-    const ts={...j,imageData:null};try{c.send({t:'INV',job:{...ts,fromContact:true}});}catch(e){}});
+  // 1. Re-send active posts (open, accepting, active)
+  A.myJobs.filter(j=>['open','accepting','active'].includes(j.status)&&j.creatorId===A.myId).forEach(j=>{
+    const ts={...j,imageData:null};if(ts.items)ts.items=ts.items.map(it=>({text:it.text,audioUrl:it.audioUrl,duration:it.duration}));
+    try{c.send({t:'INV',job:{...ts,fromContact:true}});}catch(e){}});
   // 2. Send BS sync for shared jobs (status only — no event re-sends to avoid notify spam)
   A.myJobs.forEach(j=>{
     if(j.creatorId===id||j.helperId===id)
