@@ -387,13 +387,17 @@ function schRec(){if(A._rt2||A.ready)return;const step=Math.min(A._rs||0,RBK.len
     if(A._rs>3&&!A._useFallback){if(D())console.log('[PEER] Primary failed, switching to fallback');A._useFallback=true;A._rs=0;try{A.peer?.destroy();}catch(e){}initPeer();return;}
     if(A._rs>3){A._rs=0;try{A.peer?.destroy();}catch(e){}initPeer();return;}
     try{A.peer?.reconnect();}catch(e){}schRec();},RBK[step]);}
-function tryC(id){if(!A.peer||A.peer.destroyed||id===A.myId||A.conns.get(id)?.open||A.conns.size>=MC||A.blocked.has(id)||!A.ready)return;
-  try{setupC(A.peer.connect(id,{reliable:true,serialization:'json'}));}catch(e){}}
+if(!A._pending)A._pending=new Set();if(!A._lastSync)A._lastSync=new Map();
+function tryC(id){if(!A.peer||A.peer.destroyed||id===A.myId||A.conns.get(id)?.open||A._pending.has(id)||A.conns.size>=MC||A.blocked.has(id)||!A.ready)return;
+  A._pending.add(id);try{setupC(A.peer.connect(id,{reliable:true,serialization:'json'}));}catch(e){A._pending.delete(id);}}
 function setupC(c){
-  c.on('open',()=>{if(D())console.log('[CONN] open',c.peer,{conns:A.conns.size});A.conns.set(c.peer,c);c.send({t:'HI',...myPres()});syncP(c.peer);deliverR(c.peer);offerRH(c.peer);sR();updateB();});
+  c.on('open',()=>{A._pending.delete(c.peer);
+    const ex=A.conns.get(c.peer);if(ex&&ex!==c&&ex.open){try{c.close();}catch(e){}return;}
+    if(D())console.log('[CONN] open',c.peer,{conns:A.conns.size});
+    A.conns.set(c.peer,c);c.send({t:'HI',...myPres()});syncP(c.peer);deliverR(c.peer);offerRH(c.peer);sR();updateB();});
   c.on('data',m=>onData(c.peer,m));
-  c.on('close',()=>{A.conns.delete(c.peer);const p=A.peers.get(c.peer);if(p){if(p._ot)clearTimeout(p._ot);p._ot=setTimeout(()=>{if(!A.conns.get(c.peer)?.open){p.online=false;sR();}},8e3);}});
-  c.on('error',()=>{A.conns.delete(c.peer);});}
+  c.on('close',()=>{A._pending.delete(c.peer);A.conns.delete(c.peer);const p=A.peers.get(c.peer);if(p){if(p._ot)clearTimeout(p._ot);p._ot=setTimeout(()=>{if(!A.conns.get(c.peer)?.open){p.online=false;sR();}},8e3);}});
+  c.on('error',()=>{A._pending.delete(c.peer);A.conns.delete(c.peer);});}
 function send(id,msg){const c=A.conns.get(id);if(c?.open){try{c.send(msg);return;}catch(e){}}
   if(A.offlineQ.length>=100)A.offlineQ.shift();const mid=['INV','HC','PC','BM','DM','JR','JY','JN'].includes(msg.t)?uid():null;
   A.offlineQ.push({to:id,msg,ts:now(),mid});persist();if(mid)relayM(id,msg,mid);tryC(id);}
@@ -421,6 +425,7 @@ function offerRH(hid){const c=A.conns.get(hid);if(!c?.open||!A.contacts.find(x=>
     try{c.send({t:'RR',mid:i.mid,rid:i.id,to:i.to,msg:i.msg,from:i.from,originalFrom:i.from,finalTo:i.to,ts:i.ts,expiresAt:i.expiresAt});
       i.fwd.push(hid);}catch(e){}});}
 function syncP(id){const c=A.conns.get(id);if(!c?.open)return;
+  const ls2=A._lastSync.get(id)||0;if(now()-ls2<3e4)return;A._lastSync.set(id,now());
   // 1. Re-send open posts
   A.myJobs.filter(j=>j.status==='open'&&j.creatorId===A.myId).forEach(j=>{
     const ts={...j,imageData:null};try{c.send({t:'INV',job:{...ts,fromContact:true}});}catch(e){}});
@@ -461,7 +466,7 @@ function applyG(p){if(!p)return;if(p.t==='TAKE'||p.t==='CANCEL'){A.openJobs.dele
     A.openJobs.set(p.job.id,{...p.job,isFromContact:false,isPublic:true});sR();}}
   if(p.t==='GRP'&&p.group?.id&&/^g[a-zA-Z0-9]{1,20}$/.test(p.group.id)&&!p.group.private){A.knownGroups.set(p.group.id,p.group);}}
 
-function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI'].includes(m.t))console.log('[MSG]',m.t,{from,jid:m.jid});switch(m.t){
+function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI'].includes(m.t))console.log('[MSG]',m.t,{from,jid:m.jid||m.job?.id});switch(m.t){
   case 'INV':{if(!m.job?.id||!/^[a-zA-Z0-9_-]{1,50}$/.test(m.job.id)||!m.job.creatorId||!/^[a-zA-Z0-9_-]{1,50}$/.test(m.job.creatorId))break;
     if(A.myJobs.find(j=>j.id===m.job.id)||A.openJobs.has(m.job.id))break;
     if(A.blocked.has(m.job.creatorId)||(m.job.expiresAt&&m.job.expiresAt<=now()))break;
