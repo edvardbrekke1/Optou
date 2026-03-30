@@ -1503,6 +1503,9 @@ async function boot(){
   fetch('https://'+PEER_CONFIG.host).catch(()=>{});// Wake Render early
   try{await openDB();}catch(e){console.warn('[DB] IndexedDB unavailable, using fallback');}
   await loadState();initFB();
+  // Migration: fix jobs corrupted by old BS bug (owner's status overwritten to 'pending')
+  var _migrated=0;A.myJobs.forEach(j=>{if(j.creatorId===A.myId&&j.status==='pending'){j.status='open';_migrated++;}});
+  if(_migrated){console.log('[MIGRATE] Fixed',_migrated,'owner jobs from pending→open');persist();}
   if(typeof Notification!=='undefined'&&Notification.permission==='default')try{Notification.requestPermission();}catch(e){}
   if(A.myName){try{await initCrypto();}catch(e){console.error(e);}initPeer();$('nav').style.display='block';go('feed');
     fsRegisterUser();
