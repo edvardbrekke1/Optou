@@ -384,6 +384,17 @@ async function fsCheckInterests(){if(!hasFS())return;try{const jobs=A.myJobs.fil
     if(removed>0){changed=true;if(j.interests.length===0&&j.status==='accepting')j.status='open';}}catch(e){}}
   if(changed){persist();sR();}}catch(e){console.warn('[FS] checkInterests',e);}}
 function fsClearInterests(jid){if(!hasFS())return;try{fbDb.collection('posts').doc(jid).collection('interests').get().then(snap=>{snap.docs.forEach(d=>d.ref.delete());}).catch(function(){});}catch(e){}}
+async function fsCheckJobStatus(){if(!hasFS())return;try{
+  const terminal=['done','cancelled','never_done','declined'];
+  for(const j of A.myJobs){if(terminal.includes(j.status))continue;
+    try{const doc=await fbDb.collection('posts').doc(j.id).get();if(!doc.exists)continue;
+      const fs=doc.data();if(!fs.status||fs.status===j.status)continue;
+      const pri={open:0,accepting:1,active:2,pending_review:3,done:4,cancelled:5,never_done:5,declined:5};
+      const myP=pri[j.status]||0;const fsP=pri[fs.status]||0;
+      if(fsP>myP){if(D())console.log('[fsSync] status update',{jid:j.id,from:j.status,to:fs.status});
+        j.status=fs.status;if(fs.status==='done'){A.completedCount++;ss('oDone',A.completedCount);}
+        if(fs.status==='active'&&!j.helperId&&j.isHelper){j.helperId=fs.helperId||null;j.helperName=fs.helperName||null;}}
+    }catch(e){}}persist();sR();}catch(e){if(D())console.log('[fsSync] error',e);}}
 async function fbUpload(dataUrl,path){
   if(!fbStorage)return null;
   try{const res=await fetch(dataUrl);const blob=await res.blob();
@@ -572,7 +583,7 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(j&&['open','accepting'].includes(j.status)){
     if(!j.interests)j.interests=[];if(!j.interests.find(x=>x.id===from))j.interests.push({id:from,name:m.name,msg:m.message||'',audioUrl:m.audioUrl||null,audioDur:m.audioDur||0,ts:now()});
     if(!A.contacts.find(c=>c.id===from))A.tempConns.set(m.jid,{peerId:from,name:m.name||'',ts:now()});
-    j.status='accepting';if(D())console.log('[JR] accepted',{jid:m.jid,interests:j.interests.length,status:j.status});
+    j.status='accepting';fsUpdatePostStatus(m.jid,'accepting');if(D())console.log('[JR] accepted',{jid:m.jid,interests:j.interests.length,status:j.status});
     notify('⚡ '+(m.name||''),'Vil hjelpe!',()=>go('jobDetail',{jobId:m.jid}));persist();}sR();break;}
   case 'JY':{const j=A.myJobs.find(x=>x.id===m.jid);
     if(D())console.log('[JY] received',{from,jid:m.jid,jobFound:!!j,jobStatus:j?.status});
@@ -582,11 +593,11 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(j?.isHelper)j.status='declined';persist();sR();break;}
   case 'HC':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[HC] received',{from,jid:m.jid,jobFound:!!j,status:j?.status});
     if(j&&j.status==='active'){j.helperDone=true;j.status='pending_review';
-    notify('🔔 Ferdigmeldt!',j.title?.substr(0,30));persist();}sR();break;}
+    fsUpdatePostStatus(m.jid,'pending_review');notify('🔔 Ferdigmeldt!',j.title?.substr(0,30));persist();}sR();break;}
   case 'PC':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[PC] received',{from,jid:m.jid,jobFound:!!j,status:j?.status});
     if(j&&j.status!=='done'){j.status='done';A.completedCount++;ss('oDone',A.completedCount);
     notify('🎉 Godkjent!','Fullført!');persist();}sR();break;}
-  case 'NP':{const j=A.myJobs.find(x=>x.id===m.jid);if(!j)break;j.status='never_done';
+  case 'NP':{const j=A.myJobs.find(x=>x.id===m.jid);if(!j)break;j.status='never_done';fsUpdatePostStatus(m.jid,'never_done');
     if(!A.ratings[A.myId])A.ratings[A.myId]=[];
     A.ratings[A.myId].push({score:1,comment:'Fullførte aldri.',jobId:m.jid,raterName:j.creatorName||'?',ts:now(),nd:true});
     gossip({t:'RAT',uid:A.myId,ratings:A.ratings[A.myId]});persist();sR();break;}
@@ -634,11 +645,11 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
       fsUpdatePostStatus(j.id,'open');notify('↩️',dn(from)+' trakk seg fra jobben');persist();sR();break;}
     if(j.interests){const before=j.interests.length;j.interests=j.interests.filter(x=>x.id!==from);
       if(D())console.log('[JW] interest removed',{before,after:j.interests.length,statusWas:j.status});
-      if(j.interests.length===0&&j.status==='accepting'){j.status='open';if(D())console.log('[JW] status→open (no interests left)');}
+      if(j.interests.length===0&&j.status==='accepting'){j.status='open';fsUpdatePostStatus(j.id,'open');if(D())console.log('[JW] status→open (no interests left)');}
       notify('↩️',dn(from)+' trakk seg');persist();sR();}else{if(D())console.log('[JW] no interests array on job');}break;}
   case 'RJ':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[RJ] received',{from,jid:m.jid,jobFound:!!j,status:j?.status});
     if(j&&(j.status==='pending_review'||j.status==='done')){j.status='active';j.helperDone=false;
-      notify('↩️','Eieren ber deg prøve igjen');persist();sR();}break;}
+      fsUpdatePostStatus(m.jid,'active');notify('↩️','Eieren ber deg prøve igjen');persist();sR();}break;}
   case 'GI':{if(!m.gid||!m.gname)break;if(A.groups.find(g=>g.id===m.gid))break;
     showConfirm('🏘️ Gruppeinvitasjon',(m.fromName||'Noen')+' inviterer deg til gruppen "'+(m.gname||'')+'"','Bli med',()=>{
       if(A.groups.find(g=>g.id===m.gid)){notify('ℹ️','Du er allerede med i denne gruppen');return;}
@@ -958,12 +969,14 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
   A.myJobs.push({...job});
   if(A.nb.imageData)dbPut('images',jobId,A.nb.imageData);
   const toSend=stripJobForSend(job);
-  // Route based on visibility
+  // Route based on visibility (P2P for speed, Firestore for reliability)
   if(job.visibility==='direct'){(job.targetIds||[]).forEach(id=>send(id,{t:'INV',job:{...toSend,fromContact:true}}));}
-  else if(job.visibility==='group'){const gid=job.groupId;A.contacts.forEach(c=>{const p=A.peers.get(c.id);if(!gid||p?.gids?.includes(gid))send(c.id,{t:'INV',job:{...toSend,fromContact:true}});});await fsWritePost(job);}
+  else if(job.visibility==='group'){const gid=job.groupId;A.contacts.forEach(c=>{const p=A.peers.get(c.id);if(!gid||p?.gids?.includes(gid))send(c.id,{t:'INV',job:{...toSend,fromContact:true}});});}
   else if(job.visibility==='public'){A.contacts.forEach(c=>send(c.id,{t:'INV',job:{...toSend,fromContact:true}}));
-    gossip({t:'POST',job:{...toSend,fromContact:false}});await fsWritePost(job);}
+    gossip({t:'POST',job:{...toSend,fromContact:false}});}
   else{A.contacts.forEach(c=>send(c.id,{t:'INV',job:{...toSend,fromContact:true}}));}
+  // All posts go to Firestore (backbone for offline delivery)
+  await fsWritePost(job);
   addAct('Nytt: '+t.substr(0,30),'📋');persist();A.nb={};go(job.visibility==='direct'?'chatHub':'mine');
   }finally{window._postBusy=false;}};
 
@@ -997,15 +1010,15 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   if(isO&&['open','accepting'].includes(j.status))b+=`<button class="btn br" style="margin-bottom:10px" onclick="showConfirm('Kansellere?','Vil du kansellere innlegget?','Ja, kanseller',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='cancelled';A.openJobs.delete('${escA(j.id)}');gossip({t:'CANCEL',jobId:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','cancelled');(x.interests||[]).forEach(p=>send(p.id,{t:'JN',jid:'${escA(j.id)}'}));fsClearInterests('${escA(j.id)}');}persist();render();})">🗑 Kanseller</button>`;
   if(isO&&['active','pending_review'].includes(j.status))b+=`<button class="btn br" style="margin-bottom:10px" onclick="showConfirm('Kansellere?','Du har allerede en hjelper. Er du sikker på at du vil kansellere?','Ja, kanseller',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='cancelled';A.openJobs.delete('${escA(j.id)}');gossip({t:'CANCEL',jobId:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','cancelled');if(x.helperId)send(x.helperId,{t:'BS',jid:'${escA(j.id)}',status:'cancelled'});fsClearInterests('${escA(j.id)}');}persist();render();})">🗑 Kanseller</button>`;
   if(isH&&j.status==='active')b+=`<div class="cd" style="border-color:var(--pbb);background:var(--pb)"><div style="font-size:14px;font-weight:700;color:var(--pr);margin-bottom:8px">Er du ferdig?</div>
-    <button class="btn bg" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='pending_review';send(x.creatorId,{t:'HC',jid:'${escA(j.id)}'});persist();render();}">✅ Marker som ferdig</button></div>`;
-  if(isO&&j.status==='active')b+=`<button class="btn br" style="margin-bottom:4px" onclick="showConfirm('Aldri gjort opp?','Er du sikker? Dette gir personen et permanent merke som alle kan se.','Ja, merk som aldri gjort',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='never_done';send(x.helperId,{t:'NP',jid:'${escA(j.id)}'});if(!A.ratings[x.helperId])A.ratings[x.helperId]=[];A.ratings[x.helperId].push({score:1,comment:'Aldri gjort opp.',jobId:'${escA(j.id)}',raterName:A.myName,ts:now(),nd:true});gossip({t:'RAT',uid:x.helperId,ratings:A.ratings[x.helperId]});}persist();render();})">⚠️ Aldri gjort opp</button>
+    <button class="btn bg" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='pending_review';send(x.creatorId,{t:'HC',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','pending_review');persist();render();}">✅ Marker som ferdig</button></div>`;
+  if(isO&&j.status==='active')b+=`<button class="btn br" style="margin-bottom:4px" onclick="showConfirm('Aldri gjort opp?','Er du sikker? Dette gir personen et permanent merke som alle kan se.','Ja, merk som aldri gjort',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='never_done';send(x.helperId,{t:'NP',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','never_done');if(!A.ratings[x.helperId])A.ratings[x.helperId]=[];A.ratings[x.helperId].push({score:1,comment:'Aldri gjort opp.',jobId:'${escA(j.id)}',raterName:A.myName,ts:now(),nd:true});gossip({t:'RAT',uid:x.helperId,ratings:A.ratings[x.helperId]});}persist();render();})">⚠️ Aldri gjort opp</button>
     <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Gir personen et permanent merke synlig for alle.</div>`;
   if(isO&&j.status==='active')b+=`<button class="btn bs" style="margin-bottom:10px" onclick="go('jobChat',{jobId:'${escA(j.id)}'})">💬 Åpne chat</button>`;
   if(isH&&j.status==='active')b+=`<button class="btn bs" style="margin-top:8px" onclick="go('jobChat',{jobId:'${escA(j.id)}'})">💬 Åpne chat</button>`;
   if(isH&&j.status==='active')b+=`<button class="btn br" style="margin-top:8px" onclick="showConfirm('Trekke deg?','Er du sikker? Eieren blir varslet.','Ja, trekk meg',()=>{withdrawHelp('${escA(j.id)}','${escA(j.creatorId)}');go('mine');})">↩️ Trekk meg fra jobben</button>`;
   if(isO&&j.status==='pending_review')b+=`<div class="cd" style="border-color:var(--gbb);background:var(--gb)"><div style="font-size:14px;font-weight:700;color:var(--g2);margin-bottom:8px">Hjelper sier det er ferdig!</div>
     <div class="brow"><button class="btn bg" style="flex:1" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='done';A.completedCount++;ss('oDone',A.completedCount);if(x.helperId)send(x.helperId,{t:'PC',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','done');persist();render();}">✅ Godkjenn — jobben er gjort</button>
-    <button class="btn br" style="flex:1" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='active';x.helperDone=false;if(x.helperId)send(x.helperId,{t:'RJ',jid:'${escA(j.id)}'});persist();render();}">↩️ Ikke ferdig ennå</button></div></div>`;
+    <button class="btn br" style="flex:1" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='active';x.helperDone=false;if(x.helperId)send(x.helperId,{t:'RJ',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','active');persist();render();}">↩️ Ikke ferdig ennå</button></div></div>`;
   if(j.status==='done'){b+=`<div style="text-align:center;padding:20px 0"><div style="font-size:48px;margin-bottom:8px">🎉</div><div style="font-size:24px;font-weight:800">Fullført!</div></div>`;
     if(!rated){const tid=isO?j.helperId:j.creatorId;const tn=isO?j.helperName:j.creatorName;
       b+=`<div class="cd"><div class="slbl">Vurder ${esc(tn||'?')}</div><div class="stars">${[1,2,3,4,5].map(n=>`<button class="star${(A.nb.rating||0)>=n?' act':''}" onclick="A.nb.rating=${n};render()">★</button>`).join('')}</div>
@@ -1512,7 +1525,7 @@ async function boot(){
     fsRegisterUser();
     // Background: load public posts from Firestore
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
-    fsCheckInterests();
+    fsCheckInterests();fsCheckJobStatus();
     // Load group posts from Firestore
     if(hasFS()&&A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
       .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(e=>console.warn('[FS] groupPosts',e));});
@@ -1534,7 +1547,7 @@ async function boot(){
   // Periodic Firestore sync (every 2 min)
   setInterval(()=>{if(!A.myName||!hasFS())return;
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}}).catch(()=>{});
-    fsCheckInterests();
+    fsCheckInterests();fsCheckJobStatus();
     if(hasFS())A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
       .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(()=>{});});
   },12e4);
