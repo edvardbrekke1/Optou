@@ -422,7 +422,7 @@ const MC=15,RTTL=7776e7,RMAX=200;
 const PEER_CONFIG={host:'optou-peer.onrender.com',port:443,path:'/',secure:true,key:'peerjs'};
 const PEER_FALLBACK={host:'0.peerjs.com',port:443,path:'/',secure:true};
 // TURN-konfig (sett disse for bedre NAT-gjennomtrengning, la stå tomme for STUN-only)
-const TURN_URL='';const TURN_USERNAME='';const TURN_CREDENTIAL='';
+const TURN_URL='turn:global.relay.metered.ca:80';const TURN_USERNAME='32287330a6d0d137941c7b34';const TURN_CREDENTIAL='+Tk8ARkmnwvNW35E';
 function buildIceServers(){var ice=[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
   if(TURN_URL)ice.push({urls:TURN_URL,username:TURN_USERNAME,credential:TURN_CREDENTIAL});return ice;}
 const _gr=new Map();function chkRate(p){const n=now();const r=_gr.get(p)||{c:0,r:n+1e4};if(n>r.r){r.c=0;r.r=n+1e4;}_gr.set(p,r);return++r.c<=30;}
