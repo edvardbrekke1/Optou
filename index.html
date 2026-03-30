@@ -515,8 +515,9 @@ function syncP(id){const c=A.conns.get(id);if(!c?.open)return;
   A.myJobs.filter(j=>['open','accepting','active'].includes(j.status)&&j.creatorId===A.myId).forEach(j=>{
     try{c.send({t:'INV',job:{...stripJobForSend(j),fromContact:true}});}catch(e){}});
   // 2. Send BS sync for shared jobs (status only — no event re-sends to avoid notify spam)
+  // Skip 'pending' — it's a local helper-only status that must not overwrite owner's 'open'
   A.myJobs.forEach(j=>{
-    if(j.creatorId===id||j.helperId===id){
+    if((j.creatorId===id||j.helperId===id)&&j.status!=='pending'){
       if(D())console.log('[syncP] BS→',id,{jid:j.id,status:j.status,helperId:j.helperId,reason:j.creatorId===id?'creator':'helper'});
       try{c.send({t:'BS',jid:j.id,status:j.status,helperId:j.helperId,helperName:j.helperName});}catch(e){}}
   });flushQ();deliverR(id);}
@@ -613,7 +614,9 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     const origId=m.originalFrom;if(origId&&origId!==A.myId){const oc=A.conns.get(origId);if(oc?.open)try{oc.send({t:'RA',mid:m.mid,finalTo:m.finalTo,originalFrom:origId});}catch(e){}}
     persist();break;}
   case 'BS':{if(!m.jid)break;const j=A.myJobs.find(x=>x.id===m.jid);if(!j){if(D())console.log('[BS] job not found',m.jid);break;}
-    const pri={open:0,accepting:1,pending:1,active:2,pending_review:3,done:4,cancelled:5,never_done:5,declined:5};
+    // Reject 'pending' via BS — it's a local helper status that must not propagate
+    if(m.status==='pending'){if(D())console.log('[BS] REJECTED pending from',from,{jid:m.jid,myStatus:j.status});break;}
+    const pri={open:0,accepting:1,active:2,pending_review:3,done:4,cancelled:5,never_done:5,declined:5};
     const myP=pri[j.status]||0;const theirP=pri[m.status]||0;
     if(D())console.log('[BS] received',{from,jid:m.jid,myStatus:j.status,theirStatus:m.status,myP,theirP,willUpdate:theirP>myP});
     if(theirP>myP){j.status=m.status;if(m.helperId&&!j.helperId){j.helperId=m.helperId;j.helperName=m.helperName;}
