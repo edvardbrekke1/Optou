@@ -1056,12 +1056,18 @@ function vMine(){
   const tabS=(k,n,c,l)=>`<div class="stat" style="cursor:pointer;${mf===k?'border-color:var(--pr);border-width:2px':'border-color:var(--s3)'}" onclick="A._mineFilter='${k}';render()"><div class="stn" style="color:${c}">${n}</div><div class="stl">${l}</div></div>`;
   return`<div class="scr"><div style="font-size:22px;font-weight:800;margin-bottom:14px">Mine ting</div>
   <div class="stg">${tabS('active',nActive,'var(--pr)','Aktive')}${tabS('ended',nEnded,'var(--t3)','Avsluttet')}${tabS('done',nDone,'var(--g2)','Fullført')}</div>
-  ${filtered.length?filtered.map(mc).join('')
-    :A.myJobs.length?'<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Ingen her.</div></div>'
-    :`<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Du har ingen oppgaver ennå.</div>
-    <div style="display:flex;gap:8px;margin-top:12px;justify-content:center">
-    <button class="btn bp bsm" style="width:auto" onclick="A.nb.type='help';go('create')">🤝 Be om hjelp</button>
-    <button class="btn bs bsm" style="width:auto" onclick="A.nb.type='service';go('create')">💼 Tilby noe</button></div></div>`}
+  ${(()=>{const mine=filtered.filter(j=>j.creatorId===A.myId);const helping=filtered.filter(j=>j.isHelper);
+    const hasAnyMine=A.myJobs.some(j=>j.creatorId===A.myId);const hasAnyHelp=A.myJobs.some(j=>j.isHelper);
+    if(!A.myJobs.length)return`<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Du har ingen oppgaver ennå.</div>
+      <div style="display:flex;gap:8px;margin-top:12px;justify-content:center">
+      <button class="btn bp bsm" style="width:auto" onclick="A.nb.type='help';go('create')">🤝 Be om hjelp</button>
+      <button class="btn bs bsm" style="width:auto" onclick="A.nb.type='service';go('create')">💼 Tilby noe</button></div></div>`;
+    let h='';
+    if(hasAnyMine){h+=`<span class="slbl">MINE INNLEGG (${mine.length})</span>`;
+      h+=mine.length?mine.map(mc).join(''):'<div style="font-size:13px;color:var(--t3);margin-bottom:14px">Ingen her.</div>';}
+    if(hasAnyHelp){h+=`<span class="slbl" style="margin-top:14px;display:block">JEG HJELPER (${helping.length})</span>`;
+      h+=helping.length?helping.map(mc).join(''):'<div style="font-size:13px;color:var(--t3);margin-bottom:14px">Ingen her.</div>';}
+    return h||'<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Ingen her.</div></div>';})()}
   ${mf==='ended'&&filtered.length?`<button class="btn bs bsm" style="margin-top:8px" onclick="showConfirm('Rydde opp?','Fjerner alle avsluttede fra listen.','Rydd opp',()=>{A.myJobs=A.myJobs.filter(j=>!['cancelled','never_done','declined'].includes(j.status));persist();render();notify('✅','Ryddet opp!');})">🧹 Rydd opp</button>`:''}
   ${mf==='done'&&filtered.length?`<button class="btn bs bsm" style="margin-top:8px" onclick="showConfirm('Rydde opp?','Fjerner alle fullførte fra listen.','Rydd opp',()=>{A.myJobs=A.myJobs.filter(j=>j.status!=='done');persist();render();notify('✅','Ryddet opp!');})">🧹 Rydd opp</button>`:''}</div>`;}
 
