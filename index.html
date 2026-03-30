@@ -7,6 +7,7 @@
 <title>OptoU</title>
 <meta name="theme-color" content="#FF6B35">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="description" content="Få ting gjort sammen — med familie, venner og nabolag.">
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -422,9 +423,10 @@ const MC=15,RTTL=7776e7,RMAX=200;
 const PEER_CONFIG={host:'optou-peer.onrender.com',port:443,path:'/',secure:true,key:'peerjs'};
 const PEER_FALLBACK={host:'0.peerjs.com',port:443,path:'/',secure:true};
 // TURN-konfig (sett disse for bedre NAT-gjennomtrengning, la stå tomme for STUN-only)
-const TURN_URL='turn:global.relay.metered.ca:80';const TURN_USERNAME='32287330a6d0d137941c7b34';const TURN_CREDENTIAL='+Tk8ARkmnwvNW35E';
+const TURN_URLS=['turn:global.relay.metered.ca:80','turn:global.relay.metered.ca:80?transport=tcp','turn:global.relay.metered.ca:443','turns:global.relay.metered.ca:443?transport=tcp'];
+const TURN_USERNAME='32287330a6d0d137941c7b34';const TURN_CREDENTIAL='+Tk8ARkmnwvNW35E';
 function buildIceServers(){var ice=[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
-  if(TURN_URL)ice.push({urls:TURN_URL,username:TURN_USERNAME,credential:TURN_CREDENTIAL});return ice;}
+  if(TURN_URLS.length)TURN_URLS.forEach(u=>ice.push({urls:u,username:TURN_USERNAME,credential:TURN_CREDENTIAL}));return ice;}
 const _gr=new Map();function chkRate(p){const n=now();const r=_gr.get(p)||{c:0,r:n+1e4};if(n>r.r){r.c=0;r.r=n+1e4;}_gr.set(p,r);return++r.c<=30;}
 function myPres(){return{id:A.myId,name:A.myName,bio:A.myBio,city:A.myCity,fylke:A.myFylke,by:A.myBy,avatar:ls('oAvatar')||'',pub:A.pubB64,epub:A.ecdhPubB64,esig:A.ecdhSig,done:A.completedCount,jobs:A.myJobs.length,ts:now(),pr:avgR(A.myId),cids:A.contacts.map(c=>c.id),gids:A.groups.map(g=>g.id)};}
 const RBK=[2e3,5e3,15e3,3e4,6e4];
@@ -432,7 +434,7 @@ function initPeer(){A._pg=(A._pg||0)+1;const gen=A._pg;
   const cfg=A._useFallback?PEER_FALLBACK:PEER_CONFIG;
   var ice=buildIceServers();
   const pOpts={host:cfg.host,port:cfg.port,path:cfg.path,secure:cfg.secure,key:cfg.key||'peerjs',config:{iceServers:ice}};
-  if(D())console.log('[PEER] init',A._useFallback?'FALLBACK':'PRIMARY',cfg.host,{turn:!!TURN_URL,iceCount:ice.length});
+  if(D())console.log('[PEER] init',A._useFallback?'FALLBACK':'PRIMARY',cfg.host,{turn:TURN_URLS.length,iceCount:ice.length});
   A.peer=new Peer(A.myId,pOpts);
   A.peer.on('open',()=>{if(gen!==A._pg)return;A.ready=true;clearTimeout(A._rt2);A._rt2=null;A._rs=0;sR();
     A.contacts.forEach(c=>tryC(c.id));flushQ();
@@ -1430,7 +1432,7 @@ window.shareApp=async()=>{var url='https://edvardbrekke1.github.io/Optou/';
   ctx.fillStyle='#FF6B35';ctx.beginPath();ctx.arc(sz/2,sz/2,sz/2,0,Math.PI*2);ctx.fill();
   ctx.fillStyle='#fff';ctx.font='bold '+(sz*.5)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('O',sz/2,sz*.52);
   const png=c.toDataURL('image/png');const al=document.createElement('link');al.rel='apple-touch-icon';al.href=png;document.head.appendChild(al);
-  const manifest={name:'OptoU',short_name:'OptoU',start_url:'.',display:'standalone',background_color:'#FAF9F6',theme_color:'#FF6B35',
+  const manifest={name:'OptoU',short_name:'OptoU',start_url:location.href.replace(/[?#].*/,''),display:'standalone',background_color:'#FAF9F6',theme_color:'#FF6B35',
     icons:[{src:png,sizes:'512x512',type:'image/png',purpose:'any maskable'}]};
   const bl=new Blob([JSON.stringify(manifest)],{type:'application/manifest+json'});
   const ml=document.createElement('link');ml.rel='manifest';ml.href=URL.createObjectURL(bl);document.head.appendChild(ml);
@@ -1438,17 +1440,10 @@ window.shareApp=async()=>{var url='https://edvardbrekke1.github.io/Optou/';
 
 
 // ═══ SERVICE WORKER ═══
-(function(){if(!('serviceWorker' in navigator)||location.protocol==='file:')return;
-  const CACHE='optou-'+V;
-  const swCode=`const CACHE='${CACHE}';
-self.addEventListener('install',()=>self.skipWaiting());
-self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
-self.addEventListener('fetch',e=>{const url=e.request.url;if(url.includes('version.json')||url.includes('fonts.g')||url.includes('unpkg.com'))return;
-  e.respondWith(caches.match(e.request).then(c=>{if(c)return c;return fetch(e.request).then(r=>{if(r&&r.status===200){const cl=r.clone();caches.open(CACHE).then(ca=>ca.put(e.request,cl));}return r;}).catch(()=>caches.match(e.request).then(c2=>c2||new Response('Offline',{status:503})));}));});`;
-  try{const blob=new Blob([swCode],{type:'application/javascript'});const swUrl=URL.createObjectURL(blob);
-    navigator.serviceWorker.register(swUrl,{scope:location.href.replace(/[?#].*/,'').replace(/[^/]*$/,'')}).catch(e=>console.warn('[SW]',e));
-  }catch(e){console.warn('[SW]',e);}
-})();
+// Note: SW registration disabled — blob:-URLs cannot be registered as service workers.
+// To enable offline support, deploy a static sw.js file alongside optou.html and register it here:
+// navigator.serviceWorker.register('./sw.js').catch(e=>console.warn('[SW]',e));
+
 
 // ═══ BOOT ═══
 async function boot(){
