@@ -245,6 +245,16 @@ function compressImage(file){return new Promise((res,rej)=>{
 const _aExt=(typeof MediaRecorder!=='undefined'&&MediaRecorder.isTypeSupported?.('audio/webm;codecs=opus'))?'.webm':'.m4a';
 let _recorder=null,_chunks=[],_recIdx=-1,_isRec=false,_audio=null,_playingId=null;
 let _chatRec=null,_chatChunks=[],_isChatRec=false;
+window.toggleRec=async idx=>{try{if(_isRec&&_recIdx===idx){stopRec();return;}
+if(_isRec&&_recIdx!==idx){stopRec();await new Promise(r=>setTimeout(r,100));}
+if(!_isRec){const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+  _recIdx=idx;_chunks=[];_isRec=true;_recorder=new MediaRecorder(stream,{mimeType:MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/mp4',audioBitsPerSecond:24000});
+  _recorder.ondataavailable=e=>{if(e.data.size>0)_chunks.push(e.data);};
+  _recorder.onstop=()=>{stream.getTracks().forEach(t=>t.stop());const blob=new Blob(_chunks,{type:'audio/webm'});
+    const reader=new FileReader();reader.onload=()=>{if(!A.nb.items)A.nb.items=[];if(A.nb.items[_recIdx]){
+      A.nb.items[_recIdx].audioData=reader.result;A.nb.items[_recIdx].duration=Math.round((_recorder._dur||0)/1000);}
+    _isRec=false;_recIdx=-1;render();};reader.readAsDataURL(blob);};
+  _recorder._start=now();_recorder.start();_recorder._maxT=setTimeout(()=>{if(_isRec)stopRec();},30000);render();}}catch(e){_isRec=false;_recIdx=-1;notify('⚠️','Appen fikk ikke tilgang til mikrofonen. Sjekk tillatelse i nettleseren.');}};
 window.startRec=async idx=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});
   _recIdx=idx;_chunks=[];_isRec=true;_recorder=new MediaRecorder(stream,{mimeType:MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/mp4',audioBitsPerSecond:24000});
   _recorder.ondataavailable=e=>{if(e.data.size>0)_chunks.push(e.data);};
@@ -253,9 +263,6 @@ window.startRec=async idx=>{try{const stream=await navigator.mediaDevices.getUse
       A.nb.items[_recIdx].audioData=reader.result;A.nb.items[_recIdx].duration=Math.round((_recorder._dur||0)/1000);}
     _isRec=false;_recIdx=-1;render();};reader.readAsDataURL(blob);};
   _recorder._start=now();_recorder.start();_recorder._maxT=setTimeout(()=>{if(_isRec)stopRec();},30000);
-  // Update button visually without full render (prevents DOM rebuild killing touch events)
-  var btn=document.querySelector('.chsn[onmouseup="stopRec()"]')||document.querySelector('.chsn[ontouchend="stopRec()"]');
-  if(btn){btn.textContent='🔴';btn.style.background='var(--rd)';btn.classList.add('rec-pulse');}
   }catch(e){_isRec=false;notify('⚠️','Appen fikk ikke tilgang til mikrofonen. Sjekk tillatelse i nettleseren.');}};
 window.stopRec=()=>{if(!_recorder||_recorder.state!=='recording')return;_recorder._dur=now()-_recorder._start;
   clearTimeout(_recorder._maxT);_recorder.stop();};
@@ -291,12 +298,16 @@ window.playBullet=(jobId,idx)=>{const j=A.openJobs.get(jobId)||A.myJobs.find(x=>
   const pid=jobId+'_'+idx;if(_playingId===pid&&_audio){_audio.pause();_audio=null;_playingId=null;render();return;}
   if(_audio)_audio.pause();_audio=new Audio(url);_playingId=pid;_audio.onended=()=>{_playingId=null;render();};
   _audio.play().catch(()=>notify('⚠️','Kunne ikke spille av lyd'));render();};
+window.toggleChatRec=async()=>{try{if(_isChatRec){stopChatRec();return;}
+const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+  _chatChunks=[];_isChatRec=true;_chatRec=new MediaRecorder(stream,{mimeType:MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/mp4',audioBitsPerSecond:24000});
+  _chatRec.ondataavailable=e=>{if(e.data.size>0)_chatChunks.push(e.data);};
+  _chatRec._stream=stream;_chatRec._start=now();_chatRec.start();_chatRec._maxT=setTimeout(()=>{if(_isChatRec)stopChatRec();},30000);render();
+  }catch(e){_isChatRec=false;notify('⚠️','Appen fikk ikke tilgang til mikrofonen.');}};
 window.startChatRec=async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});
   _chatChunks=[];_isChatRec=true;_chatRec=new MediaRecorder(stream,{mimeType:MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/mp4',audioBitsPerSecond:24000});
   _chatRec.ondataavailable=e=>{if(e.data.size>0)_chatChunks.push(e.data);};
   _chatRec._stream=stream;_chatRec._start=now();_chatRec.start();_chatRec._maxT=setTimeout(()=>{if(_isChatRec)stopChatRec();},30000);
-  var cbtn=document.querySelector('.chsn[onmouseup="stopChatRec()"]')||document.querySelector('.chsn[ontouchend="stopChatRec()"]');
-  if(cbtn){cbtn.textContent='🔴';cbtn.style.background='var(--rd)';cbtn.classList.add('rec-pulse');}
   }catch(e){_isChatRec=false;notify('⚠️','Appen fikk ikke tilgang til mikrofonen.');}};
 window.stopChatRec=()=>{if(!_chatRec||_chatRec.state!=='recording')return;const dur=Math.round((now()-_chatRec._start)/1000);
   clearTimeout(_chatRec._maxT);_chatRec.onstop=async()=>{_chatRec._stream?.getTracks().forEach(t=>t.stop());
@@ -812,11 +823,11 @@ function vCreate(){
       ${(A.nb.items||[]).map((it,i)=>`<div class="itm">
         <span style="width:24px;height:24px;border-radius:12px;background:${it.mode==='image'?'var(--pr)':'var(--s3)'};color:${it.mode==='image'?'#fff':'var(--t2)'};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;flex-shrink:0">${i+1}</span>
         <input class="fi" style="flex:1;padding:8px 10px;font-size:13px" placeholder="${it.mode==='image'?'Beskriv dette punktet':'F.eks. Klippe hekk'}" maxlength="60" value="${esc(it.text)}" oninput="A.nb.items[${i}].text=this.value">
-        ${_isRec&&_recIdx===i?`<button class="chsn rec-pulse" style="background:var(--rd);width:44px;height:44px;font-size:16px" onmouseup="stopRec()" ontouchend="stopRec()">🔴</button>`
+        ${_isRec&&_recIdx===i?`<button class="chsn rec-pulse" style="background:var(--rd);width:44px;height:44px;font-size:16px" onclick="toggleRec(${i})">🔴</button>`
         :it.audioData||it.audioUrl?`<div style="display:flex;align-items:center;gap:4px"><span style="font-size:12px;color:var(--g2);font-weight:700">✓ ${it.duration||'?'}s</span>
           <button style="width:36px;height:36px;border-radius:18px;background:var(--pr);color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center" onclick="playLocal(${i})">▶</button>
           <button style="font-size:11px;color:var(--t3);padding:2px 4px" onclick="reRecord(${i})">🔄</button></div>`
-        :`<button class="chsn" style="background:var(--pr);color:#fff;width:44px;height:44px;font-size:16px" onmousedown="startRec(${i})" onmouseup="stopRec()" ontouchstart="event.preventDefault();startRec(${i})" ontouchend="stopRec()">🎙️</button>`}
+        :`<button class="chsn" style="background:var(--pr);color:#fff;width:44px;height:44px;font-size:16px" onclick="toggleRec(${i})">🎙️</button>`}
         <button style="font-size:14px;color:var(--t3);padding:4px" onclick="removeItem(${i})">✕</button>
       </div>`).join('')}
       ${(A.nb.items||[]).length===0?'<div style="text-align:center;padding:12px;color:var(--t3);font-size:13px">Ingen punkter ennå</div>':''}
@@ -1066,7 +1077,7 @@ function vJobChat(){const jid=A.params.jobId;const j=A.myJobs.find(x=>x.id===jid
     <button style="font-size:14px;color:var(--t3);padding:4px" onclick="window._pendingImg=null;render()">✕</button></div>`:''}
   <div class="chbr"><input class="chi" id="jci" placeholder="Skriv..." maxlength="500" onkeydown="if(event.key==='Enter')jcS('${escA(jid)}','${escA(oId||'')}')">
   <label class="chsn" style="background:var(--s2);color:var(--t2)">📷<input type="file" accept="image/*" style="display:none" onchange="handleChatImg(this,'jc','${escA(jid)}','${escA(oId||'')}')"></label>
-  <button class="chsn" style="background:var(--s2);color:var(--t2)" onmousedown="startChatRec()" onmouseup="stopChatRec()" ontouchstart="event.preventDefault();startChatRec()" ontouchend="stopChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
+  <button class="chsn" style="background:var(--s2);color:var(--t2)" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
   <button class="chsn" onclick="jcS('${escA(jid)}','${escA(oId||'')}')">➤</button></div></div></div>`;}
 window.jcS=(jid,oId)=>{const inp=$('jci');if(!inp?.value.trim())return;const msg={from:A.myId,name:A.myName,text:inp.value.trim(),ts:now(),_mid:uid(),_status:'sent'};
   addJMsg(jid,msg);if(oId)send(oId,{t:'BM',jid,name:A.myName,text:msg.text,ts:msg.ts,_mid:msg._mid});inp.value='';persist();render();setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},50);};
@@ -1088,7 +1099,7 @@ function vDM(){const pid=A.params.peerId;const nm=dn(pid,A.peers.get(pid)?.name)
     <button style="font-size:14px;color:var(--t3);padding:4px" onclick="window._pendingImg=null;render()">✕</button></div>`:''}
   <div class="chbr"><input class="chi" id="dmi" placeholder="Skriv..." maxlength="500" onkeydown="if(event.key==='Enter')dmS('${escA(pid)}')">
   <label class="chsn" style="background:var(--s2);color:var(--t2)">📷<input type="file" accept="image/*" style="display:none" onchange="handleChatImg(this,'dm','${escA(pid)}')"></label>
-  <button class="chsn" style="background:var(--s2);color:var(--t2)" onmousedown="startChatRec()" onmouseup="stopChatRec()" ontouchstart="event.preventDefault();startChatRec()" ontouchend="stopChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
+  <button class="chsn" style="background:var(--s2);color:var(--t2)" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
   <button class="chsn" onclick="dmS('${escA(pid)}')">➤</button></div></div></div>`;}
 window.dmS=async pid=>{const inp=$('dmi');if(!inp?.value.trim())return;const raw=inp.value.trim();const peer=A.peers.get(pid);
   let enc=raw,isE=false;if(peer?.epub&&peer?.epubV!==false){try{const r=await encFor(raw,peer.epub);if(r){enc=r;isE=true;}}catch(e){}}else if(peer?.epub&&peer?.epubV===false){notify('⚠️','Krypteringsnøkkel ikke verifisert');}
