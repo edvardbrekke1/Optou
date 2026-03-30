@@ -365,7 +365,7 @@ async function fsWritePost(p){if(!hasFS())return false;try{await fbDb.collection
 async function fsLoadPublicPosts(){if(!hasFS())return[];try{var cutoff=now()-30*864e5;
   var snap=await fbDb.collection('posts').where('status','==','open').where('ts','>',cutoff).orderBy('ts','desc').limit(100).get();
   return snap.docs.map(d=>d.data());}catch(e){console.warn('[FS] loadPosts',e);return[];}}
-async function fsUpdatePostStatus(pid,status){if(!hasFS())return false;try{await fbDb.collection('posts').doc(pid).update({status});return true;}catch(e){console.warn('[FS] updatePost',e);return false;}}
+async function fsUpdatePostStatus(pid,status){if(!hasFS())return false;try{const doc=await fbDb.collection('posts').doc(pid).get();if(!doc.exists)return false;await fbDb.collection('posts').doc(pid).update({status});return true;}catch(e){if(D())console.log('[FS] updatePost skip',pid);return false;}}
 async function fsCheckInterests(){if(!hasFS())return;try{const jobs=A.myJobs.filter(j=>j.creatorId===A.myId&&['open','accepting'].includes(j.status));
   if(D())console.log('[fsCheckInterests] checking',jobs.length,'jobs');
   let changed=false;
