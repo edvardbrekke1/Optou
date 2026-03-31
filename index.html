@@ -625,14 +625,19 @@ function tryC(id){if(!A.peer||A.peer.destroyed||id===A.myId||A.conns.get(id)?.op
   if(D()&&id!==A.myId&&!A.conns.get(id)?.open)console.log('[tryC] blocked',{id,noPeer:!A.peer,destroyed:A.peer?.destroyed,isSelf:id===A.myId,alreadyOpen:!!A.conns.get(id)?.open,pending:A._pending.has(id),maxConns:A.conns.size>=MC,blocked:A.blocked.has(id),notReady:!A.ready});return;}
   var isTemp=[...A.tempConns.values()].some(tc=>tc.peerId===id);
   if(!A.contacts.find(c=>c.id===id)&&!isTemp){if(D())console.log('[tryC] blocked — not contact or temp',{id});return;}
-  if(D())console.log('[-> tryC]',{id,isTemp});A._pending.add(id);try{setupC(A.peer.connect(id,{reliable:true,serialization:'json'}));}catch(e){A._pending.delete(id);}}
+  if(D())console.log('[-> tryC]',{id,isTemp});A._pending.add(id);
+  // Auto-clear pending after 15s if connection never opens (prevents permanent block)
+  setTimeout(()=>{if(A._pending.has(id)){A._pending.delete(id);if(D())console.log('[tryC] pending timeout cleared',{id});}},15000);
+  try{setupC(A.peer.connect(id,{reliable:true,serialization:'json'}));}catch(e){A._pending.delete(id);}}
 function setupC(c){
   c.on('open',()=>{A._pending.delete(c.peer);
     const ex=A.conns.get(c.peer);if(ex&&ex!==c&&ex.open){try{c.close();}catch(e){}return;}
     if(D())console.log('[CONN] open',c.peer,{conns:A.conns.size});
     A.conns.set(c.peer,c);c.send({t:'HI',...myPres()});syncP(c.peer);deliverR(c.peer);offerRH(c.peer);flushQ();sR();updateB();});
   c.on('data',m=>onData(c.peer,m));
-  c.on('close',()=>{if(D())console.log('[CONN] close',c.peer);A._pending.delete(c.peer);A.conns.delete(c.peer);const p=A.peers.get(c.peer);if(p){if(p._ot)clearTimeout(p._ot);p._ot=setTimeout(()=>{if(!A.conns.get(c.peer)?.open){p.online=false;sR();}},8e3);}});
+  c.on('close',()=>{if(D())console.log('[CONN] close',c.peer);A._pending.delete(c.peer);A.conns.delete(c.peer);const p=A.peers.get(c.peer);if(p){if(p._ot)clearTimeout(p._ot);p._ot=setTimeout(()=>{if(!A.conns.get(c.peer)?.open){p.online=false;sR();}},8e3);}
+    // Retry connection after short delays
+    if(A.contacts.find(x=>x.id===c.peer)){setTimeout(()=>tryC(c.peer),3000);setTimeout(()=>tryC(c.peer),8000);}});
   c.on('error',(err)=>{if(D())console.log('[CONN] error',c.peer,err?.type||err);A._pending.delete(c.peer);A.conns.delete(c.peer);});}
 function send(id,msg){const c=A.conns.get(id);if(c?.open){try{if(D())console.log('[SEND] DIRECT',msg.t,{to:id,jid:msg.jid||msg.job?.id});c.send(msg);return;}catch(e){}}
   if(D())console.log('[SEND] QUEUED',msg.t,{to:id,jid:msg.jid||msg.job?.id,connOpen:!!c?.open,conns:A.conns.size});
@@ -1214,7 +1219,9 @@ window.doRate=(jid,tid)=>{if(D())console.log('[doRate]',{jid,tid,score:A.nb.rati
   persist();render();notify('⭐','Vurdering sendt!');};
 
 // ═══ INTERESTS ═══
-function vInterests(){const j=A.myJobs.find(x=>x.id===A.params.jobId);if(!j)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('mine')">Tilbake</button></div></div>`;
+function vInterests(){const j=A.myJobs.find(x=>x.id===A.params.jobId);
+  if(!j||!A.params.jobId)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('mine')">Tilbake</button></div><div class="emp"><div class="emp-i">📋</div><div class="emp-t">Fant ikke jobben.</div></div></div>`;
+  if(j.status!=='accepting'||!(j.interests||[]).length)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">Tilbake</button></div><div class="emp"><div class="emp-i">📋</div><div class="emp-t">Ingen ventende interesser.</div></div></div>`;
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">Tilbake</button><div class="pgt">Interesserte</div></div>
   <div class="ibox">Velg hvem du vil ha med. Sjekk ryktet først!</div>
   ${(j.interests||[]).map(p=>{const pr=avgR(p.id);const np=npC(p.id);
