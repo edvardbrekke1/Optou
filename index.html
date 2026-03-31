@@ -526,9 +526,13 @@ async function fsCheckInterests(){if(!hasFS())return;try{const jobs=A.myJobs.fil
   if(changed){persist();sR();}}catch(e){console.warn('[FS] checkInterests',e);}}
 function fsClearInterests(jid){if(D())console.log('[-> fsClearInterests]',{jid});if(!hasFS())return;try{fbDb.collection('posts').doc(jid).collection('interests').get().then(snap=>{snap.docs.forEach(d=>d.ref.delete());}).catch(function(){});}catch(e){}}
 async function fsDeletePost(pid){if(!hasFS())return;if(D())console.log('[-> fsDeletePost]',{pid});
-  try{try{const snap=await fbDb.collection('posts').doc(pid).collection('interests').get();snap.docs.forEach(d=>d.ref.delete());}catch(e){}
-    await fbDb.collection('posts').doc(pid).delete();if(D())console.log('[<- fsDeletePost] success',pid);
-  }catch(e){if(D())console.log('[fsDeletePost] skip',pid);}}
+  try{
+    try{const snap=await fbDb.collection('posts').doc(pid).collection('interests').get();
+      if(snap.docs.length){const batch=fbDb.batch();snap.docs.forEach(d=>batch.delete(d.ref));await batch.commit();}
+    }catch(e){if(D())console.log('[fsDeletePost] interests cleanup error',pid,e.message);}
+    await fbDb.collection('posts').doc(pid).delete();
+    if(D())console.log('[<- fsDeletePost] success',pid);
+  }catch(e){if(D())console.log('[fsDeletePost] error',pid,e.message);}}
 async function fsCleanupOrphanedJobs(){if(!hasFS())return;
   var candidates=[];A.openJobs.forEach((j,id)=>{if(now()-(j.ts||0)>3600000)candidates.push(id);});
   var removed=0;for(const jid of candidates.slice(0,10)){
@@ -536,6 +540,23 @@ async function fsCleanupOrphanedJobs(){if(!hasFS())return;
       if(!doc.exists){A.openJobs.delete(jid);removed++;if(D())console.log('[fsCleanup] orphaned',jid);}
       else{const d=doc.data();if(['done','cancelled','never_done'].includes(d.status)){A.openJobs.delete(jid);removed++;if(D())console.log('[fsCleanup] terminal',jid,d.status);}}
     }catch(e){}}if(removed>0){if(D())console.log('[fsCleanup] removed',removed);persist();sR();}}
+async function fsSyncMyPosts(){if(!hasFS()||!A.myId)return;if(D())console.log('[-> fsSyncMyPosts]');
+  try{const snap=await fbDb.collection('posts').where('creatorId','==',A.myId).get();
+    const myLocalIds=new Set(A.myJobs.filter(j=>j.creatorId===A.myId).map(j=>j.id));
+    var deleted=0,updated=0;
+    for(const doc of snap.docs){const fs=doc.data();
+      if(!myLocalIds.has(fs.id)){
+        try{const intSnap=await doc.ref.collection('interests').get();
+          if(intSnap.docs.length){const batch=fbDb.batch();intSnap.docs.forEach(d=>batch.delete(d.ref));await batch.commit();}
+          await doc.ref.delete();deleted++;if(D())console.log('[fsSync] deleted orphan',fs.id);
+        }catch(e){if(D())console.log('[fsSync] delete error',fs.id,e.message);}
+      }else{const lj=A.myJobs.find(j=>j.id===fs.id);
+        if(lj&&lj.status!==fs.status){
+          try{await doc.ref.update({status:lj.status,helperId:lj.helperId||null,helperName:lj.helperName||null});
+            updated++;if(D())console.log('[fsSync] updated',fs.id,{from:fs.status,to:lj.status});
+          }catch(e){if(D())console.log('[fsSync] update error',fs.id,e.message);}}}}
+    if(D())console.log('[<- fsSyncMyPosts]',{checked:snap.docs.length,deleted,updated});
+  }catch(e){if(D())console.log('[fsSyncMyPosts] error',e.message);}}
 async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if(!hasFS())return;try{
   const terminal=['done','cancelled','never_done','declined'];
   for(const j of A.myJobs){if(terminal.includes(j.status))continue;
@@ -693,13 +714,15 @@ function offerRH(hid){const c=A.conns.get(hid);if(!c?.open||!A.contacts.find(x=>
       i.fwd.push(hid);}catch(e){}});}
 function syncP(id){const c=A.conns.get(id);if(!c?.open)return;
   const ls2=A._lastSync.get(id)||0;if(now()-ls2<3e4)return;A._lastSync.set(id,now());
-  // 1. Re-send active posts (open, accepting, active)
+  // 1. Re-send active posts (open, accepting, active) — deduplicated per peer+job
+  if(!A._lastInvSent)A._lastInvSent=new Map();
   A.myJobs.filter(j=>['open','accepting','active'].includes(j.status)&&j.creatorId===A.myId).forEach(j=>{
+    var ik=id+':'+j.id;if(A._lastInvSent.has(ik)&&now()-A._lastInvSent.get(ik)<30000)return;A._lastInvSent.set(ik,now());
     try{c.send({t:'INV',job:{...stripJobForSend(j),fromContact:true}});}catch(e){}});
   // 2. Send BS sync for shared jobs (status only — no event re-sends to avoid notify spam)
   // Skip 'pending' — it's a local helper-only status that must not overwrite owner's 'open'
   A.myJobs.forEach(j=>{
-    if((j.creatorId===id||j.helperId===id)&&j.status!=='pending'){
+    if((j.creatorId===id||j.helperId===id)&&j.status!=='pending'&&!(j.status==='done'&&!j.helperId)){
       if(D())console.log('[syncP] BS→',id,{jid:j.id,status:j.status,helperId:j.helperId,reason:j.creatorId===id?'creator':'helper'});
       try{c.send({t:'BS',jid:j.id,status:j.status,helperId:j.helperId,helperName:j.helperName});}catch(e){}}
   });flushQ();deliverR(id);}
@@ -1078,10 +1101,10 @@ function vCreate(){
       ${[['direct','👤','Direkte','Send til én bestemt person'],['friends','👥','Mine venner','Alle vennene dine ser dette'],['group','🏘️','Gruppe','Velg en gruppe'],['public','🌐','Offentlig','Alle i ditt område ser dette']].map(([v,i,n,d])=>
         `<div class="ttype${(A.nb.vis||((A.nb.type||'help')==='help'?'friends':'public'))===v?' act':''}" onclick="A.nb.vis='${v}';render()"><div class="ttype-i">${i}</div><div class="ttype-n">${n}</div><div class="ttype-d">${d}</div></div>`).join('')}
     </div></div>
-    ${(A.nb.vis||'')==='direct'?`<div class="fld"><label class="fl">Velg person</label>${A.contacts.length?A.contacts.map(c=>
-      `<label style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--s2);cursor:pointer">
-      <input type="checkbox" ${(A.nb.targetIds||[]).includes(c.id)?'checked':''} onchange="if(!A.nb.targetIds)A.nb.targetIds=[];if(this.checked){A.nb.targetIds.push('${escA(c.id)}');}else{A.nb.targetIds=A.nb.targetIds.filter(x=>x!=='${escA(c.id)}');}">
-      <span style="font-size:14px;font-weight:600">${esc(c.alias||c.name)}</span></label>`).join('')
+    ${(A.nb.vis||'')==='direct'?`<div class="fld"><label class="fl">Velg person</label>${A.contacts.length?A.contacts.map(c=>{const sel=(A.nb.targetIds||[]).includes(c.id);
+      return`<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--s2);cursor:pointer" onclick="if(!A.nb.targetIds)A.nb.targetIds=[];var i=A.nb.targetIds.indexOf('${escA(c.id)}');if(i>=0)A.nb.targetIds.splice(i,1);else A.nb.targetIds.push('${escA(c.id)}');render()">
+      <div style="width:22px;height:22px;border-radius:6px;border:2px solid ${sel?'var(--pr)':'var(--s3)'};background:${sel?'var(--pr)':'transparent'};display:flex;align-items:center;justify-content:center;flex-shrink:0">${sel?'<span style="color:#fff;font-size:14px;font-weight:800">✓</span>':''}</div>
+      ${avHtml(c.id,c.alias||c.name,32)}<span style="font-size:14px;font-weight:600">${esc(c.alias||c.name)}</span></div>`;}).join('')
       :'<div style="font-size:13px;color:var(--t3)">Ingen venner ennå.</div>'}</div>`:''}
     ${(A.nb.vis||'')==='group'?`<div class="fld"><label class="fl">Velg gruppe</label><div style="display:flex;flex-wrap:wrap;gap:6px">
       ${A.groups.map(g=>`<div class="chip${A.nb.groupId===g.id?' act':''}" onclick="A.nb.groupId='${escA(g.id)}';A.nb.groupName='${escA(g.name)}';render()">${g.private?'🔒':'🔓'} ${esc(g.name||g.id)}</div>`).join('')}
@@ -1178,8 +1201,8 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   j.jobDate?['Når',fmtDate(j.jobDate,j.jobTime)]:null,j.helperName?['Hjelper',esc(j.helperName)]:null,['Status',esc({open:'Åpent',accepting:'Venter',pending:'Venter svar',active:'Pågår',pending_review:'Ferdigmeldt',done:'✅ Fullført',declined:'Avslått',never_done:'❌ Aldri gjort',cancelled:'Kansellert'}[j.status]||j.status)]
   ].filter(Boolean).map(([k,v])=>`<div class="drow"><span>${k}</span><span class="dval">${v}</span></div>`).join('')}</div>`;
   if(isO&&j.status==='accepting'&&ints.length)b+=`<div class="cd cdt" onclick="go('interests',{jobId:'${escA(j.id)}'})" style="background:var(--yb);border-color:#FDE68A"><div style="font-size:14px;font-weight:700;color:#92400E">⚡ ${ints.length} vil hjelpe → velg</div></div>`;
-  if(isO&&['open','accepting'].includes(j.status))b+=`<button class="btn br" style="margin-bottom:10px" onclick="showConfirm('Kansellere?','Vil du kansellere innlegget?','Ja, kanseller',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='cancelled';A.openJobs.delete('${escA(j.id)}');gossip({t:'CANCEL',jobId:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','cancelled');(x.interests||[]).forEach(p=>send(p.id,{t:'JN',jid:'${escA(j.id)}'}));fsClearInterests('${escA(j.id)}');}persist();render();})">🗑 Kanseller</button>`;
-  if(isO&&['active','pending_review'].includes(j.status))b+=`<button class="btn br" style="margin-bottom:10px" onclick="showConfirm('Kansellere?','Du har allerede en hjelper. Er du sikker på at du vil kansellere?','Ja, kanseller',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='cancelled';A.openJobs.delete('${escA(j.id)}');gossip({t:'CANCEL',jobId:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','cancelled');if(x.helperId)send(x.helperId,{t:'BS',jid:'${escA(j.id)}',status:'cancelled'});fsClearInterests('${escA(j.id)}');}persist();render();})">🗑 Kanseller</button>`;
+  if(isO&&['open','accepting'].includes(j.status))b+=`<button class="btn br" style="margin-bottom:10px" onclick="showConfirm('Kansellere?','Vil du kansellere innlegget?','Ja, kanseller',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='cancelled';x.helperId=null;x.helperName=null;x.helperDone=false;A.openJobs.delete('${escA(j.id)}');gossip({t:'CANCEL',jobId:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','cancelled');(x.interests||[]).forEach(p=>send(p.id,{t:'JN',jid:'${escA(j.id)}'}));fsClearInterests('${escA(j.id)}');}persist();render();})">🗑 Kanseller</button>`;
+  if(isO&&['active','pending_review'].includes(j.status))b+=`<button class="btn br" style="margin-bottom:10px" onclick="showConfirm('Kansellere?','Du har allerede en hjelper. Er du sikker på at du vil kansellere?','Ja, kanseller',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){var _hid=x.helperId;x.status='cancelled';x.helperId=null;x.helperName=null;x.helperDone=false;A.openJobs.delete('${escA(j.id)}');gossip({t:'CANCEL',jobId:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','cancelled');if(_hid)send(_hid,{t:'BS',jid:'${escA(j.id)}',status:'cancelled'});fsClearInterests('${escA(j.id)}');}persist();render();})">🗑 Kanseller</button>`;
   if(isH&&j.status==='active')b+=`<div class="cd" style="border-color:var(--pbb);background:var(--pb)"><div style="font-size:14px;font-weight:700;color:var(--pr);margin-bottom:8px">Er du ferdig?</div>
     <button class="btn bg" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='pending_review';send(x.creatorId,{t:'HC',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','pending_review');persist();render();}">✅ Marker som ferdig</button></div>`;
   if(isO&&j.status==='active')b+=`<button class="btn br" style="margin-bottom:4px" onclick="showConfirm('Aldri gjort opp?','Er du sikker? Dette gir personen et permanent merke som alle kan se.','Ja, merk som aldri gjort',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='never_done';send(x.helperId,{t:'NP',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','never_done');if(!A.ratings[x.helperId])A.ratings[x.helperId]=[];A.ratings[x.helperId].push({score:1,comment:'Aldri gjort opp.',jobId:'${escA(j.id)}',raterName:A.myName,ts:now(),nd:true});gossip({t:'RAT',uid:x.helperId,ratings:A.ratings[x.helperId]});}persist();render();})">⚠️ Aldri gjort opp</button>
@@ -1696,11 +1719,14 @@ async function boot(){
     // Migration: fix jobs corrupted by old BS bug (owner's status overwritten to 'pending')
     var _migrated=0;A.myJobs.forEach(j=>{if(j.creatorId===A.myId&&j.status==='pending'){j.status='open';_migrated++;}});
     if(_migrated){console.log('[MIGRATE] Fixed',_migrated,'owner jobs from pending→open');persist();}
+    // Migration: remove orphaned done jobs without helperId (corrupt from old sync bug)
+    var _orphaned=0;A.myJobs=A.myJobs.filter(j=>{if(j.status==='done'&&!j.helperId&&!j.isHelper){_orphaned++;fsDeletePost(j.id);return false;}return true;});
+    if(_orphaned){console.log('[MIGRATE] Removed',_orphaned,'orphaned done jobs');persist();}
     if(D())console.log('[boot] phase:peer');initPeer();$('nav').style.display='block';go('feed');
     if(D())console.log('[boot] phase:firestore-sync');fsRegisterUser();
     // Background: load public posts from Firestore
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
-    fsCheckInterests();fsCheckJobStatus();
+    fsCheckInterests();fsCheckJobStatus();fsSyncMyPosts();
     // Load group posts from Firestore
     if(hasFS()&&A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
       .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(e=>console.warn('[FS] groupPosts',e));});
@@ -1717,12 +1743,13 @@ async function boot(){
     A.openJobs.forEach((j,id)=>{if(j.expiresAt&&j.expiresAt!==0&&j.expiresAt<now())A.openJobs.delete(id);});
     A.relayQ=A.relayQ.filter(r=>r.expiresAt>now());
     A.tempConns.forEach((tc,jid)=>{if(now()-tc.ts>30*864e5)A.tempConns.delete(jid);});
+    if(A._lastInvSent){const cut=now()-300000;A._lastInvSent.forEach((v,k)=>{if(v<cut)A._lastInvSent.delete(k);});}
     await persist();sR();
   },3e5);
   // Periodic Firestore sync (every 2 min)
   setInterval(()=>{if(!A.myName||!hasFS())return;
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}}).catch(()=>{});
-    fsCheckInterests();fsCheckJobStatus();fsCleanupOrphanedJobs();
+    fsCheckInterests();fsCheckJobStatus();fsCleanupOrphanedJobs();fsSyncMyPosts();
     if(hasFS())A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
       .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(()=>{});});
   },12e4);
