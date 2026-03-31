@@ -219,12 +219,14 @@ async function persist(){
   ]);
   checkRules();
 }
-let _lastRulesCheck=0;
+let _lastRulesCheck=0,_rulesSeenKeys=new Map();
 function checkRules(){
   if(!D())return;var n=now();if(n-_lastRulesCheck<3000)return;_lastRulesCheck=n;
   var errors=0,warnings=0;
-  const E=(r,msg,d)=>{console.error('[❌ '+r+'] '+msg,d||'');errors++;};
-  const W=(r,msg,d)=>{console.warn('[⚠️ '+r+'] '+msg,d||'');warnings++;};
+  const _rk=(r,id)=>{const k=r+':'+(id||'');const prev=_rulesSeenKeys.get(k);if(prev&&n-prev<60000)return true;_rulesSeenKeys.set(k,n);return false;};
+  if(_rulesSeenKeys.size>500){const cut=n-60000;_rulesSeenKeys.forEach((v,k)=>{if(v<cut)_rulesSeenKeys.delete(k);});}
+  const E=(r,msg,d)=>{if(_rk(r,d?.jid||d?.id||d?.pid))return;console.error('[❌ '+r+'] '+msg,d||'');errors++;};
+  const W=(r,msg,d)=>{if(_rk(r,d?.jid||d?.id||d?.pid))return;console.warn('[⚠️ '+r+'] '+msg,d||'');warnings++;};
   const validS=['open','accepting','pending','active','pending_review','done','cancelled','declined','never_done'];
   // ═══ R1-R19: JOBB-STATUS ═══
   A.myJobs.forEach(j=>{
