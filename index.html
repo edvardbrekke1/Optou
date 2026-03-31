@@ -243,7 +243,7 @@ function checkRules(){
     if(j.creatorId===A.myId&&j.interests?.length>0&&j.status==='open')W('R11','Har interests men status er open',{jid:j.id,interests:j.interests.length});
     if(j.status==='accepting'&&(!j.interests||j.interests.length===0))W('R12','Accepting med 0 interests',{jid:j.id});
     if(j.helperDone===true&&!['pending_review','done'].includes(j.status))E('R13','helperDone=true men feil status',{jid:j.id,status:j.status});
-    if(j.status==='cancelled'&&j.helperId)W('R14','Cancelled men har helperId',{jid:j.id,helperId:j.helperId});
+    if(j.status==='cancelled'&&j.helperId)E('R14','Cancelled med helperId (skal nullstilles)',{jid:j.id,helperId:j.helperId});
     if(j.status==='declined'&&!j.isHelper)E('R15','Declined uten isHelper',{jid:j.id});
     if(j.status==='never_done'&&!j.helperId)E('R16','Never_done uten helperId',{jid:j.id});
     if(j.creatorId===A.myId&&j.isHelper)E('R17','Eier-jobb har isHelper',{jid:j.id});
@@ -288,7 +288,7 @@ function checkRules(){
     if(c.id===A.myId)E('R53','Egen ID i contacts',{id:c.id});
     if(c.id&&!/^o[a-zA-Z0-9]{5,30}$/.test(c.id))W('R54','Contact-ID matcher ikke mønster',{id:c.id});
   });
-  // ═══ R60-R64: GRUPPER ═══
+  // ═══ R60-R68: GRUPPER ═══
   var gIds=new Set();
   A.groups.forEach(g=>{
     if(gIds.has(g.id))E('R60','Duplikat gruppe',{id:g.id});gIds.add(g.id);
@@ -296,6 +296,8 @@ function checkRules(){
     if(!g.name||g.name===g.id||g.name==='Gruppe...')W('R62','Gruppe uten ordentlig navn',{id:g.id,name:g.name});
     if(g.id&&!g.id.startsWith('g'))E('R63','Gruppe-ID starter ikke med g',{id:g.id});
     if(g.private&&A.knownGroups.has(g.id))W('R64','Privat gruppe i knownGroups (gossipet?)',{id:g.id});
+    if(!g.creatorId)W('R65','Gruppe uten creatorId (admin)',{id:g.id,name:g.name});
+    if(g._members&&!Array.isArray(g._members))E('R68','_members er ikke array',{id:g.id,type:typeof g._members});
   });
   // ═══ R70-R74: OPENJOBS ═══
   A.openJobs.forEach((j,id)=>{
@@ -317,7 +319,7 @@ function checkRules(){
   // ═══ R90-R94: CHAT ═══
   Object.entries(A.jobChats).forEach(([k,msgs])=>{
     if(!Array.isArray(msgs))return;
-    msgs.forEach((m,i)=>{if(!m.from||!m.text||!m.ts)E('R90','Chat-melding mangler felt',{jid:k,idx:i});});
+    msgs.forEach((m,i)=>{if(!m.from||(!m.text&&!m.audioUrl)||!m.ts)E('R90','Chat-melding mangler felt',{jid:k,idx:i});});
     if(!A.myJobs.find(x=>x.id===k))W('R91','Chat for ukjent jobb',{jid:k});
     msgs.forEach((m,i)=>{if(m.audioData)W('R92','Chat med inline audioData',{jid:k,idx:i});});
     if(msgs.length>200)W('R94','Chat > 200 meldinger',{jid:k,len:msgs.length});
@@ -333,7 +335,12 @@ function checkRules(){
   if(A.conns.has(A.myId))E('R103','Connection til deg selv');
   A._pending.forEach(id=>{if(A.conns.get(id)?.open)W('R104','Pending men allerede connected',{id});});
   A.tempConns.forEach((tc,jid)=>{if(n-tc.ts>30*864e5)W('R105','TempConn >30d',{jid,peer:tc.peerId});});
-  // R110-R114, R137: cannot check in checkRules (requires Firestore/DOM queries)
+  // R106: deterministisk tilkobling — pending for peer med lavere ID der peer er online
+  A._pending.forEach(id=>{if(A.myId>id){const p=A.peers.get(id);if(p&&p.online&&(n-(p.ts||0))<30000)W('R106','Pending mot lavere ID som er online (bør vente)',{id});}});
+  // R107: _lastRetry GC
+  if(A._lastRetry){var oldRetry=0;Object.entries(A._lastRetry).forEach(([k,v])=>{if(n-v>300000)oldRetry++;});if(oldRetry>5)W('R107','_lastRetry har >5 gamle entries',{count:oldRetry});}
+  // R108: statisk — PING ignoreres i onData, verifisert i kode
+  // R110-R118, R137, R150-R153: cannot check in checkRules (requires Firestore/DOM)
   // ═══ R120-R123: KRYPTO ═══
   if(A.myName&&!A.pubB64)E('R120','pubB64 mangler');
   if(A.myName&&!A.ecdhPubB64)E('R121','ecdhPubB64 mangler');
@@ -350,6 +357,15 @@ function checkRules(){
   if(dups.length)E('R134','Duplikat jobb-IDer',{ids:dups});
   A.myJobs.forEach(j=>{if(A.openJobs.has(j.id))E('R135','Jobb i myJobs OG openJobs',{jid:j.id});});
   A.offlineQ.forEach(i=>{if(i.msg?.t==='JR'&&n-i.ts>60000&&A.conns.get(i.to)?.open)W('R136','Gammel JR i offlineQ men conn åpen',{to:i.to,age:Math.round((n-i.ts)/1000)+'s'});});
+  // R138-R140: nye kjente bugs
+  A.myJobs.forEach(j=>{
+    if(j.status==='done'&&!j.helperId&&!j.isHelper)E('R138','Done uten helperId (migrering bør fjernet)',{jid:j.id,title:j.title});
+  });
+  // R139: syncP guard — sjekk at ingen done+!helperId sendes (statisk guard i syncP, runtime-sjekk her)
+  A.myJobs.forEach(j=>{if(j.status==='done'&&!j.helperId&&(j.creatorId===A.myId))W('R139','Done-jobb uten helperId kan lekke via syncP',{jid:j.id});});
+  // R140: declined i openJobs (skal tillate re-adding, men declined bør ikke ligge i openJobs)
+  A.openJobs.forEach((j,id)=>{if(j.status==='declined')E('R140','Declined jobb i openJobs',{jid:id});});
+  // R154: fsCleanupOrphanedJobs rører aldri myJobs — statisk sjekk, verifisert i kode
   if(errors||warnings)console.log('[RULES] ✅ sjekket —',errors,'feil,',warnings,'advarsler');
   else console.log('[RULES] ✅ Alle regler OK');
 }
@@ -565,7 +581,9 @@ async function fsSyncMyPosts(){if(!hasFS()||!A.myId)return;if(D())console.log('[
 async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if(!hasFS())return;try{
   const terminal=['done','cancelled','never_done','declined'];
   for(const j of A.myJobs){if(terminal.includes(j.status))continue;
-    try{const doc=await fbDb.collection('posts').doc(j.id).get();if(!doc.exists)continue;
+    try{const doc=await fbDb.collection('posts').doc(j.id).get();
+      if(!doc.exists){if(j.isHelper&&['pending','active','pending_review'].includes(j.status)){
+        j.status='cancelled';if(D())console.log('[fsSync] owner deleted job, marking cancelled',j.id);}continue;}
       const fs=doc.data();if(!fs.status||fs.status===j.status)continue;
       const pri={open:0,accepting:1,active:2,pending_review:3,done:4,cancelled:5,never_done:5,declined:5};
       const myP=pri[j.status]||0;const fsP=pri[fs.status]||0;
@@ -681,13 +699,14 @@ function setupC(c){
       const keepEx=(A.myId<c.peer);if(keepEx){try{c.close();}catch(e){}return;}
       else{try{ex.close();}catch(e){}A.conns.delete(c.peer);}}
     if(D())console.log('[CONN] open',c.peer,{conns:A.conns.size});
-    A.conns.set(c.peer,c);c.send({t:'HI',...myPres()});syncP(c.peer);deliverR(c.peer);offerRH(c.peer);flushQ();sR();updateB();});
+    A.conns.set(c.peer,c);c.send({t:'HI',...myPres()});syncP(c.peer);deliverR(c.peer);offerRH(c.peer);flushQ();sR();updateB();
+    c._keepalive=setInterval(()=>{if(c.open)try{c.send({t:'PING'});}catch(e){}},25000);});
   c.on('data',m=>onData(c.peer,m));
-  c.on('close',()=>{if(D())console.log('[CONN] close',c.peer);A._pending.delete(c.peer);A.conns.delete(c.peer);const p=A.peers.get(c.peer);if(p){if(p._ot)clearTimeout(p._ot);p._ot=setTimeout(()=>{if(!A.conns.get(c.peer)?.open){p.online=false;sR();}},8e3);}
+  c.on('close',()=>{if(c._keepalive)clearInterval(c._keepalive);if(D())console.log('[CONN] close',c.peer);A._pending.delete(c.peer);A.conns.delete(c.peer);const p=A.peers.get(c.peer);if(p){if(p._ot)clearTimeout(p._ot);p._ot=setTimeout(()=>{if(!A.conns.get(c.peer)?.open){p.online=false;sR();}},8e3);}
     // Retry with backoff — max once per 10s per peer
     if(A.contacts.find(x=>x.id===c.peer)){const lr=A._lastRetry[c.peer]||0;if(now()-lr<10000)return;A._lastRetry[c.peer]=now();
       setTimeout(()=>tryC(c.peer),3000);setTimeout(()=>tryC(c.peer),10000);}});
-  c.on('error',(err)=>{if(D())console.log('[CONN] error',c.peer,err?.type||err);A._pending.delete(c.peer);A.conns.delete(c.peer);});}
+  c.on('error',(err)=>{if(c._keepalive)clearInterval(c._keepalive);if(D())console.log('[CONN] error',c.peer,err?.type||err);A._pending.delete(c.peer);A.conns.delete(c.peer);});}
 function send(id,msg){const c=A.conns.get(id);if(c?.open){try{if(D())console.log('[SEND] DIRECT',msg.t,{to:id,jid:msg.jid||msg.job?.id});c.send(msg);return;}catch(e){}}
   if(D())console.log('[SEND] QUEUED',msg.t,{to:id,jid:msg.jid||msg.job?.id,connOpen:!!c?.open,conns:A.conns.size});
   if(A.offlineQ.length>=100)A.offlineQ.shift();const mid=['INV','HC','PC','BM','DM','JR','JY','JN','RJ','JW'].includes(msg.t)?uid():null;
@@ -727,12 +746,14 @@ function syncP(id){const c=A.conns.get(id);if(!c?.open)return;
   // 2. Send BS sync for shared jobs (status only — no event re-sends to avoid notify spam)
   // Skip 'pending' — it's a local helper-only status that must not overwrite owner's 'open'
   A.myJobs.forEach(j=>{
-    if((j.creatorId===id||j.helperId===id)&&j.status!=='pending'&&!(j.status==='done'&&!j.helperId)){
+    if((j.creatorId===id||j.helperId===id)&&j.status!=='pending'&&!(j.status==='done'&&!j.helperId)&&
+      !(['done','cancelled','never_done','declined'].includes(j.status)&&j.ts&&now()-j.ts>864e5)){
       if(D())console.log('[syncP] BS→',id,{jid:j.id,status:j.status,helperId:j.helperId,reason:j.creatorId===id?'creator':'helper'});
       try{c.send({t:'BS',jid:j.id,status:j.status,helperId:j.helperId,helperName:j.helperName});}catch(e){}}
   });flushQ();deliverR(id);}
 
 function onData(from,m){try{if(!m||A.blocked.has(from))return;
+  if(m.t==='PING')return;
   if(m.t==='HI'){const ex=A.peers.get(from)||{};
     const needsV=m.epub&&m.pub&&m.esig;
     A.peers.set(from,{...ex,id:from,name:m.name,bio:m.bio,city:m.city,pub:m.pub,epub:needsV?ex.epub||null:m.epub,esig:m.esig,done:m.done||0,jobs:m.jobs||0,online:true,ts:m.ts,pr:m.pr,epubV:needsV?ex.epubV:undefined,gids:m.gids||[],fylke:m.fylke||'',by:m.by||'',avatar:m.avatar||ex.avatar||''});
@@ -1137,6 +1158,7 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
   if(A.nb.vis==='group'&&!A.nb.groupId){notify('⚠️','Velg en gruppe');return;}
   if(A.nb.vis==='direct'&&!(A.nb.targetIds||[]).length){notify('⚠️','Velg minst én person');return;}
   const vis=A.nb.vis||((A.nb.type||'help')==='help'?'friends':'public');
+  if(D())console.log('[→ POST]',{type:A.nb.type,vis,title:t,hasImage:!!A.nb.imageData,items:(A.nb.items||[]).length,groupId:A.nb.groupId});
   const defExp=['public','friends'].includes(vis)?30:0;
   const expDays=A.nb.expiry!==undefined?A.nb.expiry:defExp;
   const expAt=expDays>0?now()+expDays*864e5:0;
@@ -1157,6 +1179,7 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
     notify('📤','Laster opp bilde...');
     imageUrl=await fbUpload(A.nb.imageData,'posts/'+jobId+'.webp');
   }
+  if(D())console.log('[POST] imageUpload',{success:!!imageUrl,fallback:!imageUrl&&!!A.nb.imageData});
   // Upload audio for items
   const items=(A.nb.items||[]).filter(it=>it.text.trim()||it.audioData||it.audioUrl);
   var audioFailed=false;
@@ -1165,6 +1188,7 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
       if(aUrl){items[i].audioUrl=aUrl;items[i].audioData=null;}else{audioFailed=true;}}
     else{audioFailed=true;}}}
   if(audioFailed)notify('⚠️','Noe lyd kunne ikke lastes opp. Andre vil ikke høre den.');
+  if(D())console.log('[POST] audioUpload',{total:items.length,failed:audioFailed});
   const job={id:jobId,type:A.nb.type||'help',title:t,desc:A.nb.desc.trim(),items:items.map(it=>({text:it.text.trim(),audioUrl:it.audioUrl||null,audioData:it.audioUrl?null:(it.audioData||null),duration:it.duration||0,mode:it.mode||'list',status:it.status||'open'})),
     reward:A.nb.reward||'',location:A.nb.location||'',fylke:A.nb.fylke||A.myFylke||'',by:A.nb.by||A.myBy||'',
     imageData:imageUrl?null:A.nb.imageData||null, // Inline only if no Firebase
@@ -1184,6 +1208,8 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
   else{A.contacts.forEach(c=>send(c.id,{t:'INV',job:{...toSend,fromContact:true}}));}
   // All posts go to Firestore (backbone for offline delivery)
   await fsWritePost(job);
+  if(D())console.log('[POST] routing',{vis:job.visibility,fsWrite:true,gossip:job.visibility==='public'});
+  if(D())console.log('[← POST] done',{jid:jobId});
   addAct('Nytt: '+t.substr(0,30),'📋');persist();A.nb={};go(job.visibility==='direct'?'chatHub':'mine');
   }finally{window._postBusy=false;}};
 
