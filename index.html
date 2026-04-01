@@ -161,7 +161,7 @@ const A={myId:'',myName:'',myBio:'',myCity:'',myFylke:'',myBy:'',pubB64:'',privK
   peer:null,ready:false,conns:new Map(),peers:new Map(),seen:new Set(),openJobs:new Map(),myJobs:[],jobChats:{},dms:{},
   contacts:[],blocked:new Set(),ratings:{},activity:[],offlineQ:[],relayQ:[],completedCount:0,
   screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,_seenMids:new Set(),_seenAcks:new Set(),groups:[],
-  feedFilter:{type:'',locs:[]},knownGroups:new Map(),tempConns:new Map(),_publicGroups:[],_contactQ:''};
+  feedFilter:{type:'',locs:[]},knownGroups:new Map(),tempConns:new Map(),_publicGroups:[],_contactQ:'',_editGroup:false,_pendingGroupImg:null};
 
 async function loadState(){
   if(D())console.log('[-> loadState]');
@@ -524,7 +524,7 @@ async function fsDeleteGroup(gid){if(!hasFS())return;if(D())console.log('[-> fsD
 async function fsLoadPublicGroups(){if(!hasFS())return[];if(D())console.log('[-> fsLoadPublicGroups]');
   // NOTE: Requires Firestore index on groups(private) — see Firebase console
   try{const snap=await fbDb.collection('groups').where('private','==',false).limit(50).get();
-    const r=snap.docs.map(d=>d.data());if(D())console.log('[<- fsLoadPublicGroups]',{count:r.length});return r;
+    const r=snap.docs.map(d=>({...d.data(),id:d.id}));if(D())console.log('[<- fsLoadPublicGroups]',{count:r.length});return r;
   }catch(e){if(D())console.log('[fsLoadPublicGroups] error',e.message);return[];}}
 async function fsRegisterUser(){if(D())console.log('[-> fsRegisterUser]',{myId:A.myId,myName:A.myName});if(!hasFS()||!A.myId||!A.myName)return;try{await fbDb.collection('users').doc(A.myId).set({name:A.myName,nameLower:A.myName.toLowerCase(),fylke:A.myFylke||'',by:A.myBy||'',avatar:ls('oAvatar')||'',updatedAt:Date.now()},{merge:true});if(D())console.log('[<- fsRegisterUser] success');}catch(e){console.warn('[FS] registerUser',e);}}
 async function fsSearchUsers(query){if(!hasFS()||!query||query.length<2)return[];try{var q=query.toLowerCase();var snap=await fbDb.collection('users').where('nameLower','>=',q).where('nameLower','<=',q+'\uf8ff').limit(20).get();return snap.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.id!==A.myId&&!A.blocked.has(u.id));}catch(e){console.warn('[FS] searchUsers',e);return[];}}
@@ -937,7 +937,7 @@ function updateB(){const cb=$('bdg-c');if(cb){cb.style.display=A.unreadChat?'fle
 
 // ═══ ROUTER ═══
 window.go=(s,p)=>{if(D())console.log('[go]',{from:A.screen,to:s,params:p});if(A.screen==='create'&&s!=='create'&&s!=='setup')A.nb={};
-  if(A.screen!==s){window._pendingAudio=null;window._pendingImg=null;}
+  if(A.screen!==s){window._pendingAudio=null;window._pendingImg=null;A._editGroup=false;A._pendingGroupImg=null;}
   A.prevScreen=A.screen;A.screen=s;A.params=p||{};
   const nav=$('nav');const noNav=['setup','onboarding','create','groupCreated','jobChat','dm'];
   if(nav)nav.style.display=noNav.includes(s)?'none':'block';
@@ -1407,7 +1407,7 @@ function vMine(){
     const hasAnyMine=A.myJobs.some(j=>j.creatorId===A.myId);const hasAnyHelp=A.myJobs.some(j=>j.isHelper);
     if(!A.myJobs.length)return`<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Du har ingen oppgaver ennå.</div>
       <div style="display:flex;gap:8px;margin-top:12px;justify-content:center">
-      <button class="btn bp bsm" style="width:auto" onclick="A.nb.type='help';go('create')">🤝 Be om hjelp</button>
+      <button class="btn bp bsm" style="width:auto" onclick="A.nb.type='help';go('create')">🤝 Jobb</button>
       <button class="btn bs bsm" style="width:auto" onclick="A.nb.type='service';go('create')">💼 Tilby noe</button></div></div>`;
     let h='';
     if(hasAnyMine){h+=`<span class="slbl">MINE INNLEGG (${mine.length})</span>`;
@@ -1657,6 +1657,13 @@ window.copyGid=id=>{if(D())console.log('[copyGid]',id);try{navigator.clipboard.w
 window.shareGroupLink=(gid,gname)=>{var text='Bli med i gruppen "'+(gname||'Gruppe')+'" på OptoU! Gruppekode: '+gid;
   if(navigator.share){navigator.share({title:'OptoU – '+(gname||'Gruppe'),text:text}).catch(()=>{});}
   else{try{navigator.clipboard.writeText(text).then(()=>notify('✅','Kopiert til utklippstavlen!')).catch(()=>notify('📋',text));}catch(e){notify('📋',text);}}};
+window.handleGroupEditImg=async inp=>{if(!inp.files[0])return;try{A._pendingGroupImg=await compressImage(inp.files[0]);render();}catch(e){notify('⚠️','Kunne ikke laste bilde');}};
+window.saveGroupEdit=async gid=>{if(D())console.log('[saveGroupEdit]',{gid});
+  var g=A.groups.find(x=>x.id===gid);if(!g||g.creatorId!==A.myId)return;
+  var desc=$('gedit-desc')?.value?.trim()||'';g.desc=desc;
+  if(A._pendingGroupImg){var url=await fbUpload(A._pendingGroupImg,'groups/'+gid+'.webp');if(url)g.imageUrl=url;A._pendingGroupImg=null;}
+  fsWriteGroup(gid,{desc:g.desc,imageUrl:g.imageUrl||null,updatedAt:Date.now()});
+  A._editGroup=false;persist();notify('✅','Gruppe oppdatert!');render();};
 window.inviteToGroup=(gid,gname,pid)=>{if(D())console.log('[inviteToGroup]',{gid,gname,pid});const g=A.groups.find(x=>x.id===gid);
   send(pid,{t:'GI',gid,gname,gdesc:g?.desc||'',gprivate:g?.private||false,fromName:A.myName});
   notify('✅','Invitasjon sendt!');};
@@ -1711,8 +1718,9 @@ function vGroups(){
   return`<div class="scr"><div class="hdr"><div style="font-size:22px;font-weight:800">Grupper</div><button class="btn bs bsm" style="width:auto" onclick="go('createGroup')">+ Ny</button></div>
   <div class="fld"><input class="fi" id="grp-search" placeholder="Søk etter grupper..." oninput="searchGroups(this.value)" autocomplete="off"></div>
   <div id="grp-search-results"></div>
-  <details style="margin-bottom:16px"><summary style="font-size:12px;color:var(--t3);cursor:pointer">Har du en gruppekode?</summary>
-  <div style="display:flex;gap:8px;margin-top:8px"><input class="fi" id="add-gid" placeholder="Lim inn gruppekode" style="flex:1;padding:10px;font-size:13px">
+  <details style="margin-bottom:16px"><summary style="font-size:12px;color:var(--t3);cursor:pointer">Har noen delt en gruppekode med deg?</summary>
+  <div style="font-size:12px;color:var(--t3);margin:8px 0">Lim inn koden her for å bli med i en privat gruppe.</div>
+  <div style="display:flex;gap:8px"><input class="fi" id="add-gid" placeholder="Lim inn gruppekode" style="flex:1;padding:10px;font-size:13px">
   <button class="btn bp bsm" style="width:auto;padding:10px 16px" onclick="joinGroup()">Bli med</button></div></details>
   ${!A.groups.length?'<div class="emp"><div class="emp-i">🏘️</div><div class="emp-t">Du har ingen grupper ennå.<br>Opprett en gruppe for familie eller jobb, eller bli med via kode.</div></div>':''}
   ${(()=>{const priv=A.groups.filter(g=>g.private);const pub=A.groups.filter(g=>!g.private);
@@ -1758,11 +1766,18 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
   ${g.desc?`<div style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:8px">${esc(g.desc)}</div>`:''}
   <div style="font-size:13px;color:var(--t2);margin-bottom:4px">👥 ${totalMembers} medlemmer${onlineCount?' · 🟢 '+onlineCount+' online':''}</div>
   ${adminName?`<div style="font-size:12px;color:var(--t3);margin-bottom:8px">👑 Admin: ${esc(adminName)}</div>`:''}
-  <button class="btn bs bsm" style="margin-bottom:8px" onclick="shareGroupLink('${escA(g.id)}','${escA(g.name)}')">📤 Del denne gruppen</button>
-  ${g.private?`<details style="margin-bottom:8px"><summary style="font-size:12px;color:var(--t3);cursor:pointer">Har du en gruppekode?</summary>
-    <div class="idd" style="margin-top:8px">${g.id}</div></details>`:''}
+  ${isAdmin?`<button class="btn bs bsm" style="margin-bottom:8px" onclick="A._editGroup=!A._editGroup;A._pendingGroupImg=null;render()">✏️ ${A._editGroup?'Avbryt redigering':'Rediger gruppe'}</button>`:''}
+  ${A._editGroup&&isAdmin?`<div class="cd" style="margin-bottom:12px;border-color:var(--pbb)"><div class="slbl">REDIGER GRUPPE</div>
+    <div class="fld"><label class="fl">Beskrivelse</label><textarea class="fi" id="gedit-desc" rows="3" maxlength="200">${esc(g.desc||'')}</textarea></div>
+    <div class="fld"><label class="fl">Gruppebilde</label>
+    ${A._pendingGroupImg?`<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><img src="${esc(A._pendingGroupImg)}" style="width:48px;height:48px;border-radius:24px;object-fit:cover"><span style="font-size:12px;color:var(--g2)">✓ Nytt bilde valgt</span></div>`
+    :`<label class="btn bs bsm" style="cursor:pointer;display:inline-block">📷 Velg nytt bilde<input type="file" accept="image/*" style="display:none" onchange="handleGroupEditImg(this)"></label>`}</div>
+    <button class="btn bp" onclick="saveGroupEdit('${escA(g.id)}')">Lagre endringer</button></div>`:''}
+  ${g.private?`<details style="margin-bottom:8px"><summary style="font-size:12px;color:var(--t3);cursor:pointer">📋 Gruppekode — del med andre</summary>
+    <div style="font-size:13px;color:var(--t2);margin:8px 0">Del denne koden med folk du vil ha med i gruppen.</div>
+    <div class="idd">${g.id}</div>
+    <button class="btn bs bsm" style="margin-top:6px" onclick="copyGid('${escA(g.id)}')">📋 Kopier kode</button></details>`:''}
   <div style="display:flex;gap:8px;flex-wrap:wrap">
-    <button class="btn bp bsm" style="flex:1" onclick="A.nb.vis='group';A.nb.groupId='${escA(g.id)}';A.nb.groupName='${escA(g.name)}';go('create')">➕ Legg ut</button>
     <button class="btn bs bsm" style="flex:1" onclick="go('groupMembers',{gid:'${escA(g.id)}'})">👥 Medlemmer (${totalMembers})</button>
     <button class="btn bs bsm" style="flex:1" onclick="copyGid('${escA(g.id)}')">📋 Kopier ${g.private?'kode':'ID'}</button>
     ${isAdmin?`<button class="btn br bsm" onclick="showConfirm('Slett gruppen?','Du er admin. Gruppen og alle innlegg slettes for alle.','Ja, slett',()=>{deleteGroup('${escA(g.id)}');})">🗑️ Slett</button>`
@@ -1799,11 +1814,11 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
     ${j.jobDate?`<div style="font-size:12px;color:var(--pr);font-weight:600;margin-bottom:4px">${fmtDate(j.jobDate,j.jobTime)}</div>`:''}
     ${j.reward?`<div style="font-size:13px;color:var(--g2);font-weight:700;margin-bottom:6px">🎁 ${esc(j.reward)}</div>`:''}</div>`;}).join('')
     +`<div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn bp bsm" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'help'};go('create')">🤝 Be om hjelp</button>
+      <button class="btn bp bsm" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'help'};go('create')">🤝 Jobb</button>
       <button class="btn bs bsm" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'service'};go('create')">💼 Tilby noe</button></div>`
     :`<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Ingen innlegg i gruppen ennå.<br>Vær den første til å dele noe!</div></div>
     <div style="display:flex;gap:10px;margin-top:16px">
-      <button class="btn bp" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'help'};go('create')">🤝 Be om hjelp</button>
+      <button class="btn bp" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'help'};go('create')">🤝 Jobb</button>
       <button class="btn bs" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'service'};go('create')">💼 Tilby noe</button></div>`}</div>`;}
 function vGroupMembers(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===gid);
   if(!g)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groupDetail',{gid:'${escA(gid)}'})">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Gruppe ikke funnet.</div></div></div>`;
