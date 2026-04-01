@@ -100,10 +100,10 @@ input,textarea,select{font-family:inherit;outline:none;-webkit-appearance:none;b
 <div id="app"></div>
 <div id="nav" style="display:none">
   <div class="nr">
-    <button class="nb act" id="nb-feed" onclick="go('feed')"><span class="ni">🏠</span>Hjem</button>
-    <button class="nb" id="nb-grp" onclick="go('groups')"><span class="ni">🏘️</span>Grupper</button>
+    <button class="nb act" id="nb-feed" onclick="go('feed')"><span class="ni">🏠</span>Hjem<span class="bdg" id="bdg-f" style="display:none"></span></button>
+    <button class="nb" id="nb-grp" onclick="go('groups')"><span class="ni">🏘️</span>Grupper<span class="bdg" id="bdg-g" style="display:none"></span></button>
     <div class="nf" onclick="go('create')"><div class="fab">+</div></div>
-    <button class="nb" id="nb-mine" onclick="go('mine')"><span class="ni">⚡</span>Aktiviteter</button>
+    <button class="nb" id="nb-mine" onclick="go('mine')"><span class="ni">⚡</span>Aktiviteter<span class="bdg" id="bdg-m" style="display:none"></span></button>
     <button class="nb" id="nb-prof" onclick="go('profile')"><span class="ni">👤</span>Profil<span class="bdg" id="bdg-c" style="display:none"></span></button>
   </div>
 </div>
@@ -160,7 +160,7 @@ function dbDel(store,key){return new Promise(res=>{if(!db)return res();const tx=
 const A={myId:'',myName:'',myBio:'',myCity:'',myFylke:'',myBy:'',pubB64:'',privKey:null,pubKey:null,ecdhPriv:null,ecdhPubB64:'',ecdhSig:'',sharedKeys:new Map(),
   peer:null,ready:false,conns:new Map(),peers:new Map(),seen:new Set(),openJobs:new Map(),myJobs:[],jobChats:{},dms:{},
   contacts:[],blocked:new Set(),ratings:{},activity:[],offlineQ:[],relayQ:[],completedCount:0,
-  screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,_seenMids:new Set(),_seenAcks:new Set(),groups:[],
+  screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,unreadActivity:0,unreadGroups:0,unreadFeed:0,_seenMids:new Set(),_seenAcks:new Set(),groups:[],
   feedFilter:{type:'',locs:[]},knownGroups:new Map(),tempConns:new Map(),_publicGroups:[],_contactQ:'',_editGroup:false,_pendingGroupImg:null};
 
 async function loadState(){
@@ -207,9 +207,10 @@ async function persist(){
   Object.keys(A.dms).forEach(k=>{if(A.dms[k]?.length>200)A.dms[k]=A.dms[k].slice(-200);});
   // Cap ratings per peer to 50 (keep newest)
   Object.keys(A.ratings).forEach(pid=>{if(A.ratings[pid]?.length>50)A.ratings[pid]=A.ratings[pid].slice(-50);});
-  // Remove terminal myJobs older than 90 days
+  // Remove terminal myJobs older than 90 days + cleanup their local images
   var cutoff90=now()-90*864e5;
-  A.myJobs=A.myJobs.filter(j=>{if(['done','cancelled','never_done','declined'].includes(j.status)&&j.ts&&j.ts<cutoff90)return false;return true;});
+  A.myJobs=A.myJobs.filter(j=>{if(['done','cancelled','never_done','declined'].includes(j.status)&&j.ts&&j.ts<cutoff90){
+    dbDel('images',j.id).catch(function(){});return false;}return true;});
   // Strip imageData from stored openJobs to save space (keep only in IndexedDB images store)
   const ojForStore=[...A.openJobs.entries()].map(([k,v])=>[k,{...v,imageData:v.imageData?'[img]':null}]);
   await Promise.all([
@@ -523,8 +524,8 @@ async function fsJoinGroup(gid,mid){if(!hasFS())return false;try{await fbDb.coll
 async function fsLeaveGroup(gid,mid){if(!hasFS())return false;try{await fbDb.collection('groups').doc(gid).update({members:firebase.firestore.FieldValue.arrayRemove(mid)});return true;}catch(e){console.warn('[FS] leave',e);return false;}}
 async function fsDeleteGroup(gid){if(!hasFS())return;if(D())console.log('[-> fsDeleteGroup]',{gid});
   try{const posts=await fbDb.collection('posts').where('groupId','==',gid).get();
-    for(const doc of posts.docs){try{const pd=doc.data();const intSnap=await doc.ref.collection('interests').get();if(intSnap.docs.length){const b=fbDb.batch();intSnap.docs.forEach(d=>b.delete(d.ref));await b.commit();}await doc.ref.delete();
-      fsDeleteStorageFiles(doc.id,(pd.items||[]).length||6);}catch(e){}}
+    if(D())console.log('[fsDeleteGroup] deleting',posts.docs.length,'group posts');
+    for(const doc of posts.docs){try{await fsDeletePost(doc.id);}catch(e){}}
     await fbDb.collection('groups').doc(gid).delete();
     // Best-effort delete group image
     if(fbStorage)try{await fbStorage.ref().child('groups/'+gid+'.webp').delete();}catch(e){}
@@ -551,6 +552,8 @@ async function fsLoadFriendsPosts(){if(!hasFS()||!A.contacts.length)return[];if(
     for(var i=0;i<cids.length;i+=10){var chunk=cids.slice(i,i+10);
       try{var snap=await fbDb.collection('posts').where('creatorId','in',chunk).where('status','==','open').where('ts','>',cutoff).orderBy('ts','desc').limit(50).get();
         snap.docs.forEach(d=>results.push(d.data()));}catch(e){}}
+    // Only return friends-visibility posts (public comes via fsLoadPublicPosts)
+    results=results.filter(p=>p.visibility==='friends');
     if(D())console.log('[<- fsLoadFriendsPosts]',{count:results.length});return results;
   }catch(e){if(D())console.log('[fsLoadFriendsPosts] error',e.message);return[];}}
 async function fsUpdatePostStatus(pid,status,extra){if(D())console.log('[-> fsUpdatePostStatus]',{jid:pid,status,extra});if(!hasFS())return false;try{const doc=await fbDb.collection('posts').doc(pid).get();if(!doc.exists)return false;
@@ -571,23 +574,39 @@ async function fsCheckInterests(){if(!hasFS())return;try{const jobs=A.myJobs.fil
     const before=j.interests.length;
     j.interests=j.interests.filter(x=>A.contacts.find(c=>c.id===x.id)||fsIds.has(x.id));
     const removed=before-j.interests.length;
-    if(added>0){j.status='accepting';changed=true;notify('⚡ '+added+' ny interesse','',()=>go('jobDetail',{jobId:j.id}));}
+    if(added>0){j.status='accepting';changed=true;if(A.screen!=='mine')A.unreadActivity+=added;notify('⚡ '+added+' ny interesse','',()=>go('jobDetail',{jobId:j.id}));}
     if(removed>0){changed=true;if(j.interests.length===0&&j.status==='accepting')j.status='open';}}catch(e){}}
-  if(changed){persist();sR();}}catch(e){console.warn('[FS] checkInterests',e);}}
-function fsClearInterests(jid){if(D())console.log('[-> fsClearInterests]',{jid});if(!hasFS())return;try{fbDb.collection('posts').doc(jid).collection('interests').get().then(snap=>{snap.docs.forEach(d=>d.ref.delete());}).catch(function(){});}catch(e){}}
+  if(changed){updateB();persist();sR();}}catch(e){console.warn('[FS] checkInterests',e);}}
+function fsClearInterests(jid){if(D())console.log('[-> fsClearInterests]',{jid});if(!hasFS())return;
+  fbDb.collection('posts').doc(jid).collection('interests').get().then(snap=>{
+    if(!snap.docs.length)return;var audio=0;
+    snap.docs.forEach(d=>{var dt=d.data();if(dt.audioUrl){fsDeleteMediaUrl(dt.audioUrl);audio++;}});
+    var batch=fbDb.batch();snap.docs.forEach(d=>batch.delete(d.ref));batch.commit().catch(function(){});
+    if(D())console.log('[fsClearInterests]',{jid,docs:snap.docs.length,audioCleaned:audio});
+  }).catch(function(){});}
+function fsDeleteMediaUrl(url){if(!fbStorage||!url||typeof url!=='string')return;
+  try{if(url.indexOf('firebasestorage.googleapis.com')===-1)return;fbStorage.refFromURL(url).delete().catch(function(){});
+  }catch(e){}}
 async function fsDeletePost(pid){if(!hasFS())return;if(D())console.log('[-> fsDeletePost]',{pid});
+  var mediaDeleted=0;
   try{
+    // Delete interests subcollection + their helpAudio
     try{const snap=await fbDb.collection('posts').doc(pid).collection('interests').get();
-      if(snap.docs.length){const batch=fbDb.batch();snap.docs.forEach(d=>batch.delete(d.ref));await batch.commit();}
+      if(snap.docs.length){snap.docs.forEach(d=>{var dt=d.data();if(dt.audioUrl){fsDeleteMediaUrl(dt.audioUrl);mediaDeleted++;}});
+        const batch=fbDb.batch();snap.docs.forEach(d=>batch.delete(d.ref));await batch.commit();}
     }catch(e){if(D())console.log('[fsDeletePost] interests cleanup error',pid,e.message);}
+    // Delete chat subcollection + their audio/images
     try{const chatSnap=await fbDb.collection('posts').doc(pid).collection('chat').get();
-      if(chatSnap.docs.length){const b2=fbDb.batch();chatSnap.docs.forEach(d=>b2.delete(d.ref));await b2.commit();}
+      if(chatSnap.docs.length){chatSnap.docs.forEach(d=>{var m=d.data();if(m.audioUrl){fsDeleteMediaUrl(m.audioUrl);mediaDeleted++;}if(m.imageUrl){fsDeleteMediaUrl(m.imageUrl);mediaDeleted++;}});
+        const b2=fbDb.batch();chatSnap.docs.forEach(d=>b2.delete(d.ref));await b2.commit();}
     }catch(e){if(D())console.log('[fsDeletePost] chat cleanup error',pid,e.message);}
     await fbDb.collection('posts').doc(pid).delete();
-    // Best-effort Storage cleanup
+    // Best-effort Storage cleanup (post image + item audio)
     var _ic=(A.myJobs.find(j=>j.id===pid)||A.openJobs.get(pid))?.items?.length||6;
     fsDeleteStorageFiles(pid,_ic);
-    if(D())console.log('[<- fsDeletePost] success',pid);
+    // Local image cleanup
+    dbDel('images',pid).catch(function(){});
+    if(D())console.log('[<- fsDeletePost] success',pid,{mediaDeleted});
   }catch(e){if(D())console.log('[fsDeletePost] error',pid,e.message);}}
 async function fsDeleteStorageFiles(pid,itemCount){if(!fbStorage)return;var n=itemCount||6;
   try{await fbStorage.ref().child('posts/'+pid+'.webp').delete();if(D())console.log('[storage] deleted posts/'+pid+'.webp');}catch(e){}
@@ -614,9 +633,7 @@ async function fsSyncMyPosts(){if(!hasFS()||!A.myId)return;if(D())console.log('[
     var deleted=0,updated=0;
     for(const doc of snap.docs){const fs=doc.data();
       if(!myLocalIds.has(fs.id)){
-        try{const intSnap=await doc.ref.collection('interests').get();
-          if(intSnap.docs.length){const batch=fbDb.batch();intSnap.docs.forEach(d=>batch.delete(d.ref));await batch.commit();}
-          await doc.ref.delete();deleted++;if(D())console.log('[fsSync] deleted orphan',fs.id);
+        try{await fsDeletePost(fs.id);deleted++;if(D())console.log('[fsSync] deleted orphan',fs.id);
         }catch(e){if(D())console.log('[fsSync] delete error',fs.id,e.message);}
       }else{const lj=A.myJobs.find(j=>j.id===fs.id);
         if(lj&&lj.status!==fs.status){
@@ -624,9 +641,7 @@ async function fsSyncMyPosts(){if(!hasFS()||!A.myId)return;if(D())console.log('[
             updated++;if(D())console.log('[fsSync] updated',fs.id,{from:fs.status,to:lj.status});
           }catch(e){if(D())console.log('[fsSync] update error',fs.id,e.message);}}
         if(lj&&lj.expiresAt&&lj.expiresAt<Date.now()&&['done','cancelled','never_done','declined'].includes(lj.status)){
-          try{const intSnap=await doc.ref.collection('interests').get();
-            if(intSnap.docs.length){const batch=fbDb.batch();intSnap.docs.forEach(d=>batch.delete(d.ref));await batch.commit();}
-            await doc.ref.delete();fsDeleteStorageFiles(fs.id,lj.items?.length);deleted++;
+          try{await fsDeletePost(fs.id);deleted++;
             if(D())console.log('[fsSync] deleted expired terminal',fs.id,{status:lj.status,expiresAt:new Date(lj.expiresAt).toISOString()});
           }catch(e){if(D())console.log('[fsSync] expired delete error',fs.id,e.message);}}}}
     if(D())console.log('[<- fsSyncMyPosts]',{checked:snap.docs.length,deleted,updated});
@@ -647,8 +662,9 @@ async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if
           if(fs.helperName&&!j.helperName)j.helperName=fs.helperName;}
         if(fs.creatorName&&!j.creatorName)j.creatorName=fs.creatorName;
         if(fs.creatorId&&!j.creatorId)j.creatorId=fs.creatorId;
-        if(fs.status==='done'){A.completedCount++;ss('oDone',A.completedCount);}}
-    }catch(e){}}if(D())console.log('[<- fsCheckJobStatus]');persist();sR();}catch(e){if(D())console.log('[fsSync] error',e);}}
+        if(fs.status==='done'){A.completedCount++;ss('oDone',A.completedCount);}
+        if(A.screen!=='mine')A.unreadActivity++;}
+    }catch(e){}}if(D())console.log('[<- fsCheckJobStatus]');updateB();persist();sR();}catch(e){if(D())console.log('[fsSync] error',e);}}
 async function fsWriteJobChat(jid,msg){if(!hasFS())return;
   try{await fbDb.collection('posts').doc(jid).collection('chat').doc(msg._mid).set({
     from:msg.from,name:msg.name||A.myName,text:msg.text||'',audioUrl:msg.audioUrl||null,
@@ -661,7 +677,8 @@ async function fsCheckJobChats(){if(!hasFS())return;
     var snap=await fbDb.collection('posts').doc(j.id).collection('chat').orderBy('ts','desc').limit(50).get();
     var added=0;snap.docs.forEach(doc=>{var m=doc.data();if(m.from===A.myId)return;if(m._mid&&localMids.has(m._mid))return;
       addJMsg(j.id,{from:m.from,name:m.name||'?',text:m.text||'',audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||Date.now(),_mid:m._mid});added++;});
-    if(added>0){if(D())console.log('[FS] checkJobChats',j.id,{added});persist();sR();}
+    if(added>0){if(!((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===j.id))A.unreadActivity+=added;
+      if(D())console.log('[FS] checkJobChats',j.id,{added});updateB();persist();sR();}
   }catch(e){if(D())console.log('[FS] checkJobChats error',j.id,e.message);}}}
 async function fbUpload(dataUrl,path){
   if(D())console.log('[-> fbUpload]',{path});
@@ -853,7 +870,7 @@ function applyG(p){if(!p)return;if(p.t==='TAKE'||p.t==='CANCEL'){A.openJobs.dele
   if(p.t==='RAT'&&p.uid&&p.ratings){if(!A.ratings[p.uid])A.ratings[p.uid]=[];
     p.ratings.forEach(r=>{if(!A.ratings[p.uid].find(x=>x.jobId===r.jobId&&x.ts===r.ts))A.ratings[p.uid].push(r);});persist();}
   if(p.t==='POST'&&p.job?.id){if(!A.openJobs.has(p.job.id)&&!A.myJobs.find(j=>j.id===p.job.id)&&!A.blocked.has(p.job.creatorId)){
-    A.openJobs.set(p.job.id,{...p.job,isFromContact:false,isPublic:true});sR();}}
+    A.openJobs.set(p.job.id,{...p.job,isFromContact:false,isPublic:true});if(A.screen!=='feed')A.unreadFeed++;updateB();sR();}}
   if(p.t==='GRP'&&p.group?.id&&/^g[a-zA-Z0-9]{1,20}$/.test(p.group.id)&&!p.group.private){A.knownGroups.set(p.group.id,p.group);}
   if(p.t==='GDEL'&&p.gid){if(D())console.log('[GDEL] group deleted',p.gid);
     A.groups=A.groups.filter(g=>g.id!==p.gid);A.knownGroups.delete(p.gid);
@@ -874,6 +891,7 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     A.openJobs.set(m.job.id,rj);
     if(!m.job.groupId&&!A.contacts.find(c=>c.id===m.job.creatorId))A.contacts.push({id:m.job.creatorId,name:m.job.creatorName||m.job.creatorId.substr(0,12),alias:m.job.creatorName});
     if(m.job.groupId&&m.job.groupName){const g=A.groups.find(x=>x.id===m.job.groupId);if(g&&(!g.name||g.name===g.id||g.name==='Gruppe...'))g.name=m.job.groupName;}
+    if(A.screen!=='feed')A.unreadFeed++;
     notify('📩 '+(m.job.creatorName||''),m.job.title?.substr(0,40),()=>go('jobDetail',{jobId:m.job.id}));
     updateB();sR();break;}
   case 'JR':{const j=A.myJobs.find(x=>x.id===m.jid);
@@ -882,34 +900,34 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(!j.interests)j.interests=[];if(!j.interests.find(x=>x.id===from))j.interests.push({id:from,name:m.name,msg:m.message||'',audioUrl:m.audioUrl||null,audioDur:m.audioDur||0,ts:now()});
     if(!A.contacts.find(c=>c.id===from))A.tempConns.set(m.jid,{peerId:from,name:m.name||'',ts:now()});
     j.status='accepting';fsUpdatePostStatus(m.jid,'accepting');if(D())console.log('[JR] accepted',{jid:m.jid,interests:j.interests.length,status:j.status});
-    notify('⚡ '+(m.name||''),'Vil hjelpe!',()=>go('jobDetail',{jobId:m.jid}));persist();}sR();break;}
+    if(A.screen!=='mine')A.unreadActivity++;notify('⚡ '+(m.name||''),'Vil hjelpe!',()=>go('jobDetail',{jobId:m.jid}));persist();}updateB();sR();break;}
   case 'JY':{const j=A.myJobs.find(x=>x.id===m.jid);
     if(D())console.log('[JY] received',{from,jid:m.jid,jobFound:!!j,jobStatus:j?.status});
     if(j&&j.status==='pending'){j.helperId=from;j.helperName=m.name;j.status='active';
-    notify('✅ Godkjent!',m.name||'');persist();}sR();break;}
+    if(A.screen!=='mine')A.unreadActivity++;notify('✅ Godkjent!',m.name||'');persist();}updateB();sR();break;}
   case 'JN':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[JN] received',{from,jid:m.jid,jobFound:!!j,isHelper:j?.isHelper,status:j?.status});
-    if(j?.isHelper)j.status='declined';persist();sR();break;}
+    if(j?.isHelper){j.status='declined';if(A.screen!=='mine')A.unreadActivity++;}persist();updateB();sR();break;}
   case 'HC':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[HC] received',{from,jid:m.jid,jobFound:!!j,status:j?.status});
     if(j&&j.status==='active'){j.helperDone=true;j.status='pending_review';
-    fsUpdatePostStatus(m.jid,'pending_review');notify('🔔 Ferdigmeldt!',j.title?.substr(0,30));persist();}sR();break;}
+    if(A.screen!=='mine')A.unreadActivity++;fsUpdatePostStatus(m.jid,'pending_review');notify('🔔 Ferdigmeldt!',j.title?.substr(0,30));persist();}updateB();sR();break;}
   case 'PC':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[PC] received',{from,jid:m.jid,jobFound:!!j,status:j?.status});
     if(j&&j.status!=='done'){j.status='done';A.completedCount++;ss('oDone',A.completedCount);
-    notify('🎉 Godkjent!','Fullført!');persist();}sR();break;}
+    if(A.screen!=='mine')A.unreadActivity++;notify('🎉 Godkjent!','Fullført!');persist();}updateB();sR();break;}
   case 'NP':{const j=A.myJobs.find(x=>x.id===m.jid);if(!j)break;j.status='never_done';fsUpdatePostStatus(m.jid,'never_done');
     if(!A.ratings[A.myId])A.ratings[A.myId]=[];
     A.ratings[A.myId].push({score:1,comment:'Fullførte aldri.',jobId:m.jid,raterName:j.creatorName||'?',ts:now(),nd:true});
-    gossip({t:'RAT',uid:A.myId,ratings:A.ratings[A.myId]});persist();sR();break;}
+    if(A.screen!=='mine')A.unreadActivity++;gossip({t:'RAT',uid:A.myId,ratings:A.ratings[A.myId]});persist();updateB();sR();break;}
   case 'BM':{if(!m.jid||!m.text)break;if(m._mid){if(A._seenMids.has(m._mid))break;A._seenMids.add(m._mid);}
     addJMsg(m.jid,{from,name:m.name||'?',text:m.text,audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||now()});
     if(m._mid)send(from,{t:'MA',_mid:m._mid});
-    if(A.screen!=='jobDetail'||A.params.jobId!==m.jid){notify('💬 '+(m.name||'?'),m.text?.substr(0,40),()=>go('jobDetail',{jobId:m.jid}));}
-    persist();if((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===m.jid)sR();break;}
+    if(!((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===m.jid)){A.unreadActivity++;notify('💬 '+(m.name||'?'),m.text?.substr(0,40),()=>go('jobDetail',{jobId:m.jid}));}
+    persist();updateB();if((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===m.jid)sR();break;}
   case 'DM':{if(m._mid){if(A._seenMids.has(m._mid))break;A._seenMids.add(m._mid);}
     if(m._mid)send(from,{t:'MA',_mid:m._mid});
     if(m.enc&&!m.audioUrl&&!m.imageUrl){decFrom(m.text,A.peers.get(from)?.epub).then(pt=>{addDM(from,{from,name:m.name,text:pt,ts:m.ts||now()});
-      if(A.screen!=='dm'||A.params.peerId!==from){notify('✉️ '+(m.name||''),pt?.substr?.(0,40));A.unreadChat++;}persist();sR();});}
+      if(A.screen!=='dm'||A.params.peerId!==from){notify('✉️ '+(m.name||''),pt?.substr?.(0,40));A.unreadChat++;}updateB();persist();sR();});}
     else{addDM(from,{from,name:m.name,text:m.text,audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||now()});
-      if(A.screen!=='dm'||A.params.peerId!==from){notify('✉️ '+(m.name||''),m.text?.substr?.(0,40));A.unreadChat++;}persist();sR();}break;}
+      if(A.screen!=='dm'||A.params.peerId!==from){notify('✉️ '+(m.name||''),m.text?.substr?.(0,40));A.unreadChat++;}updateB();persist();sR();}break;}
   case 'RR':{if(!m.to||!m.msg)break;
     if(m.to===A.myId){const rrFrom=m.originalFrom||m.from||from;const isDup=m.mid&&A._seenMids.has('r:'+m.mid);
       if(!isDup&&!A.blocked.has(rrFrom)){if(m.mid)A._seenMids.add('r:'+m.mid);handleD(rrFrom,m.msg);}
@@ -929,7 +947,8 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     const myP=pri[j.status]||0;const theirP=pri[m.status]||0;
     if(D())console.log('[BS] received',{from,jid:m.jid,myStatus:j.status,theirStatus:m.status,myP,theirP,willUpdate:theirP>myP});
     if(theirP>myP){j.status=m.status;if(m.helperId&&!j.helperId){j.helperId=m.helperId;j.helperName=m.helperName;}
-      if(m.status==='done'){A.completedCount++;ss('oDone',A.completedCount);}persist();sR();}break;}
+      if(m.status==='done'){A.completedCount++;ss('oDone',A.completedCount);}
+      if(A.screen!=='mine')A.unreadActivity++;persist();updateB();sR();}break;}
   case 'MA':{if(!m._mid)break;
     // Find message in jobChats or dms and mark as delivered
     var found=false;Object.values(A.jobChats).forEach(msgs=>{if(found)return;const msg=msgs.find(x=>x._mid===m._mid);if(msg){msg._status='delivered';found=true;}});
@@ -940,15 +959,16 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(!j)break;
     if(j.helperId===from){j.helperId=null;j.helperName=null;j.helperDone=false;j.status='open';
       if(D())console.log('[JW] helper withdrew, status→open');
-      fsUpdatePostStatus(j.id,'open');notify('↩️',dn(from)+' trakk seg fra jobben');persist();sR();break;}
+      if(A.screen!=='mine')A.unreadActivity++;fsUpdatePostStatus(j.id,'open');notify('↩️',dn(from)+' trakk seg fra jobben');persist();updateB();sR();break;}
     if(j.interests){const before=j.interests.length;j.interests=j.interests.filter(x=>x.id!==from);
       if(D())console.log('[JW] interest removed',{before,after:j.interests.length,statusWas:j.status});
       if(j.interests.length===0&&j.status==='accepting'){j.status='open';fsUpdatePostStatus(j.id,'open');if(D())console.log('[JW] status→open (no interests left)');}
-      notify('↩️',dn(from)+' trakk seg');persist();sR();}else{if(D())console.log('[JW] no interests array on job');}break;}
+      if(A.screen!=='mine')A.unreadActivity++;notify('↩️',dn(from)+' trakk seg');persist();updateB();sR();}else{if(D())console.log('[JW] no interests array on job');}break;}
   case 'RJ':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[RJ] received',{from,jid:m.jid,jobFound:!!j,status:j?.status});
     if(j&&(j.status==='pending_review'||j.status==='done')){j.status='active';j.helperDone=false;
-      fsUpdatePostStatus(m.jid,'active');notify('↩️','Eieren ber deg prøve igjen');persist();sR();}break;}
+      if(A.screen!=='mine')A.unreadActivity++;fsUpdatePostStatus(m.jid,'active');notify('↩️','Eieren ber deg prøve igjen');persist();updateB();sR();}break;}
   case 'GI':{if(!m.gid||!m.gname)break;if(A.groups.find(g=>g.id===m.gid))break;
+    if(A.screen!=='groups')A.unreadGroups++;updateB();
     showConfirm('🏘️ Gruppeinvitasjon',(m.fromName||'Noen')+' inviterer deg til gruppen "'+(m.gname||'')+'"','Bli med',()=>{
       if(A.groups.find(g=>g.id===m.gid)){notify('ℹ️','Du er allerede med i denne gruppen');return;}
       A.groups.push({id:m.gid,name:m.gname,desc:m.gdesc||'',creatorId:'',createdTs:now(),isGroup:true,private:m.gprivate||false});
@@ -973,7 +993,8 @@ window.showConfirm=(title,text,yesLabel,onYes)=>{if(D())console.log('[showConfir
   bg.querySelector('#_mc').onclick=()=>bg.remove();
   bg.querySelector('#_my').onclick=()=>{bg.remove();onYes();};
   bg.onclick=e=>{if(e.target===bg)bg.remove();};};
-function updateB(){const cb=$('bdg-c');if(cb){cb.style.display=A.unreadChat?'flex':'none';cb.textContent=A.unreadChat;}}
+function _setB(id,n){var el=$(id);if(!el)return;el.style.display=n>0?'flex':'none';el.textContent=n>99?'99+':n;}
+function updateB(){_setB('bdg-f',A.unreadFeed);_setB('bdg-g',A.unreadGroups);_setB('bdg-m',A.unreadActivity);_setB('bdg-c',A.unreadChat);}
 
 // ═══ ROUTER ═══
 window.go=(s,p)=>{if(D())console.log('[go]',{from:A.screen,to:s,params:p});if(A.screen==='create'&&s!=='create'&&s!=='setup')A.nb={};
@@ -984,7 +1005,11 @@ window.go=(s,p)=>{if(D())console.log('[go]',{from:A.screen,to:s,params:p});if(A.
   ['feed','grp','mine','prof'].forEach(k=>{const el=$('nb-'+k);if(!el)return;
     const act=(s==='feed'&&k==='feed')||(['groups','groupDetail','groupMembers','createGroup','groupCreated'].includes(s)&&k==='grp')||(s==='mine'&&k==='mine')||(['profile','chatHub','dm','jobChat','contacts','repProfile','settings','search'].includes(s)&&k==='prof');
     el.className='nb'+(act?' act':'');});
-  if(s==='chatHub')A.unreadChat=0;render();window.scrollTo(0,0);};
+  if(s==='feed')A.unreadFeed=0;
+  if(s==='groups')A.unreadGroups=0;
+  if(s==='mine')A.unreadActivity=0;
+  if(s==='chatHub')A.unreadChat=0;
+  updateB();render();window.scrollTo(0,0);};
 function render(){const el=$('app');if(!el)return;if(D())console.log('[R]',A.screen,new Date().toISOString().substr(11,12));
   const map={onboarding:vOB,setup:vSetup,feed:vFeed,create:vCreate,mine:vMine,jobDetail:vDetail,interests:vInterests,
     chatHub:vChatHub,jobChat:vJobChat,dm:vDM,contacts:vContacts,repProfile:vRep,profile:vProfile,settings:vSettings,
@@ -1379,7 +1404,9 @@ window.doHelp=(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A.open
   persist();go('mine');notify('✅','Interesse sendt!');};
 window.withdrawHelp=(jid,cid)=>{if(D())console.log('[withdrawHelp]',{jid,cid,connOpen:!!A.conns.get(cid)?.open,offlineQbefore:A.offlineQ.length});
   A.myJobs=A.myJobs.filter(z=>z.id!==jid);send(cid,{t:'JW',jid});
-  if(hasFS())try{fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId).delete().catch(function(){});}catch(e){}
+  if(hasFS())try{var _iRef=fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId);
+    _iRef.get().then(d=>{if(d.exists){var dt=d.data();if(dt.audioUrl){fsDeleteMediaUrl(dt.audioUrl);if(D())console.log('[withdrawHelp] cleanup audioUrl',jid);}}
+      _iRef.delete().catch(function(){});}).catch(function(){});}catch(e){}
   persist();notify('↩️','Trukket tilbake');};
 window.doRate=(jid,tid)=>{if(D())console.log('[doRate]',{jid,tid,score:A.nb.rating});const s=A.nb.rating||0;if(!s){notify('⚠️','Gi en vurdering');return;}
   const c=A.nb._rc||$('rc')?.value?.trim()||'';if(tid){if(!A.ratings[tid])A.ratings[tid]=[];
@@ -1749,7 +1776,6 @@ window.searchGroups=async q=>{const el=$('grp-search-results');if(!el)return;q=(
 window.deleteGroup=(gid)=>{if(D())console.log('[deleteGroup]',gid);
   A.groups=A.groups.filter(x=>x.id!==gid);A.knownGroups.delete(gid);
   A.openJobs.forEach((j,id)=>{if(j.groupId===gid)A.openJobs.delete(id);});
-  A.myJobs.filter(j=>j.groupId===gid&&j.creatorId===A.myId).forEach(j=>fsDeletePost(j.id));
   A.myJobs=A.myJobs.filter(j=>j.groupId!==gid);
   fsDeleteGroup(gid);gossip({t:'GDEL',gid});
   persist();bcast({t:'HI',...myPres()});notify('🗑️','Gruppen er slettet');go('groups');};
@@ -1988,7 +2014,7 @@ async function boot(){
     if(D())console.log('[boot] phase:firestore-sync');fsRegisterUser();
     // Background: load discoverable posts from Firestore
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
-    fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){if(p.visibility==='direct'&&!(p.targetIds||[]).includes(A.myId))return;A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'friends posts');});
+    fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'friends posts');});
     fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();});
     fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsCleanupOrphanedGroups();fsSyncMyPosts();
     // Load group posts from Firestore
@@ -2012,27 +2038,26 @@ async function boot(){
     if(A._lastInvSent){const cut=now()-300000;A._lastInvSent.forEach((v,k)=>{if(v<cut)A._lastInvSent.delete(k);});}
     await persist();sR();
   },3e5);
-  // Periodic Firestore sync (every 5 min, round-robin to reduce load)
+  // Periodic Firestore sync (every 5 min, tiered frequency)
   if(!A._syncRound)A._syncRound=0;
   setInterval(()=>{if(!A.myName||!hasFS())return;
-    var r=A._syncRound%4;A._syncRound++;if(D())console.log('[sync] round',r);
-    if(r===0){
-      // Round 0: Load discoverable posts + group posts
-      fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}}).catch(()=>{});
-      fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){if(p.visibility==='direct'&&!(p.targetIds||[]).includes(A.myId))return;A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){persist();sR();}}).catch(()=>{});
-      if(hasFS()&&A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
-        .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(()=>{});});
-    }else if(r===1){
-      // Round 1: Check interests + job chats + public groups
-      fsCheckInterests();fsCheckJobChats();
+    var r=A._syncRound;A._syncRound++;if(D())console.log('[sync] round',r);
+    // EVERY round: posts + interests + status (critical path)
+    fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
+    fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
+    fsCheckInterests();
+    fsCheckJobStatus();
+    // EVERY 2nd round: job chats + public groups + group posts
+    if(r%2===0){
+      fsCheckJobChats();
       fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();}).catch(()=>{});
-    }else if(r===2){
-      // Round 2: Status sync + master-slave
-      fsCheckJobStatus();fsSyncMyPosts();
-    }else{
-      // Round 3: Cleanup orphans
-      fsCleanupOrphanedJobs();fsCleanupOrphanedGroups();
+      if(A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
+        .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){if(A.screen!=='groups')A.unreadGroups+=added;updateB();persist();sR();}}).catch(()=>{});});
     }
+    // EVERY 3rd round: master-slave sync
+    if(r%3===0)fsSyncMyPosts();
+    // EVERY 4th round: orphan cleanup
+    if(r%4===3){fsCleanupOrphanedJobs();fsCleanupOrphanedGroups();}
   },3e5);
   // Foreground recovery
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&A.myName){
