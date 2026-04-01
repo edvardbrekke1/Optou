@@ -205,6 +205,11 @@ async function persist(){
   // Trim chat histories
   Object.keys(A.jobChats).forEach(k=>{if(A.jobChats[k]?.length>200)A.jobChats[k]=A.jobChats[k].slice(-200);});
   Object.keys(A.dms).forEach(k=>{if(A.dms[k]?.length>200)A.dms[k]=A.dms[k].slice(-200);});
+  // Cap ratings per peer to 50 (keep newest)
+  Object.keys(A.ratings).forEach(pid=>{if(A.ratings[pid]?.length>50)A.ratings[pid]=A.ratings[pid].slice(-50);});
+  // Remove terminal myJobs older than 90 days
+  var cutoff90=now()-90*864e5;
+  A.myJobs=A.myJobs.filter(j=>{if(['done','cancelled','never_done','declined'].includes(j.status)&&j.ts&&j.ts<cutoff90)return false;return true;});
   // Strip imageData from stored openJobs to save space (keep only in IndexedDB images store)
   const ojForStore=[...A.openJobs.entries()].map(([k,v])=>[k,{...v,imageData:v.imageData?'[img]':null}]);
   await Promise.all([
@@ -518,8 +523,12 @@ async function fsJoinGroup(gid,mid){if(!hasFS())return false;try{await fbDb.coll
 async function fsLeaveGroup(gid,mid){if(!hasFS())return false;try{await fbDb.collection('groups').doc(gid).update({members:firebase.firestore.FieldValue.arrayRemove(mid)});return true;}catch(e){console.warn('[FS] leave',e);return false;}}
 async function fsDeleteGroup(gid){if(!hasFS())return;if(D())console.log('[-> fsDeleteGroup]',{gid});
   try{const posts=await fbDb.collection('posts').where('groupId','==',gid).get();
-    for(const doc of posts.docs){try{const intSnap=await doc.ref.collection('interests').get();if(intSnap.docs.length){const b=fbDb.batch();intSnap.docs.forEach(d=>b.delete(d.ref));await b.commit();}await doc.ref.delete();}catch(e){}}
-    await fbDb.collection('groups').doc(gid).delete();if(D())console.log('[<- fsDeleteGroup] success',gid);
+    for(const doc of posts.docs){try{const pd=doc.data();const intSnap=await doc.ref.collection('interests').get();if(intSnap.docs.length){const b=fbDb.batch();intSnap.docs.forEach(d=>b.delete(d.ref));await b.commit();}await doc.ref.delete();
+      fsDeleteStorageFiles(doc.id,(pd.items||[]).length||6);}catch(e){}}
+    await fbDb.collection('groups').doc(gid).delete();
+    // Best-effort delete group image
+    if(fbStorage)try{await fbStorage.ref().child('groups/'+gid+'.webp').delete();}catch(e){}
+    if(D())console.log('[<- fsDeleteGroup] success',gid);
   }catch(e){if(D())console.log('[fsDeleteGroup] error',gid,e.message);}}
 async function fsLoadPublicGroups(){if(!hasFS())return[];if(D())console.log('[-> fsLoadPublicGroups]');
   // NOTE: Requires Firestore index on groups(private) — see Firebase console
@@ -533,8 +542,17 @@ async function fsWritePost(p){if(D())console.log('[-> fsWritePost]',{jid:p.id,vi
   groupId:p.groupId||null,groupName:p.groupName||null,creatorId:p.creatorId,creatorName:p.creatorName,creatorAvatar:ls('oAvatar')||'',ts:p.ts,expiresAt:p.expiresAt,visibility:p.visibility||'public',status:p.status||'open'});
   if(D())console.log('[<- fsWritePost] success',p.id);return true;}catch(e){console.warn('[FS] writePost',e);return false;}}
 async function fsLoadPublicPosts(){if(D())console.log('[-> fsLoadPublicPosts]');if(!hasFS())return[];try{var cutoff=now()-30*864e5;
-  var snap=await fbDb.collection('posts').where('status','==','open').where('ts','>',cutoff).orderBy('ts','desc').limit(100).get();
+  // NOTE: Requires composite index (visibility, status, ts) on posts collection
+  var snap=await fbDb.collection('posts').where('visibility','==','public').where('status','==','open').where('ts','>',cutoff).orderBy('ts','desc').limit(100).get();
   if(D())console.log('[<- fsLoadPublicPosts]',{count:snap.docs.length});return snap.docs.map(d=>d.data());}catch(e){console.warn('[FS] loadPosts',e);return[];}}
+async function fsLoadFriendsPosts(){if(!hasFS()||!A.contacts.length)return[];if(D())console.log('[-> fsLoadFriendsPosts]');
+  try{var cutoff=now()-30*864e5;var cids=A.contacts.map(c=>c.id);var results=[];
+    // Firestore 'in' supports max 10 values per query — chunk
+    for(var i=0;i<cids.length;i+=10){var chunk=cids.slice(i,i+10);
+      try{var snap=await fbDb.collection('posts').where('creatorId','in',chunk).where('status','==','open').where('ts','>',cutoff).orderBy('ts','desc').limit(50).get();
+        snap.docs.forEach(d=>results.push(d.data()));}catch(e){}}
+    if(D())console.log('[<- fsLoadFriendsPosts]',{count:results.length});return results;
+  }catch(e){if(D())console.log('[fsLoadFriendsPosts] error',e.message);return[];}}
 async function fsUpdatePostStatus(pid,status,extra){if(D())console.log('[-> fsUpdatePostStatus]',{jid:pid,status,extra});if(!hasFS())return false;try{const doc=await fbDb.collection('posts').doc(pid).get();if(!doc.exists)return false;
   var upd={status};if(extra)Object.assign(upd,extra);
   await fbDb.collection('posts').doc(pid).update(upd);if(D())console.log('[<- fsUpdatePostStatus] success',pid);return true;}catch(e){if(D())console.log('[FS] updatePost skip',pid);return false;}}
@@ -566,8 +584,17 @@ async function fsDeletePost(pid){if(!hasFS())return;if(D())console.log('[-> fsDe
       if(chatSnap.docs.length){const b2=fbDb.batch();chatSnap.docs.forEach(d=>b2.delete(d.ref));await b2.commit();}
     }catch(e){if(D())console.log('[fsDeletePost] chat cleanup error',pid,e.message);}
     await fbDb.collection('posts').doc(pid).delete();
+    // Best-effort Storage cleanup
+    var _ic=(A.myJobs.find(j=>j.id===pid)||A.openJobs.get(pid))?.items?.length||6;
+    fsDeleteStorageFiles(pid,_ic);
     if(D())console.log('[<- fsDeletePost] success',pid);
   }catch(e){if(D())console.log('[fsDeletePost] error',pid,e.message);}}
+async function fsDeleteStorageFiles(pid,itemCount){if(!fbStorage)return;var n=itemCount||6;
+  try{await fbStorage.ref().child('posts/'+pid+'.webp').delete();if(D())console.log('[storage] deleted posts/'+pid+'.webp');}catch(e){}
+  for(var i=0;i<n;i++){
+    try{await fbStorage.ref().child('audio/'+pid+'_'+i+'.webm').delete();}catch(e){}
+    try{await fbStorage.ref().child('audio/'+pid+'_'+i+'.m4a').delete();}catch(e){}
+  }if(D())console.log('[storage] cleanup done',pid,{items:n});}
 async function fsCleanupOrphanedJobs(){if(!hasFS())return;
   var candidates=[];A.openJobs.forEach((j,id)=>{if(now()-(j.ts||0)>300000)candidates.push(id);});
   var removed=0;for(const jid of candidates.slice(0,30)){
@@ -595,7 +622,13 @@ async function fsSyncMyPosts(){if(!hasFS()||!A.myId)return;if(D())console.log('[
         if(lj&&lj.status!==fs.status){
           try{await doc.ref.update({status:lj.status,helperId:lj.helperId||null,helperName:lj.helperName||null});
             updated++;if(D())console.log('[fsSync] updated',fs.id,{from:fs.status,to:lj.status});
-          }catch(e){if(D())console.log('[fsSync] update error',fs.id,e.message);}}}}
+          }catch(e){if(D())console.log('[fsSync] update error',fs.id,e.message);}}
+        if(lj&&lj.expiresAt&&lj.expiresAt<Date.now()&&['done','cancelled','never_done','declined'].includes(lj.status)){
+          try{const intSnap=await doc.ref.collection('interests').get();
+            if(intSnap.docs.length){const batch=fbDb.batch();intSnap.docs.forEach(d=>batch.delete(d.ref));await batch.commit();}
+            await doc.ref.delete();fsDeleteStorageFiles(fs.id,lj.items?.length);deleted++;
+            if(D())console.log('[fsSync] deleted expired terminal',fs.id,{status:lj.status,expiresAt:new Date(lj.expiresAt).toISOString()});
+          }catch(e){if(D())console.log('[fsSync] expired delete error',fs.id,e.message);}}}}
     if(D())console.log('[<- fsSyncMyPosts]',{checked:snap.docs.length,deleted,updated});
   }catch(e){if(D())console.log('[fsSyncMyPosts] error',e.message);}}
 async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if(!hasFS())return;try{
@@ -1953,8 +1986,9 @@ async function boot(){
     if(_chatCleaned){console.log('[MIGRATE] Cleaned',_chatCleaned,'orphaned jobChats');persist();}
     if(D())console.log('[boot] phase:peer');initPeer();$('nav').style.display='block';go('feed');
     if(D())console.log('[boot] phase:firestore-sync');fsRegisterUser();
-    // Background: load public posts from Firestore
-    fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){if(p.visibility==='friends'&&!A.contacts.find(c=>c.id===p.creatorId))return;if(p.visibility==='direct'&&!(p.targetIds||[]).includes(A.myId))return;var isCt=!!A.contacts.find(c=>c.id===p.creatorId);A.openJobs.set(p.id,{...p,isFromContact:isCt,isPublic:p.visibility==='public'});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
+    // Background: load discoverable posts from Firestore
+    fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
+    fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){if(p.visibility==='direct'&&!(p.targetIds||[]).includes(A.myId))return;A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'friends posts');});
     fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();});
     fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsCleanupOrphanedGroups();fsSyncMyPosts();
     // Load group posts from Firestore
@@ -1978,14 +2012,28 @@ async function boot(){
     if(A._lastInvSent){const cut=now()-300000;A._lastInvSent.forEach((v,k)=>{if(v<cut)A._lastInvSent.delete(k);});}
     await persist();sR();
   },3e5);
-  // Periodic Firestore sync (every 2 min)
+  // Periodic Firestore sync (every 5 min, round-robin to reduce load)
+  if(!A._syncRound)A._syncRound=0;
   setInterval(()=>{if(!A.myName||!hasFS())return;
-    fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){if(p.visibility==='friends'&&!A.contacts.find(c=>c.id===p.creatorId))return;if(p.visibility==='direct'&&!(p.targetIds||[]).includes(A.myId))return;var isCt=!!A.contacts.find(c=>c.id===p.creatorId);A.openJobs.set(p.id,{...p,isFromContact:isCt,isPublic:p.visibility==='public'});added++;}});if(added>0){persist();sR();}}).catch(()=>{});
-    fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();}).catch(()=>{});
-    fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsCleanupOrphanedJobs();fsCleanupOrphanedGroups();fsSyncMyPosts();
-    if(hasFS())A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
-      .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(()=>{});});
-  },12e4);
+    var r=A._syncRound%4;A._syncRound++;if(D())console.log('[sync] round',r);
+    if(r===0){
+      // Round 0: Load discoverable posts + group posts
+      fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}}).catch(()=>{});
+      fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){if(p.visibility==='direct'&&!(p.targetIds||[]).includes(A.myId))return;A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){persist();sR();}}).catch(()=>{});
+      if(hasFS()&&A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
+        .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(()=>{});});
+    }else if(r===1){
+      // Round 1: Check interests + job chats + public groups
+      fsCheckInterests();fsCheckJobChats();
+      fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();}).catch(()=>{});
+    }else if(r===2){
+      // Round 2: Status sync + master-slave
+      fsCheckJobStatus();fsSyncMyPosts();
+    }else{
+      // Round 3: Cleanup orphans
+      fsCleanupOrphanedJobs();fsCleanupOrphanedGroups();
+    }
+  },3e5);
   // Foreground recovery
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&A.myName){
     if(A.peer?.disconnected&&!A.peer.destroyed)try{A.peer.reconnect();}catch(e){}
