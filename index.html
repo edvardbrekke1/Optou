@@ -1705,7 +1705,11 @@ window.connectById=()=>{const inp=$('add-id');if(!inp)return;const id=inp.value.
     if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
     A.groups.push({id,name:'Gruppe...',desc:'',creatorId:'',createdTs:now(),isGroup:true,private:true});
     persist();bcast({t:'HI',...myPres()});notify('✅','Ble med i gruppe!');inp.value='';render();
-    fsReadGroup(id).then(data=>{if(data){const g=A.groups.find(x=>x.id===id);if(g){if(data.name)g.name=data.name;if(data.desc)g.desc=data.desc;if(data.private!==undefined)g.private=data.private;persist();sR();}}});
+    fsReadGroup(id).then(data=>{if(data){const g=A.groups.find(x=>x.id===id);if(g){
+      if(data.name)g.name=data.name;if(data.desc)g.desc=data.desc;if(data.private!==undefined)g.private=data.private;
+      if(data.creatorId)g.creatorId=data.creatorId;if(data.members)g._members=data.members;if(data.imageUrl)g.imageUrl=data.imageUrl;
+      if(D())console.log('[joinKnownGroup] hydrated',{id,creatorId:g.creatorId,members:g._members?.length,hasImage:!!g.imageUrl});
+      persist();sR();}}});
     fsJoinGroup(id,A.myId);return;}
   if(!id||!id.startsWith('o')||id.length<8){notify('⚠️','Ugyldig ID');return;}if(id===A.myId)return;tryC(id);
   if(!A.contacts.find(c=>c.id===id))A.contacts.push({id,name:id.substr(0,12),alias:id.substr(0,12)});
@@ -1829,7 +1833,11 @@ window.joinGroup=()=>{const inp=$('add-gid');if(!inp)return;const id=inp.value.t
   if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
   A.groups.push({id,name:'Gruppe...',desc:'',creatorId:'',createdTs:now(),isGroup:true,private:true});
   persist();bcast({t:'HI',...myPres()});notify('✅','Ble med i gruppe!');inp.value='';render();
-  fsReadGroup(id).then(data=>{if(data){const g=A.groups.find(x=>x.id===id);if(g){if(data.name)g.name=data.name;if(data.desc)g.desc=data.desc;if(data.private!==undefined)g.private=data.private;persist();sR();}}});
+  fsReadGroup(id).then(data=>{if(data){const g=A.groups.find(x=>x.id===id);if(g){
+    if(data.name)g.name=data.name;if(data.desc)g.desc=data.desc;if(data.private!==undefined)g.private=data.private;
+    if(data.creatorId)g.creatorId=data.creatorId;if(data.members)g._members=data.members;if(data.imageUrl)g.imageUrl=data.imageUrl;
+    if(D())console.log('[joinGroup] hydrated',{id,creatorId:g.creatorId,members:g._members?.length,hasImage:!!g.imageUrl});
+    persist();sR();}}});
   fsJoinGroup(id,A.myId);};
 window.searchGroups=async q=>{const el=$('grp-search-results');if(!el)return;q=(q||'').trim().toLowerCase();
   if(q.length<2){el.innerHTML='';return;}if(!hasFS()){el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:8px">Firestore ikke tilgjengelig.</div>';return;}
@@ -1907,9 +1915,11 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
   const adminName=isAdmin?'Du':(()=>{const ap=A.peers.get(g.creatorId);return ap?.name||A.contacts.find(c=>c.id===g.creatorId)?.name||'';})();
   // Combine posts from myJobs + openJobs, dedup, filter
   const seen=new Set();const allP=[];
-  A.myJobs.filter(j=>j.groupId===gid&&!['cancelled','never_done'].includes(j.status)).forEach(j=>{if(!seen.has(j.id)){seen.add(j.id);allP.push(j);}});
-  [...A.openJobs.values()].filter(j=>j.groupId===gid&&(!j.expiresAt||j.expiresAt===0||j.expiresAt>now())&&!['cancelled','done','never_done'].includes(j.status)).forEach(j=>{if(!seen.has(j.id)){seen.add(j.id);allP.push(j);}});
+  const _gterm=['cancelled','never_done','declined','done'];
+  A.myJobs.filter(j=>j.groupId===gid&&!_gterm.includes(j.status)).forEach(j=>{if(!seen.has(j.id)){seen.add(j.id);allP.push(j);}});
+  [...A.openJobs.values()].filter(j=>j.groupId===gid&&(!j.expiresAt||j.expiresAt===0||j.expiresAt>now())&&!_gterm.includes(j.status)).forEach(j=>{if(!seen.has(j.id)){seen.add(j.id);allP.push(j);}});
   allP.sort((a,b)=>b.ts-a.ts);
+  if(D())console.log('[vGroupDetail]',{gid,posts:allP.length});
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groups')">Tilbake</button><div class="pgt">${esc(g.name||g.id)}</div></div>
   <div class="cd" style="margin-bottom:12px"><span class="badge ${g.private?'bgr':'bg1'}" style="margin-bottom:8px">${g.private?'🔒 Privat':'🔓 Åpen'}</span>
   ${g.desc?`<div style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:8px">${esc(g.desc)}</div>`:''}
