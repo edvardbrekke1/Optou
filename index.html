@@ -108,6 +108,24 @@ input,textarea,select{font-family:inherit;outline:none;-webkit-appearance:none;b
   </div>
 </div>
 <script>
+// ═══ REGRESSION NOTES / DO NOT BREAK ═══
+// - Friend removal must be bilateral: local remove + UF message + _removedContacts on both sides
+// - HI auto-add must check _removedContacts before adding peer back
+// - Manual re-add (addF) clears _removedContacts for that peer
+// - Terminal jobs (cancelled/done/declined/never_done) must NEVER re-appear via INV — _deadJobs blocks them
+// - INV handler must block ALL jobs already in myJobs, not just active ones
+// - syncP/HI/group-sync must NEVER resend from A.openJobs — Firestore is backbone for discovery
+// - fsJoinGroup/fsLeaveGroup must handle missing Firestore docs (deleted groups)
+// - joinKnownGroup must verify Firestore doc exists before local join
+// - Deleted groups must be removed from A.groups, A.knownGroups AND A._publicGroups (GDEL + cleanup)
+// - Groups must hydrate creatorId, _members, imageUrl from Firestore at every join path
+// - vGroupDetail must not assume current user is admin when creatorId is missing or empty
+// - cancelMyJob must handle ghost-jobs in A.openJobs, not just A.myJobs
+// - withdrawHelp must set terminal status + _deadJobs, not hard-delete from myJobs
+// - updatePointStatus syncs via PU message to owner, not just BM text
+// - Keep checkRules R65 meaningful — do not suppress without fixing source
+// ═══════════════════════════════════════
+
 const V='1.0.0';
 const FYLKER=[
 {id:'oslo',name:'Oslo',kommuner:['Oslo']},
@@ -313,6 +331,9 @@ function checkRules(){
     if(!g.creatorId)W('R65','Gruppe uten creatorId (admin)',{id:g.id,name:g.name});
     if(g._members&&!Array.isArray(g._members))E('R68','_members er ikke array',{id:g.id,type:typeof g._members});
   });
+  // R69: stale knownGroups that were deleted
+  A.knownGroups.forEach((kg,kgid)=>{if(A.groups.find(g=>g.id===kgid))return;
+    if(!(A._publicGroups||[]).find(g=>g.id===kgid))W('R69','knownGroup ikke i publicGroups (mulig stale)',{id:kgid,name:kg.name});});
   // ═══ R70-R74: OPENJOBS ═══
   A.openJobs.forEach((j,id)=>{
     if(A.myJobs.find(x=>x.id===id))E('R70','Jobb i BÅDE myJobs og openJobs',{jid:id});
@@ -530,10 +551,19 @@ function initFB(){
     try{fbDb=firebase.firestore();console.log('[FB] Init OK — Storage + Firestore');}catch(e2){console.log('[FB] Init OK — Storage only');}}
   catch(e){console.warn('[FB]',e);}}
 function hasFS(){return!!fbDb;}
+function dropMissingGroup(gid,reason){if(D())console.log('[dropMissingGroup]',{gid,reason});
+  A.groups=A.groups.filter(g=>g.id!==gid);A.knownGroups.delete(gid);
+  A._publicGroups=(A._publicGroups||[]).filter(g=>g.id!==gid);
+  A.openJobs.forEach((j,id)=>{if(j.groupId===gid)A.openJobs.delete(id);});
+  persist();sR();}
 async function fsWriteGroup(gid,data){if(D())console.log('[-> fsWriteGroup]',{gid});if(!hasFS())return false;try{await fbDb.collection('groups').doc(gid).set(data,{merge:true});if(D())console.log('[<- fsWriteGroup] success',gid);return true;}catch(e){console.warn('[FS] write',e);return false;}}
 async function fsReadGroup(gid){if(!hasFS())return null;try{const doc=await fbDb.collection('groups').doc(gid).get();return doc.exists?doc.data():null;}catch(e){console.warn('[FS] read',e);return null;}}
-async function fsJoinGroup(gid,mid){if(!hasFS())return false;try{await fbDb.collection('groups').doc(gid).update({members:firebase.firestore.FieldValue.arrayUnion(mid),updatedAt:Date.now()});return true;}catch(e){console.warn('[FS] join',e);return false;}}
-async function fsLeaveGroup(gid,mid){if(!hasFS())return false;try{await fbDb.collection('groups').doc(gid).update({members:firebase.firestore.FieldValue.arrayRemove(mid)});return true;}catch(e){console.warn('[FS] leave',e);return false;}}
+async function fsJoinGroup(gid,mid){if(!hasFS())return{ok:false};try{var doc=await fbDb.collection('groups').doc(gid).get();
+  if(!doc.exists){if(D())console.log('[fsJoinGroup] doc missing',gid);return{ok:false,missing:true};}
+  await fbDb.collection('groups').doc(gid).update({members:firebase.firestore.FieldValue.arrayUnion(mid),updatedAt:Date.now()});return{ok:true};}catch(e){console.warn('[FS] join',e);return{ok:false};}}
+async function fsLeaveGroup(gid,mid){if(!hasFS())return{ok:false};try{var doc=await fbDb.collection('groups').doc(gid).get();
+  if(!doc.exists){if(D())console.log('[fsLeaveGroup] doc missing',gid);return{ok:false,missing:true};}
+  await fbDb.collection('groups').doc(gid).update({members:firebase.firestore.FieldValue.arrayRemove(mid)});return{ok:true};}catch(e){console.warn('[FS] leave',e);return{ok:false};}}
 async function fsDeleteGroup(gid){if(!hasFS())return;if(D())console.log('[-> fsDeleteGroup]',{gid});
   try{const posts=await fbDb.collection('posts').where('groupId','==',gid).get();
     if(D())console.log('[fsDeleteGroup] deleting',posts.docs.length,'group posts');
@@ -894,6 +924,7 @@ function applyG(p){if(!p)return;if(p.t==='TAKE'||p.t==='CANCEL'){A.openJobs.dele
   if(p.t==='GRP'&&p.group?.id&&/^g[a-zA-Z0-9]{1,20}$/.test(p.group.id)&&!p.group.private){A.knownGroups.set(p.group.id,p.group);}
   if(p.t==='GDEL'&&p.gid){if(D())console.log('[GDEL] group deleted',p.gid);
     A.groups=A.groups.filter(g=>g.id!==p.gid);A.knownGroups.delete(p.gid);
+    A._publicGroups=(A._publicGroups||[]).filter(g=>g.id!==p.gid);
     A.openJobs.forEach((j,id)=>{if(j.groupId===p.gid)A.openJobs.delete(id);});
     A.myJobs=A.myJobs.filter(j=>j.groupId!==p.gid||j.creatorId===A.myId);
     if(A.screen!=='groups')A.unreadGroups++;updateB();persist();sR();}}
@@ -1005,6 +1036,8 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
       notify('✅','Ble med i '+(m.gname||'gruppen')+'!');go('groupDetail',{gid:m.gid});});break;}
   case 'GM':{if(!m.gid||!m.name)break;const g=A.groups.find(x=>x.id===m.gid);
     if(g&&(!g.name||g.name===g.id||g.name==='Gruppe...')){g.name=m.name;if(m.desc)g.desc=m.desc;if(m.private!==undefined)g.private=m.private;persist();sR();}break;}
+  case 'UF':{if(D())console.log('[UF] received unfriend from',from);
+    A._removedContacts.add(from);A.contacts=A.contacts.filter(c=>c.id!==from);persist();sR();break;}
 }}catch(e){console.error('[handleD]',m?.t,e);}}
 
 // ═══ NOTIFICATIONS ═══
@@ -1734,8 +1767,8 @@ function vRep(){const u=A.params.uid;const un=A.params.name||u?.substr(0,12);con
   <div style="font-size:11px;color:var(--t3)">Fra ${esc(r.raterName||'?')}</div></div>`).join('')}`:''}
   ${!allR.length?'<div class="emp"><div class="emp-i">👤</div><div class="emp-t">Ingen vurderinger ennå</div></div>':''}
   ${isFr&&!isMe?`<div class="dv" style="margin:20px 0"></div>
-    <button class="btn bs" style="margin-bottom:8px" onclick="showConfirm('Fjern venn?','${escA(un)} fjernes fra vennelisten din.','Ja, fjern',()=>{A._removedContacts.add('${escA(u)}');A.contacts=A.contacts.filter(c=>c.id!=='${escA(u)}');if(D())console.log('[removeContact]','${escA(u)}');persist();notify('👋','Fjernet');go('contacts');})">🗑️ Fjern venn</button>
-    <button class="btn br" onclick="showConfirm('Blokkere?','${escA(un)} blokkeres. Du vil ikke se innhold fra denne personen.','Ja, blokker',()=>{A.blocked.add('${escA(u)}');A.contacts=A.contacts.filter(c=>c.id!=='${escA(u)}');try{A.conns.get('${escA(u)}')?.close();}catch(e){}A.conns.delete('${escA(u)}');persist();notify('🚫','Blokkert');go('contacts');})">🚫 Blokker</button>`:''}</div>`;}
+    <button class="btn bs" style="margin-bottom:8px" onclick="showConfirm('Fjern venn?','${escA(un)} fjernes fra vennelisten din.','Ja, fjern',()=>{A._removedContacts.add('${escA(u)}');A.contacts=A.contacts.filter(c=>c.id!=='${escA(u)}');send('${escA(u)}',{t:'UF'});if(D())console.log('[removeContact]','${escA(u)}');persist();notify('👋','Fjernet');go('contacts');})">🗑️ Fjern venn</button>
+    <button class="btn br" onclick="showConfirm('Blokkere?','${escA(un)} blokkeres. Du vil ikke se innhold fra denne personen.','Ja, blokker',()=>{A.blocked.add('${escA(u)}');A._removedContacts.add('${escA(u)}');A.contacts=A.contacts.filter(c=>c.id!=='${escA(u)}');send('${escA(u)}',{t:'UF'});try{A.conns.get('${escA(u)}')?.close();}catch(e){}A.conns.delete('${escA(u)}');persist();notify('🚫','Blokkert');go('contacts');})">🚫 Blokker</button>`:''}</div>`;}
 
 // ═══ PROFILE ═══
 function vProfile(){const pr=avgR(A.myId);const loc=[A.myBy,FYLKER.find(f=>f.id===A.myFylke)?.name].filter(Boolean).join(', ');
@@ -1821,13 +1854,17 @@ window.saveGroupEdit=async gid=>{if(D())console.log('[saveGroupEdit]',{gid});
 window.inviteToGroup=(gid,gname,pid)=>{if(D())console.log('[inviteToGroup]',{gid,gname,pid});const g=A.groups.find(x=>x.id===gid);
   send(pid,{t:'GI',gid,gname,gdesc:g?.desc||'',gprivate:g?.private||false,fromName:A.myName});
   notify('✅','Invitasjon sendt!');};
-window.joinKnownGroup=id=>{if(D())console.log('[joinKnownGroup]',{id});if(!/^g[a-zA-Z0-9]{1,20}$/.test(id))return;
-  const kg=A.knownGroups.get(id)||(A._publicGroups||[]).find(g=>g.id===id);if(!kg)return;
+window.joinKnownGroup=async id=>{if(D())console.log('[joinKnownGroup]',{id});if(!/^g[a-zA-Z0-9]{1,20}$/.test(id))return;
   if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
-  A.groups.push({id,name:kg.name||'Gruppe...',desc:kg.desc||'',creatorId:kg.creatorId||'',createdTs:now(),isGroup:true,private:false,_members:kg.members||[]});
+  // Verify group exists in Firestore before local join
+  var data=await fsReadGroup(id);
+  if(!data){if(D())console.log('[joinKnownGroup] FS doc missing, cleaning up',id);
+    dropMissingGroup(id,'joinKnownGroup — doc missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
+  A.groups.push({id,name:data.name||'Gruppe...',desc:data.desc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
+    private:data.private||false,_members:data.members||[],imageUrl:data.imageUrl||null});
   persist();bcast({t:'HI',...myPres()});fsJoinGroup(id,A.myId);
-  fsReadGroup(id).then(data=>{if(data){const g=A.groups.find(x=>x.id===id);if(g){if(data.name)g.name=data.name;if(data.members)g._members=data.members;if(data.creatorId)g.creatorId=data.creatorId;if(data.imageUrl)g.imageUrl=data.imageUrl;if(data.desc)g.desc=data.desc;persist();sR();}}});
-  notify('✅','Ble med i '+(kg.name||'gruppen')+'!');go('groupDetail',{gid:id});};
+  if(D())console.log('[joinKnownGroup] joined',{id,name:data.name,creatorId:data.creatorId,members:data.members?.length});
+  notify('✅','Ble med i '+(data.name||'gruppen')+'!');go('groupDetail',{gid:id});};
 window.joinGroup=()=>{const inp=$('add-gid');if(!inp)return;const id=inp.value.trim();if(D())console.log('[joinGroup]',{id});
   if(!id||!/^g[a-zA-Z0-9]{1,20}$/.test(id)){notify('⚠️','Ugyldig gruppe-ID (starter med g)');return;}
   if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
@@ -1908,11 +1945,15 @@ function vGroups(){
         <button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="joinKnownGroup('${escA(eg.id)}')">Bli med</button></div>`).join('')}`:'');})()}</div>`;}
 function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===gid);
   if(!g)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groups')">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Gruppe ikke funnet.</div></div></div>`;
-  const isAdmin=g.creatorId===A.myId;
+  const isAdmin=!!(g.creatorId&&g.creatorId===A.myId);
   const onlineMembers=[];A.peers.forEach((p,pid)=>{if(p.gids?.includes(gid)&&pid!==A.myId)onlineMembers.push({...p,id:pid});});
   const totalMembers=(g._members||[]).length||onlineMembers.length+1;
   const onlineCount=onlineMembers.filter(p=>p.online).length;
-  const adminName=isAdmin?'Du':(()=>{const ap=A.peers.get(g.creatorId);return ap?.name||A.contacts.find(c=>c.id===g.creatorId)?.name||'';})();
+  const adminName=isAdmin?'Du':g.creatorId?(()=>{const ap=A.peers.get(g.creatorId);return ap?.name||A.contacts.find(c=>c.id===g.creatorId)?.name||A._userNames[g.creatorId]||'';})():'';
+  // Background hydration if creatorId missing
+  if(!g.creatorId&&hasFS())fsReadGroup(gid).then(data=>{if(data&&data.creatorId){
+    g.creatorId=data.creatorId;if(data.members)g._members=data.members;if(data.imageUrl)g.imageUrl=data.imageUrl;if(data.name&&g.name==='Gruppe...')g.name=data.name;
+    if(D())console.log('[vGroupDetail] hydrated missing creatorId',{gid,creatorId:data.creatorId});persist();sR();}});
   // Combine posts from myJobs + openJobs, dedup, filter
   const seen=new Set();const allP=[];
   const _gterm=['cancelled','never_done','declined','done'];
