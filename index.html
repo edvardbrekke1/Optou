@@ -133,7 +133,7 @@ const starStr=(n,mx=5)=>{const v=Math.max(0,Math.min(n||0,mx));return'★'.repea
 function fmtDate(d,t){if(!d)return'';const dt=new Date(d);const dg=['Søndag','Mandag','Tirsdag','Onsdag','Torsdag','Fredag','Lørdag'];
   const mn=['jan','feb','mar','apr','mai','jun','jul','aug','sep','okt','nov','des'];
   return'📅 '+dg[dt.getUTCDay()]+' '+dt.getUTCDate()+'. '+mn[dt.getUTCMonth()]+(t?' kl '+t:'');}
-const T={no:{home:'Hjem',groups:'Grupper',chat:'Chat',profile:'Profil',post:'Legg ut',all:'Alle',needHelp:'🤝 Trenger hjelp',offer:'💼 Tilbyr',allPlaces:'🌐 Alle steder',posts:'Innlegg',friends:'Venner',active:'Aktive',completed:'Fullført',
+const T={no:{home:'Hjem',groups:'Grupper',chat:'Chat',profile:'Profil',post:'Legg ut',all:'Alle',needHelp:'🤝 Jobb',offer:'💼 Tilbyr',allPlaces:'🌐 Alle steder',posts:'Innlegg',friends:'Venner',active:'Aktive',completed:'Fullført',
   open:'Åpent',accepting:'Venter',pending:'Venter svar',activeSt:'Pågår',pendingReview:'Ferdigmeldt',done:'✅ Fullført',declined:'Avslått',neverDone:'❌ Aldri gjort',cancelled:'Kansellert',
   noPostsYet:'Ingen innlegg ennå.',writeToStart:'Skriv noe for å starte samtalen.',welcome:'Velkommen!',addFriend:'Legg til',search:'Søk',back:'Tilbake',save:'Lagre',cancel:'Avbryt',send:'Send',
   publish:'Publiser innlegget',myThings:'Mine ting',settings:'Innstillinger',reputation:'Rykte',shareApp:'Del appen med noen',noGroups:'Du har ingen grupper ennå.',createGroup:'Opprett en gruppe',
@@ -450,8 +450,14 @@ window.playLocal=idx=>{const it=A.nb.items?.[idx];if(!it)return;const url=it.aud
   if(_audio){_audio.pause();_audio=null;}
   _audio=new Audio(url);_audio.play().catch(()=>notify('⚠️','Kunne ikke spille av lyd'));};
 window.removeItem=idx=>{if(!A.nb.items)return;A.nb.items.splice(idx,1);A.nb._selPt=null;A.nb._movePt=undefined;render();};
-window.updatePointStatus=function(jobId,idx){if(D())console.log('[updatePointStatus]',{jobId,idx});var targets=[A.myJobs.find(j=>j.id===jobId)];var oj=A.openJobs.get(jobId);if(oj)targets.push(oj);
-  targets.forEach(j=>{if(j&&j.items&&j.items[idx]){var s=j.items[idx].status||'open';var ns=s==='open'?'taken':s==='taken'?'done':'open';if(D())console.log('[updatePointStatus]',{idx,from:s,to:ns});j.items[idx].status=ns;}});persist();render();};
+window.updatePointStatus=function(jobId,idx){if(D())console.log('[updatePointStatus]',{jobId,idx});
+  var j=A.myJobs.find(j=>j.id===jobId)||A.openJobs.get(jobId);
+  if(!j||!j.isHelper)return;
+  var targets=[A.myJobs.find(j=>j.id===jobId)];var oj=A.openJobs.get(jobId);if(oj)targets.push(oj);
+  targets.forEach(j=>{if(j&&j.items&&j.items[idx]){var s=j.items[idx].status||'open';var ns=s==='done'?'open':'done';if(D())console.log('[updatePointStatus]',{idx,from:s,to:ns});j.items[idx].status=ns;}});
+  // Notify owner when marking done
+  if(j.creatorId&&j.creatorId!==A.myId){var it=j.items?.[idx];if(it&&it.status==='done')send(j.creatorId,{t:'BM',jid:jobId,name:A.myName,text:'Punkt "'+(it.text||'#'+(idx+1))+'" er fullført!',ts:now()});}
+  persist();render();};
 window.playBullet=(jobId,idx)=>{const j=A.openJobs.get(jobId)||A.myJobs.find(x=>x.id===jobId);
   const item=j?.items?.[idx];if(!item)return;const url=item.audioUrl||item.audioData;if(!url)return;
   const pid=jobId+'_'+idx;if(_playingId===pid&&_audio){_audio.pause();_audio=null;_playingId=null;render();return;}
@@ -563,8 +569,8 @@ async function fsDeletePost(pid){if(!hasFS())return;if(D())console.log('[-> fsDe
     if(D())console.log('[<- fsDeletePost] success',pid);
   }catch(e){if(D())console.log('[fsDeletePost] error',pid,e.message);}}
 async function fsCleanupOrphanedJobs(){if(!hasFS())return;
-  var candidates=[];A.openJobs.forEach((j,id)=>{if(now()-(j.ts||0)>3600000)candidates.push(id);});
-  var removed=0;for(const jid of candidates.slice(0,10)){
+  var candidates=[];A.openJobs.forEach((j,id)=>{if(now()-(j.ts||0)>300000)candidates.push(id);});
+  var removed=0;for(const jid of candidates.slice(0,30)){
     try{const doc=await fbDb.collection('posts').doc(jid).get();
       if(!doc.exists){A.openJobs.delete(jid);removed++;if(D())console.log('[fsCleanup] orphaned',jid);}
       else{const d=doc.data();if(['done','cancelled','never_done'].includes(d.status)){A.openJobs.delete(jid);removed++;if(D())console.log('[fsCleanup] terminal',jid,d.status);}}
@@ -793,7 +799,10 @@ function onData(from,m){try{if(!m||A.blocked.has(from))return;
           try{cc.send({t:'INV',job:{...stripJobForSend(j),fromContact:true}});gc++;}catch(e){}}});
         shared.forEach(gid=>{const g=A.groups.find(x=>x.id===gid);
           if(g?.name&&g.name!==gid)try{cc.send({t:'GM',gid,name:g.name,desc:g.desc||'',private:g.private||false});}catch(e){}});}}}
-    flushQ();sR();return;}
+    flushQ();
+    // Only render if something visible changed
+    if(!ex.name)sR();
+    return;}
   if(m.t==='GS'){if(A.seen.has(m.id))return;if(!chkRate(from))return;A.seen.add(m.id);
     if(A.seen.size>3e3){const it=A.seen.values();for(let i=0;i<300;i++)A.seen.delete(it.next().value);}
     const fwdGS=()=>{if(m.ttl>0){const f={...m,ttl:m.ttl-1};A.conns.forEach((c2,id)=>{if(c2.open&&id!==from)try{c2.send(f);}catch(e){}});}};
@@ -945,7 +954,12 @@ function render(){const el=$('app');if(!el)return;if(D())console.log('[R]',A.scr
   updateB();if(['jobChat','dm'].includes(A.screen))setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},60);
   if(A.screen==='jobDetail')setTimeout(()=>{const m=$('jd-chat');if(m)m.scrollTop=m.scrollHeight;},60);
   if(A.screen==='create')setTimeout(drawCreateCanvas,50);}
-let _rTimer=null;function sR(){if(!_rTimer)_rTimer=setTimeout(()=>{_rTimer=null;render();},400);}
+let _rTimer=null;function sR(){
+  // Don't re-render if user is actively typing — preserves keyboard and input
+  var ae=document.activeElement;
+  if(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA')){
+    clearTimeout(A._deferRender);A._deferRender=setTimeout(()=>sR(),2000);return;}
+  if(!_rTimer)_rTimer=setTimeout(()=>{_rTimer=null;render();},400);}
 
 // ═══ ONBOARDING ═══
 function vOB(){return`<div class="obw"><div class="obl">Opt<em style="color:var(--pr)">oU</em></div><div class="obs">FÅ TING GJORT SAMMEN</div>
@@ -1049,7 +1063,7 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
   return`<div class="scr"><div class="hdr"><div class="logo">Opt<em>oU</em></div><div class="${A.ready?'conn con':'conn cof'}">${A.ready?`<div class="dot"></div>${oF} online`:'○ Kobler til...'}</div></div>
     ${installHint()}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-      <div style="padding:16px 12px;border-radius:14px;text-align:center;cursor:pointer;border:2px solid ${ff.type==='help'?'var(--pr)':'var(--s3)'};background:${ff.type==='help'?'var(--pb)':'var(--sf)'}" onclick="A.feedFilter.type=A.feedFilter.type==='help'?'':'help';render()"><div style="font-size:24px;margin-bottom:4px">🤝</div><div style="font-size:15px;font-weight:700;color:${ff.type==='help'?'var(--pr)':'var(--tx)'}">Trenger hjelp</div></div>
+      <div style="padding:16px 12px;border-radius:14px;text-align:center;cursor:pointer;border:2px solid ${ff.type==='help'?'var(--pr)':'var(--s3)'};background:${ff.type==='help'?'var(--pb)':'var(--sf)'}" onclick="A.feedFilter.type=A.feedFilter.type==='help'?'':'help';render()"><div style="font-size:24px;margin-bottom:4px">🤝</div><div style="font-size:15px;font-weight:700;color:${ff.type==='help'?'var(--pr)':'var(--tx)'}">Jobb</div></div>
       <div style="padding:16px 12px;border-radius:14px;text-align:center;cursor:pointer;border:2px solid ${ff.type==='service'?'var(--pr)':'var(--s3)'};background:${ff.type==='service'?'var(--pb)':'var(--sf)'}" onclick="A.feedFilter.type=A.feedFilter.type==='service'?'':'service';render()"><div style="font-size:24px;margin-bottom:4px">💼</div><div style="font-size:15px;font-weight:700;color:${ff.type==='service'?'var(--pr)':'var(--tx)'}">Tilbyr</div></div>
     </div>
     ${A.myFylke?`<div class="flt" style="margin-top:0"><div class="fc${!ff.locs?.length?' act':''}" style="padding:8px 16px;font-size:13px" onclick="A.feedFilter.locs=[];render()">🌐 Alle steder</div>
@@ -1073,12 +1087,7 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
       <div class="dv"></div><div class="slbl">Legg til venn</div>
       <div style="display:flex;gap:8px;margin-top:8px"><input class="fi" id="add-id" placeholder="ID (oXXX) eller gruppe (gXXX)" style="flex:1;padding:10px;font-size:13px">
       <button class="btn bp bsm" style="width:auto;padding:10px 16px" onclick="connectById()">Koble til</button></div></div>`:''}
-    ${!jobs.length&&!noC?`${A.groups.length?A.groups.slice(0,3).map(g=>
-      `<div class="cd" style="border-color:var(--pbb);background:var(--pb);margin-bottom:8px;cursor:pointer" onclick="A.nb.groupId='${escA(g.id)}';A.nb.groupName='${escA(g.name)}';A.nb.vis='group';go('create')">
-      <div style="display:flex;align-items:center;gap:10px"><span style="font-size:20px">${g.private?'🔒':'🔓'}</span>
-      <div style="flex:1"><div style="font-size:14px;font-weight:700;color:var(--pr)">${esc(g.name)}</div>
-      <div style="font-size:12px;color:var(--t3)">Trykk for å legge ut den første forespørselen</div></div><span style="font-size:18px;color:var(--pr)">+</span></div></div>`).join('')
-      :'<div class="emp"><div class="emp-i">👀</div><div class="emp-t">Ingen innlegg ennå.<br>Trykk + for å legge ut det første!</div></div>'}`:''}
+    ${!jobs.length&&!noC?'<div class="emp"><div class="emp-i">👀</div><div class="emp-t">Ingen innlegg ennå.<br>Trykk + for å legge ut det første!</div></div>':''}
     ${jobs.map(j=>{const pr=avgR(j.creatorId);const typeMap={help:['🤝','bg1'],service:['💼','bp1']};
       const[ico,cls]=typeMap[j.type]||['📋','bg1'];
       const imgSrc=j.imageUrl||j.imageData;const fNm=j.fylke?FYLKER.find(f=>f.id===j.fylke)?.name:'';
@@ -1086,7 +1095,7 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">${avHtml(j.creatorId,j.creatorName,28)}
         <span style="font-size:13px;font-weight:600">${esc(j.creatorName)}</span>${pr?`<span style="font-size:11px;color:var(--yw)">⭐ ${pr}</span>`:''}
         <span style="font-size:11px;color:var(--t3);margin-left:auto">${ago(j.ts)}</span></div>
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><span class="badge ${cls}">${ico} ${({help:'Trenger hjelp',service:'Tilbyr'})[j.type]||esc(j.type)}</span>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><span class="badge ${cls}">${ico} ${({help:'Jobb',service:'Tilbyr'})[j.type]||esc(j.type)}</span>
       ${j.groupName?`<span class="badge bgr">🏘️ ${esc(j.groupName)}</span>`:''}</div>
       <div style="font-size:16px;font-weight:700;line-height:1.4;margin-bottom:4px">${esc(j.title)}</div>
       <div style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(j.desc||'')}</div>
@@ -1104,7 +1113,7 @@ window.addF=(id,name)=>{if(D())console.log('[addF]',{id,name});if(!A.contacts.fi
 function vCreate(){
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="A.nb={};go('feed')">Avbryt</button><div class="pgt">LEGG UT</div></div>
     <div class="fld"><label class="fl">Hva vil du legge ut?</label><div class="ttypes">
-      ${[['help','🤝','Trenger hjelp','Beskriv hva du trenger'],['service','💼','Tilbyr','Beskriv hva du kan tilby']].map(([v,i,n,d])=>
+      ${[['help','🤝','Jobb','Beskriv hva du trenger'],['service','💼','Tilbyr','Beskriv hva du kan tilby']].map(([v,i,n,d])=>
         `<div class="ttype${A.nb.type===v?' act':''}" onclick="A.nb.type='${v}';render()"><div class="ttype-i">${i}</div><div class="ttype-n">${n}</div><div class="ttype-d">${d}</div></div>`).join('')}
     </div></div>
     <div class="fld"><label class="fl">Tittel</label><input class="fi" id="ct" placeholder="Hva handler det om?" maxlength="60" value="${esc(A.nb.title||'')}" oninput="A.nb.title=this.value"></div>
@@ -1240,7 +1249,7 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
 function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);if(!j){const oj=A.openJobs.get(jid);if(oj)j=oj;}
   if(!j)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('feed')">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Fant ikke innlegget.</div></div></div>`;
   const isO=j.creatorId===A.myId,isH=j.isHelper,ints=j.interests||[],pr=avgR(j.creatorId),rated=A.rated.has(j.id);
-  const typeMap={help:['🤝','Trenger hjelp','bg1'],service:['💼','Tilbyr','bp1']};
+  const typeMap={help:['🤝','Jobb','bg1'],service:['💼','Tilbyr','bp1']};
   const[tIco,tName,tCls]=typeMap[j.type]||['📋','Innlegg','bg1'];
   let b='';
   const imgSrc=j.imageUrl||j.imageData;
@@ -1251,9 +1260,10 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   <div class="cd" style="margin-bottom:16px"><div style="font-size:18px;font-weight:800;line-height:1.4;margin-bottom:10px">${esc(j.title)}</div>
   <div style="font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:12px">${esc(j.desc||'')}</div>
   ${j.items?.length?`${(()=>{var dn3=j.items.filter(it=>(it.status||'open')==='done').length;return dn3?`<div style="font-size:13px;color:var(--g2);font-weight:600;margin-bottom:8px">✅ ${dn3}/${j.items.length} punkter fullført</div>`:''})()}
-  <div style="margin-bottom:12px">${j.items.map((it,idx)=>{var ps=it.status||'open';var psIco=ps==='done'?'✅':ps==='taken'?'◐':'○';var psCol=ps==='done'?'var(--g2)':ps==='taken'?'var(--pr)':'var(--t3)';
+  <div style="margin-bottom:12px">${j.items.map((it,idx)=>{var ps=it.status||'open';var psIco=ps==='done'?'☑':'☐';var psIcoO=ps==='done'?'✅':'○';var psCol=ps==='done'?'var(--g2)':'var(--t3)';
     return`<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--s2)">
-    ${isO||isH?`<button style="width:28px;height:28px;border-radius:14px;background:none;border:none;font-size:16px;cursor:pointer;flex-shrink:0;color:${psCol}" onclick="updatePointStatus('${escA(j.id)}',${idx})">${psIco}</button>`
+    ${isH?`<button style="width:24px;height:24px;background:none;border:none;font-size:16px;cursor:pointer;flex-shrink:0;color:${psCol}" onclick="updatePointStatus('${escA(j.id)}',${idx})">${psIco}</button>`
+      :isO?`<span style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;color:${psCol}">${psIcoO}</span>`
       :`<span style="width:28px;height:28px;border-radius:14px;background:${(it.mode||'list')==='image'?'var(--pr)':'var(--s3)'};color:${(it.mode||'list')==='image'?'#fff':'var(--t2)'};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">${idx+1}</span>`}
     ${it.audioUrl?`<button style="width:32px;height:32px;border-radius:16px;background:var(--pr);color:#fff;font-size:12px;flex-shrink:0;display:flex;align-items:center;justify-content:center" onclick="playBullet('${escA(j.id)}',${idx})">${_playingId===j.id+'_'+idx?'⏸':'▶'}</button>`:''}
     <div style="flex:1"><div style="font-size:14px;font-weight:600;${ps==='done'?'text-decoration:line-through;color:var(--t3)':''}">${esc(it.text||'Punkt '+(idx+1))}</div>
@@ -1344,10 +1354,11 @@ function vInterests(){const j=A.myJobs.find(x=>x.id===A.params.jobId);
   if(j.status!=='accepting'||!(j.interests||[]).length)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">Tilbake</button></div><div class="emp"><div class="emp-i">📋</div><div class="emp-t">Ingen ventende interesser.</div></div></div>`;
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">Tilbake</button><div class="pgt">Interesserte</div></div>
   <div class="ibox">Velg hvem du vil ha med. Sjekk ryktet først!</div>
-  ${(j.interests||[]).map(p=>{const pr=avgR(p.id);const np=npC(p.id);
+  ${(j.interests||[]).map(p=>{const pr=avgR(p.id);const np=npC(p.id);const ipeer=A.peers.get(p.id);
     return`<div class="cd" style="margin-bottom:10px"><div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
     ${avHtml(p.id,p.name,40)}<div style="flex:1"><div style="font-size:15px;font-weight:700">${esc(p.name)}</div>
-    <div style="font-size:12px;color:var(--t3)">${pr?'⭐ '+pr+' ':''}${np?'<span style="color:var(--rd)">⚠️ '+np+'× aldri gjort opp</span>':''}</div></div></div>
+    <div style="font-size:12px;color:var(--t3)">${pr?'⭐ '+pr+' ':''}${np?'<span style="color:var(--rd)">⚠️ '+np+'× aldri gjort opp</span>':''}</div>
+    ${ipeer?.bio?`<div style="font-size:12px;color:var(--t2);margin-top:4px">${esc(ipeer.bio.substr(0,80))}</div>`:''}</div></div>
     ${p.msg?`<div style="font-size:13px;color:var(--t2);background:var(--s2);padding:10px 12px;border-radius:10px;margin-bottom:10px;line-height:1.5">"${esc(p.msg)}"</div>`:''}
     ${p.audioUrl?`<div style="margin-bottom:10px"><button style="display:flex;align-items:center;gap:8px;background:var(--s2);border:none;padding:10px 14px;border-radius:10px;font-size:13px;cursor:pointer;color:var(--tx)" onclick="event.stopPropagation();playChatAudio('${escA(p.audioUrl)}')">▶ Lydmelding (${p.audioDur||'?'}s)</button></div>`:''}
     <div class="brow"><button class="btn bs bsm" style="flex:1" onclick="go('repProfile',{uid:'${escA(p.id)}',name:'${escA(p.name)}'})">Se profil</button>
@@ -1381,7 +1392,7 @@ function vMine(){
     const expDays=j.expiresAt&&j.expiresAt>0?Math.max(0,Math.ceil((j.expiresAt-now())/864e5)):0;
     return`<div class="cd cdt" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">
     <div style="font-size:14px;font-weight:700;line-height:1.4;margin-bottom:4px">${esc(j.title||'—')}</div>
-    <div style="font-size:12px;color:var(--t3);margin-bottom:6px">${tIco} ${({help:'Trenger hjelp',service:'Tilbyr'})[j.type]||esc(j.type||'')} · ${isO?'Du posted':'Du hjelper '+esc(j.creatorName||'?')} · ${ago(j.ts)}</div>
+    <div style="font-size:12px;color:var(--t3);margin-bottom:6px">${tIco} ${({help:'Jobb',service:'Tilbyr'})[j.type]||esc(j.type||'')} · ${isO?'Du posted':'Du hjelper '+esc(j.creatorName||'?')} · ${ago(j.ts)}</div>
     <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px"><span class="badge ${cls}">${lbl}</span><span class="badge bgr">${visIco}</span></div>
     ${j.jobDate?`<div style="font-size:12px;color:var(--pr);font-weight:600;margin-bottom:4px">${fmtDate(j.jobDate,j.jobTime)}</div>`:''}
     ${j.reward?`<div style="font-size:12px;color:var(--g2);font-weight:600;margin-bottom:4px">🎁 ${esc(j.reward)}</div>`:''}
@@ -1470,11 +1481,10 @@ window.dmS=async pid=>{const inp=$('dmi');if(!inp?.value.trim())return;const raw
 function vContacts(){const cq=(A._contactQ||'').toLowerCase();
   const filtered=cq?A.contacts.filter(c=>{const nm=c.alias||c.name||'';return nm.toLowerCase().includes(cq);}):A.contacts;
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('profile')">Tilbake</button><div class="pgt">Venner (${A.contacts.length})</div></div>
-  <div class="fld"><input class="fi" placeholder="Søk blant venner..." value="${esc(A._contactQ||'')}" oninput="A._contactQ=this.value;render()" autocomplete="off"></div>
-  <div class="fld"><input class="fi" id="usr-search" placeholder="Finn nye folk (Firestore-søk)..." oninput="searchUsers(this.value)" autocomplete="off"></div>
-  <div id="search-results"></div>
-  ${!A.contacts.length?'<div class="emp"><div class="emp-i">👥</div><div class="emp-t">Ingen venner ennå. Søk etter folk eller del koden din.</div></div>':''}
-  ${cq&&!filtered.length?'<div style="padding:12px;color:var(--t3);font-size:13px;text-align:center">Ingen treff</div>':''}
+  <div class="fld"><input class="fi" id="usr-search" placeholder="Søk blant venner eller finn nye folk..." value="${esc(A._contactQ||'')}" oninput="A._contactQ=this.value;searchUsers(this.value);render()" autocomplete="off"></div>
+  ${!A.contacts.length&&!cq?'<div class="emp"><div class="emp-i">👥</div><div class="emp-t">Ingen venner ennå. Søk etter folk eller del koden din.</div></div>':''}
+  ${cq?'<span class="slbl">DINE VENNER</span>':''}
+  ${cq&&!filtered.length?'<div style="padding:8px;color:var(--t3);font-size:12px">Ingen treff blant venner</div>':''}
   ${filtered.map(c=>{const peer=A.peers.get(c.id);const dn2=c.alias||peer?.name||c.name||c.id.substr(0,12);
     const loc2=[peer?.by,peer?.fylke?FYLKER.find(f=>f.id===peer.fylke)?.name:''].filter(Boolean).join(', ');
     const online=A.conns.get(c.id)?.open;const pr=avgR(c.id);
@@ -1483,9 +1493,12 @@ function vContacts(){const cq=(A._contactQ||'').toLowerCase();
     ${avHtml(c.id,dn2,48)}
     <div style="flex:1"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:15px;font-weight:700">${esc(dn2)}</span>
       ${online?'<span style="width:8px;height:8px;border-radius:4px;background:var(--gn);flex-shrink:0"></span>':''}</div>
-      <div style="font-size:12px;color:var(--t3)">${online?'Online':'Offline'}${loc2?' · '+esc(loc2):''}${pr?' · ⭐'+pr:''}</div></div>
+      <div style="font-size:12px;color:var(--t3)">${online?'Online':'Offline'}${loc2?' · '+esc(loc2):''}${pr?' · ⭐'+pr:''}</div>
+      ${peer?.bio?`<div style="font-size:11px;color:var(--t3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(peer.bio.substr(0,60))}</div>`:''}</div>
     <button style="width:36px;height:36px;border-radius:18px;background:var(--pb);border:1px solid var(--pbb);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0" onclick="event.stopPropagation();go('dm',{peerId:'${escA(c.id)}'})">💬</button>
     </div></div>`;}).join('')}
+  ${cq?'<span class="slbl" style="margin-top:12px;display:block">ANDRE FOLK</span>':''}
+  <div id="search-results"></div>
   <div class="dv" style="margin-top:16px"></div>
   <button class="btn bs bsm" style="margin-bottom:4px" onclick="copyId()">📋 Del din vennekode</button>
   <div style="font-size:11px;color:var(--t3);margin-bottom:8px">Send denne til venner så de kan legge deg til.</div>
@@ -1562,9 +1575,6 @@ function vRep(){const u=A.params.uid;const un=A.params.name||u?.substr(0,12);con
   <div class="ps"><div class="psn">${isMe?A.myJobs.length:(peer.jobs||0)}</div><div class="psl">Innlegg</div></div>
   <div class="ps"><div class="psn">${allR.length}</div><div class="psl">Vurderinger</div></div></div></div>
   ${!isMe?`<button class="btn bp" style="margin-bottom:8px" onclick="go('dm',{peerId:'${escA(u)}'})">💬 Send melding</button>`:''}
-  ${isFr?`<div class="cd" style="padding:12px;margin-bottom:8px"><div class="slbl">🏷️ KALLENAVN</div>
-    <div style="display:flex;gap:8px"><input class="fi" id="_alias" value="${esc(isFr.alias||'')}" placeholder="Sett kallenavn..." maxlength="24" style="flex:1;padding:10px;font-size:13px">
-    <button class="btn bp bsm" style="width:auto;padding:10px 14px" onclick="var v=$('_alias')?.value?.trim();if(v){var c=A.contacts.find(x=>x.id==='${escA(u)}');if(c){c.alias=v;persist();render();notify('✅','Kallenavn lagret');}}">Lagre</button></div></div>`:''}
   ${gR.length?`<span class="slbl">⭐ Vurderinger (${gR.length})</span>${gR.map(r=>`<div class="cd" style="margin-bottom:6px"><div style="color:var(--yw);margin-bottom:4px">${starStr(r.score)}</div>
   ${r.comment?`<div style="font-size:13px;line-height:1.5;margin-bottom:4px">${esc(r.comment)}</div>`:''}
   <div style="font-size:11px;color:var(--t3)">Fra ${esc(r.raterName||'?')}</div></div>`).join('')}`:''}
@@ -1644,6 +1654,9 @@ window.saveS=()=>{const n=$('stn')?.value?.trim();if(!n){notify('⚠️','Skriv 
 // ═══ GROUPS ═══
 function countGM(gid){let c=0;A.peers.forEach(p=>{if(p.gids?.includes(gid)&&p.online)c++;});return c;}
 window.copyGid=id=>{if(D())console.log('[copyGid]',id);try{navigator.clipboard.writeText(id).then(()=>notify('✅','Kopiert!')).catch(()=>notify('📋',id));}catch(e){notify('📋',id);}};
+window.shareGroupLink=(gid,gname)=>{var text='Bli med i gruppen "'+(gname||'Gruppe')+'" på OptoU! Gruppekode: '+gid;
+  if(navigator.share){navigator.share({title:'OptoU – '+(gname||'Gruppe'),text:text}).catch(()=>{});}
+  else{try{navigator.clipboard.writeText(text).then(()=>notify('✅','Kopiert til utklippstavlen!')).catch(()=>notify('📋',text));}catch(e){notify('📋',text);}}};
 window.inviteToGroup=(gid,gname,pid)=>{if(D())console.log('[inviteToGroup]',{gid,gname,pid});const g=A.groups.find(x=>x.id===gid);
   send(pid,{t:'GI',gid,gname,gdesc:g?.desc||'',gprivate:g?.private||false,fromName:A.myName});
   notify('✅','Invitasjon sendt!');};
@@ -1653,7 +1666,7 @@ window.joinKnownGroup=id=>{if(D())console.log('[joinKnownGroup]',{id});if(!/^g[a
   A.groups.push({id,name:kg.name||'Gruppe...',desc:kg.desc||'',creatorId:kg.creatorId||'',createdTs:now(),isGroup:true,private:false,_members:kg.members||[]});
   persist();bcast({t:'HI',...myPres()});fsJoinGroup(id,A.myId);
   fsReadGroup(id).then(data=>{if(data){const g=A.groups.find(x=>x.id===id);if(g){if(data.name)g.name=data.name;if(data.members)g._members=data.members;persist();sR();}}});
-  notify('✅','Ble med i '+(kg.name||'gruppen')+'!');render();};
+  notify('✅','Ble med i '+(kg.name||'gruppen')+'!');go('groupDetail',{gid:id});};
 window.joinGroup=()=>{const inp=$('add-gid');if(!inp)return;const id=inp.value.trim();if(D())console.log('[joinGroup]',{id});
   if(!id||!/^g[a-zA-Z0-9]{1,20}$/.test(id)){notify('⚠️','Ugyldig gruppe-ID (starter med g)');return;}
   if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
@@ -1745,8 +1758,9 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
   ${g.desc?`<div style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:8px">${esc(g.desc)}</div>`:''}
   <div style="font-size:13px;color:var(--t2);margin-bottom:4px">👥 ${totalMembers} medlemmer${onlineCount?' · 🟢 '+onlineCount+' online':''}</div>
   ${adminName?`<div style="font-size:12px;color:var(--t3);margin-bottom:8px">👑 Admin: ${esc(adminName)}</div>`:''}
-  ${g.private?`<div style="font-size:12px;color:var(--t3);margin-bottom:8px">Del gruppekoden med de du vil ha med:</div>
-    <div class="idd" style="margin-bottom:8px">${g.id}</div>`:''}
+  <button class="btn bs bsm" style="margin-bottom:8px" onclick="shareGroupLink('${escA(g.id)}','${escA(g.name)}')">📤 Del denne gruppen</button>
+  ${g.private?`<details style="margin-bottom:8px"><summary style="font-size:12px;color:var(--t3);cursor:pointer">Har du en gruppekode?</summary>
+    <div class="idd" style="margin-top:8px">${g.id}</div></details>`:''}
   <div style="display:flex;gap:8px;flex-wrap:wrap">
     <button class="btn bp bsm" style="flex:1" onclick="A.nb.vis='group';A.nb.groupId='${escA(g.id)}';A.nb.groupName='${escA(g.name)}';go('create')">➕ Legg ut</button>
     <button class="btn bs bsm" style="flex:1" onclick="go('groupMembers',{gid:'${escA(g.id)}'})">👥 Medlemmer (${totalMembers})</button>
@@ -1775,7 +1789,7 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">${avHtml(j.creatorId,j.creatorName,28)}
       <span style="font-size:13px;font-weight:600">${esc(j.creatorName)}</span>${pr2?`<span style="font-size:11px;color:var(--yw)">⭐ ${pr2}</span>`:''}
       <span style="font-size:11px;color:var(--t3);margin-left:auto">${ago(j.ts)}</span></div>
-    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><span class="badge ${cls}">${ico} ${({help:'Trenger hjelp',service:'Tilbyr'})[j.type]||esc(j.type)}</span></div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><span class="badge ${cls}">${ico} ${({help:'Jobb',service:'Tilbyr'})[j.type]||esc(j.type)}</span></div>
     <div style="font-size:16px;font-weight:700;line-height:1.4;margin-bottom:4px">${esc(j.title)}</div>
     <div style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(j.desc||'')}</div>
     ${j.items?.length?`<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${j.items.map((it,idx)=>
