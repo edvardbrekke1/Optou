@@ -575,6 +575,12 @@ async function fsCleanupOrphanedJobs(){if(!hasFS())return;
       if(!doc.exists){A.openJobs.delete(jid);removed++;if(D())console.log('[fsCleanup] orphaned',jid);}
       else{const d=doc.data();if(['done','cancelled','never_done'].includes(d.status)){A.openJobs.delete(jid);removed++;if(D())console.log('[fsCleanup] terminal',jid,d.status);}}
     }catch(e){}}if(removed>0){if(D())console.log('[fsCleanup] removed',removed);persist();sR();}}
+async function fsCleanupOrphanedGroups(){if(!hasFS()||!A.groups.length)return;
+  var removed=0;for(var i=A.groups.length-1;i>=0;i--){var g=A.groups[i];
+    try{var doc=await fbDb.collection('groups').doc(g.id).get();
+      if(!doc.exists){if(D())console.log('[fsCleanup] group deleted from Firestore',g.id,g.name);
+        A.groups.splice(i,1);A.openJobs.forEach((j,id)=>{if(j.groupId===g.id)A.openJobs.delete(id);});removed++;}
+    }catch(e){}}if(removed>0){persist();sR();}}
 async function fsSyncMyPosts(){if(!hasFS()||!A.myId)return;if(D())console.log('[-> fsSyncMyPosts]');
   try{const snap=await fbDb.collection('posts').where('creatorId','==',A.myId).get();
     const myLocalIds=new Set(A.myJobs.filter(j=>j.creatorId===A.myId).map(j=>j.id));
@@ -597,14 +603,15 @@ async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if
   for(const j of A.myJobs){if(terminal.includes(j.status))continue;
     try{const doc=await fbDb.collection('posts').doc(j.id).get();
       if(!doc.exists){if(j.isHelper&&['pending','active','pending_review'].includes(j.status)){
-        j.status='cancelled';if(D())console.log('[fsSync] owner deleted job, marking cancelled',j.id);}continue;}
+        j.status='cancelled';j.helperId=null;j.helperName=null;j.helperDone=false;if(D())console.log('[fsSync] owner deleted job, marking cancelled',j.id);}continue;}
       const fs=doc.data();if(!fs.status||fs.status===j.status)continue;
       const pri={open:0,accepting:1,active:2,pending_review:3,done:4,cancelled:5,never_done:5,declined:5};
       const myP=pri[j.status]||0;const fsP=pri[fs.status]||0;
       if(fsP>myP){if(D())console.log('[fsSync] status update',{jid:j.id,from:j.status,to:fs.status,fsHelperId:fs.helperId,fsCreatorName:fs.creatorName});
         j.status=fs.status;
-        if(fs.helperId&&!j.helperId)j.helperId=fs.helperId;
-        if(fs.helperName&&!j.helperName)j.helperName=fs.helperName;
+        if(fs.status==='cancelled'){j.helperId=null;j.helperName=null;j.helperDone=false;}
+        else{if(fs.helperId&&!j.helperId)j.helperId=fs.helperId;
+          if(fs.helperName&&!j.helperName)j.helperName=fs.helperName;}
         if(fs.creatorName&&!j.creatorName)j.creatorName=fs.creatorName;
         if(fs.creatorId&&!j.creatorId)j.creatorId=fs.creatorId;
         if(fs.status==='done'){A.completedCount++;ss('oDone',A.completedCount);}}
@@ -913,7 +920,7 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
       if(A.groups.find(g=>g.id===m.gid)){notify('ℹ️','Du er allerede med i denne gruppen');return;}
       A.groups.push({id:m.gid,name:m.gname,desc:m.gdesc||'',creatorId:'',createdTs:now(),isGroup:true,private:m.gprivate||false});
       persist();bcast({t:'HI',...myPres()});fsJoinGroup(m.gid,A.myId);
-      fsReadGroup(m.gid).then(data=>{if(data){var g=A.groups.find(x=>x.id===m.gid);if(g&&data.name)g.name=data.name;persist();sR();}});
+      fsReadGroup(m.gid).then(data=>{if(data){var g=A.groups.find(x=>x.id===m.gid);if(g){if(data.name)g.name=data.name;if(data.creatorId)g.creatorId=data.creatorId;if(data.imageUrl)g.imageUrl=data.imageUrl;if(data.desc)g.desc=data.desc;if(data.members)g._members=data.members;}persist();sR();}});
       notify('✅','Ble med i '+(m.gname||'gruppen')+'!');go('groupDetail',{gid:m.gid});});break;}
   case 'GM':{if(!m.gid||!m.name)break;const g=A.groups.find(x=>x.id===m.gid);
     if(g&&(!g.name||g.name===g.id||g.name==='Gruppe...')){g.name=m.name;if(m.desc)g.desc=m.desc;if(m.private!==undefined)g.private=m.private;persist();sR();}break;}
@@ -1052,6 +1059,7 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
     const bp=b.groupId&&gPriv.has(b.groupId)?0:b.groupId&&gPub.has(b.groupId)?1:2;
     return ap!==bp?ap-bp:b.ts-a.ts;});
   const ic=A.myJobs.filter(j=>j.status==='accepting').length;const noC=!A.contacts.length;
+  const myAct=A.myJobs.filter(j=>j.creatorId===A.myId&&['open','accepting','active'].includes(j.status));
   // People suggestions: mutual friends + shared open groups + same fylke
   const sugMap=new Map();const myOG=new Set(A.groups.filter(g=>!g.private).map(g=>g.id));
   A.peers.forEach((p,pid)=>{if(A.contacts.find(c=>c.id===pid)||pid===A.myId||!p.name)return;
@@ -1070,7 +1078,7 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
       ${(FYLKER.find(f=>f.id===A.myFylke)?.kommuner||[]).map(k=>
         `<div class="fc${(ff.locs||[]).includes(k)?' act':''}" style="padding:8px 16px;font-size:13px" onclick="var l=A.feedFilter.locs||[];var i=l.indexOf('${escA(k)}');if(i>=0)l.splice(i,1);else l.push('${escA(k)}');A.feedFilter.locs=l;render()">📍 ${esc(k)}</div>`).join('')}</div>`:''}
     ${ic?`<div class="cd cdt" onclick="go('mine')" style="background:var(--yb);border-color:#FDE68A"><div style="display:flex;justify-content:space-between;align-items:center;font-size:14px;font-weight:700;color:#92400E">⚡ ${ic} vil hjelpe!<span>→</span></div></div>`:''}
-    ${(()=>{const myAct=A.myJobs.filter(j=>j.creatorId===A.myId&&['open','accepting','active'].includes(j.status));if(!myAct.length)return'';
+    ${(()=>{if(!myAct.length)return'';
       const mSm={open:['Åpent','bg1'],accepting:['Noen vil hjelpe!','by1'],active:['Pågår','bb1']};
       return`<div class="slbl">DINE AKTIVE POSTER (${myAct.length})</div><div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">${myAct.map(j=>{const[lbl,cls]=mSm[j.status]||['—','bgr'];
         return`<div style="background:var(--pb);border:1px solid var(--pbb);border-radius:12px;padding:10px 14px;cursor:pointer" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">
@@ -1087,7 +1095,7 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
       <div class="dv"></div><div class="slbl">Legg til venn</div>
       <div style="display:flex;gap:8px;margin-top:8px"><input class="fi" id="add-id" placeholder="ID (oXXX) eller gruppe (gXXX)" style="flex:1;padding:10px;font-size:13px">
       <button class="btn bp bsm" style="width:auto;padding:10px 16px" onclick="connectById()">Koble til</button></div></div>`:''}
-    ${!jobs.length&&!noC?'<div class="emp"><div class="emp-i">👀</div><div class="emp-t">Ingen innlegg ennå.<br>Trykk + for å legge ut det første!</div></div>':''}
+    ${!jobs.length&&!noC&&!myAct.length?'<div class="emp"><div class="emp-i">👀</div><div class="emp-t">Ingen innlegg ennå.<br>Trykk + for å legge ut det første!</div></div>':''}
     ${jobs.map(j=>{const pr=avgR(j.creatorId);const typeMap={help:['🤝','bg1'],service:['💼','bp1']};
       const[ico,cls]=typeMap[j.type]||['📋','bg1'];
       const imgSrc=j.imageUrl||j.imageData;const fNm=j.fylke?FYLKER.find(f=>f.id===j.fylke)?.name:'';
@@ -1316,10 +1324,14 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
     ${_last20.map(m=>`<div class="msg ${m.from===A.myId?'mm':'mo'}" style="font-size:13px;padding:8px 12px">${m.from!==A.myId?`<div class="mn">${esc(m.name||'?')}</div>`:''}${m.imageUrl?`<img src="${esc(m.imageUrl)}" style="max-width:180px;max-height:200px;border-radius:8px;display:block;margin-bottom:4px;cursor:pointer" onclick="event.stopPropagation();showImg('${escA(m.imageUrl)}')">`:m.audioUrl?`<button style="display:flex;align-items:center;gap:6px;background:none;color:inherit;font-size:12px" onclick="playChatAudio('${escA(m.audioUrl)}')">▶ ${esc(m.duration||'?')}s</button>`:esc(m.text)}<div class="mt2">${ago(m.ts)}${m.from===A.myId?' '+(m._status==='delivered'?'●':'○'):''}</div></div>`).join('')}
     </div>
     ${j.status==='done'?'<div style="text-align:center;padding:12px;font-size:13px;color:var(--t3);border-top:1px solid var(--s3);margin-top:8px">Jobben er fullført — chatten er låst</div>'
-    :`<div class="chbr"><input class="chi" id="jd-ci" placeholder="Skriv..." maxlength="500" onkeydown="if(event.key==='Enter')jdCS('${escA(jid)}','${escA(_oId||'')}')">
-    <label class="chsn" style="background:var(--s2);color:var(--t2)">📷<input type="file" accept="image/*" style="display:none" onchange="handleChatImg(this,'jc','${escA(jid)}','${escA(_oId||'')}')"></label>
-    <button class="chsn" style="background:var(--s2);color:var(--t2)" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
-    <button class="chsn" onclick="jdCS('${escA(jid)}','${escA(_oId||'')}')">➤</button></div>`}`;}
+    :`<div style="border-top:1px solid var(--s3);margin-top:8px;padding:8px 0">
+    <textarea class="chi" id="jd-ci" placeholder="Skriv..." maxlength="500" rows="1" style="width:100%;resize:none;overflow:hidden;min-height:36px;max-height:120px;margin-bottom:6px" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();jdCS('${escA(jid)}','${escA(_oId||'')}')}"></textarea>
+    <div style="display:flex;gap:10px;align-items:center">
+    <label style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;cursor:pointer;flex-shrink:0">📷<input type="file" accept="image/*" style="display:none" onchange="handleChatImg(this,'jc','${escA(jid)}','${escA(_oId||'')}')"></label>
+    <button style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
+    <div style="flex:1"></div>
+    <button style="width:44px;height:44px;border-radius:22px;background:var(--pr);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="jdCS('${escA(jid)}','${escA(_oId||'')}')">➤</button>
+    </div></div>`}`;}
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go(A.prevScreen||'feed')">Tilbake</button><div class="pgt">Detaljer</div></div>${b}</div>`;}
 
 window.doHelp=(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A.openJobs.get(jid);const msg=$('jmsg')?.value?.trim()||'';
@@ -1444,10 +1456,14 @@ function vJobChat(){const jid=A.params.jobId;const j=A.myJobs.find(x=>x.id===jid
     <span style="font-size:13px;color:var(--bl)">📷 Bilde klart</span>
     <button class="btn bp bsm" style="margin-left:auto;padding:6px 12px" onclick="sendChatImg()">Send ➤</button>
     <button style="font-size:14px;color:var(--t3);padding:4px" onclick="window._pendingImg=null;render()">✕</button></div>`:''}
-  <div class="chbr"><input class="chi" id="jci" placeholder="Skriv..." maxlength="500" onkeydown="if(event.key==='Enter')jcS('${escA(jid)}','${escA(oId||'')}')">
-  <label class="chsn" style="background:var(--s2);color:var(--t2)">📷<input type="file" accept="image/*" style="display:none" onchange="handleChatImg(this,'jc','${escA(jid)}','${escA(oId||'')}')"></label>
-  <button class="chsn" style="background:var(--s2);color:var(--t2)" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
-  <button class="chsn" onclick="jcS('${escA(jid)}','${escA(oId||'')}')">➤</button></div></div></div>`;}
+  <div style="border-top:1px solid var(--s3);margin-top:auto;padding:8px 0">
+  <textarea class="chi" id="jci" placeholder="Skriv..." maxlength="500" rows="1" style="width:100%;resize:none;overflow:hidden;min-height:36px;max-height:120px;margin-bottom:6px" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();jcS('${escA(jid)}','${escA(oId||'')}')}"></textarea>
+  <div style="display:flex;gap:10px;align-items:center">
+  <label style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;cursor:pointer;flex-shrink:0">📷<input type="file" accept="image/*" style="display:none" onchange="handleChatImg(this,'jc','${escA(jid)}','${escA(oId||'')}')"></label>
+  <button style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
+  <div style="flex:1"></div>
+  <button style="width:44px;height:44px;border-radius:22px;background:var(--pr);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="jcS('${escA(jid)}','${escA(oId||'')}')">➤</button>
+  </div></div></div></div>`;}
 window.jcS=(jid,oId)=>{const inp=$('jci');if(!inp?.value.trim())return;const msg={from:A.myId,name:A.myName,text:inp.value.trim(),ts:now(),_mid:uid(),_status:'sent'};
   addJMsg(jid,msg);fsWriteJobChat(jid,msg);if(oId)send(oId,{t:'BM',jid,name:A.myName,text:msg.text,ts:msg.ts,_mid:msg._mid});inp.value='';persist();render();setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},50);};
 window.jdCS=(jid,oId)=>{const inp=$('jd-ci');if(!inp?.value.trim())return;const msg={from:A.myId,name:A.myName,text:inp.value.trim(),ts:now(),_mid:uid(),_status:'sent'};
@@ -1468,10 +1484,14 @@ function vDM(){const pid=A.params.peerId;const nm=dn(pid,A.peers.get(pid)?.name)
     <span style="font-size:13px;color:var(--bl)">📷 Bilde klart</span>
     <button class="btn bp bsm" style="margin-left:auto;padding:6px 12px" onclick="sendChatImg()">Send ➤</button>
     <button style="font-size:14px;color:var(--t3);padding:4px" onclick="window._pendingImg=null;render()">✕</button></div>`:''}
-  <div class="chbr"><input class="chi" id="dmi" placeholder="Skriv..." maxlength="500" onkeydown="if(event.key==='Enter')dmS('${escA(pid)}')">
-  <label class="chsn" style="background:var(--s2);color:var(--t2)">📷<input type="file" accept="image/*" style="display:none" onchange="handleChatImg(this,'dm','${escA(pid)}')"></label>
-  <button class="chsn" style="background:var(--s2);color:var(--t2)" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
-  <button class="chsn" onclick="dmS('${escA(pid)}')">➤</button></div></div></div>`;}
+  <div style="border-top:1px solid var(--s3);margin-top:auto;padding:8px 0">
+  <textarea class="chi" id="dmi" placeholder="Skriv..." maxlength="500" rows="1" style="width:100%;resize:none;overflow:hidden;min-height:36px;max-height:120px;margin-bottom:6px" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();dmS('${escA(pid)}')}"></textarea>
+  <div style="display:flex;gap:10px;align-items:center">
+  <label style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;cursor:pointer;flex-shrink:0">📷<input type="file" accept="image/*" style="display:none" onchange="handleChatImg(this,'dm','${escA(pid)}')"></label>
+  <button style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
+  <div style="flex:1"></div>
+  <button style="width:44px;height:44px;border-radius:22px;background:var(--pr);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="dmS('${escA(pid)}')">➤</button>
+  </div></div></div></div>`;}
 window.dmS=async pid=>{const inp=$('dmi');if(!inp?.value.trim())return;const raw=inp.value.trim();const peer=A.peers.get(pid);
   let enc=raw,isE=false;if(peer?.epub&&peer?.epubV!==false){try{const r=await encFor(raw,peer.epub);if(r){enc=r;isE=true;}}catch(e){}}else if(peer?.epub&&peer?.epubV===false){notify('⚠️','Krypteringsnøkkel ikke verifisert');}
   const dmid=uid();const dts=now();addDM(pid,{from:A.myId,name:A.myName,text:raw,ts:dts,_mid:dmid,_status:'sent'});send(pid,{t:'DM',name:A.myName,text:enc,enc:isE,ts:dts,_mid:dmid});
@@ -1672,7 +1692,7 @@ window.joinKnownGroup=id=>{if(D())console.log('[joinKnownGroup]',{id});if(!/^g[a
   if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
   A.groups.push({id,name:kg.name||'Gruppe...',desc:kg.desc||'',creatorId:kg.creatorId||'',createdTs:now(),isGroup:true,private:false,_members:kg.members||[]});
   persist();bcast({t:'HI',...myPres()});fsJoinGroup(id,A.myId);
-  fsReadGroup(id).then(data=>{if(data){const g=A.groups.find(x=>x.id===id);if(g){if(data.name)g.name=data.name;if(data.members)g._members=data.members;persist();sR();}}});
+  fsReadGroup(id).then(data=>{if(data){const g=A.groups.find(x=>x.id===id);if(g){if(data.name)g.name=data.name;if(data.members)g._members=data.members;if(data.creatorId)g.creatorId=data.creatorId;if(data.imageUrl)g.imageUrl=data.imageUrl;if(data.desc)g.desc=data.desc;persist();sR();}}});
   notify('✅','Ble med i '+(kg.name||'gruppen')+'!');go('groupDetail',{gid:id});};
 window.joinGroup=()=>{const inp=$('add-gid');if(!inp)return;const id=inp.value.trim();if(D())console.log('[joinGroup]',{id});
   if(!id||!/^g[a-zA-Z0-9]{1,20}$/.test(id)){notify('⚠️','Ugyldig gruppe-ID (starter med g)');return;}
@@ -1926,6 +1946,8 @@ async function boot(){
     if(_orphaned){console.log('[MIGRATE] Removed',_orphaned,'orphaned done jobs');persist();}
     // Migration: ensure all groups have creatorId
     A.groups.forEach(g=>{if(!g.creatorId){g.creatorId=A.myId;}});
+    // Migration: fix cancelled jobs with helperId
+    A.myJobs.forEach(j=>{if(j.status==='cancelled'&&j.helperId){j.helperId=null;j.helperName=null;j.helperDone=false;}});
     // Migration: clean orphaned jobChats
     var _chatCleaned=0;Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)){delete A.jobChats[k];_chatCleaned++;}});
     if(_chatCleaned){console.log('[MIGRATE] Cleaned',_chatCleaned,'orphaned jobChats');persist();}
@@ -1934,7 +1956,7 @@ async function boot(){
     // Background: load public posts from Firestore
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){if(p.visibility==='friends'&&!A.contacts.find(c=>c.id===p.creatorId))return;if(p.visibility==='direct'&&!(p.targetIds||[]).includes(A.myId))return;var isCt=!!A.contacts.find(c=>c.id===p.creatorId);A.openJobs.set(p.id,{...p,isFromContact:isCt,isPublic:p.visibility==='public'});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
     fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();});
-    fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsSyncMyPosts();
+    fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsCleanupOrphanedGroups();fsSyncMyPosts();
     // Load group posts from Firestore
     if(hasFS()&&A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
       .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(e=>console.warn('[FS] groupPosts',e));});
@@ -1944,6 +1966,8 @@ async function boot(){
       if(data.desc&&!g.desc){g.desc=data.desc;changed=true;}
       if(data.private!==undefined&&g.private!==data.private){g.private=data.private;changed=true;}
       if(data.members){g._members=data.members;data.members.forEach(mid=>{if(mid!==A.myId)tryC(mid);});changed=true;}
+      if(data.creatorId&&!g.creatorId){g.creatorId=data.creatorId;changed=true;}
+      if(data.imageUrl&&g.imageUrl!==data.imageUrl){g.imageUrl=data.imageUrl;changed=true;}
       if(changed){persist();sR();}}});});}
   else{if(D())console.log('[boot] phase:onboarding');go(ls('oSeen')?'setup':'onboarding');ss('oSeen','1');}
   // Garbage collection (prevents Scuttlebutt bloat)
@@ -1958,7 +1982,7 @@ async function boot(){
   setInterval(()=>{if(!A.myName||!hasFS())return;
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){if(p.visibility==='friends'&&!A.contacts.find(c=>c.id===p.creatorId))return;if(p.visibility==='direct'&&!(p.targetIds||[]).includes(A.myId))return;var isCt=!!A.contacts.find(c=>c.id===p.creatorId);A.openJobs.set(p.id,{...p,isFromContact:isCt,isPublic:p.visibility==='public'});added++;}});if(added>0){persist();sR();}}).catch(()=>{});
     fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();}).catch(()=>{});
-    fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsCleanupOrphanedJobs();fsSyncMyPosts();
+    fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsCleanupOrphanedJobs();fsCleanupOrphanedGroups();fsSyncMyPosts();
     if(hasFS())A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
       .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(()=>{});});
   },12e4);
