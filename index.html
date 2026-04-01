@@ -162,7 +162,7 @@ const A={myId:'',myName:'',myBio:'',myCity:'',myFylke:'',myBy:'',pubB64:'',privK
   contacts:[],blocked:new Set(),ratings:{},activity:[],offlineQ:[],relayQ:[],completedCount:0,
   screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,unreadActivity:0,unreadGroups:0,unreadFeed:0,_seenMids:new Set(),_seenAcks:new Set(),groups:[],
   feedFilter:{type:'',locs:[]},knownGroups:new Map(),tempConns:new Map(),_publicGroups:[],_contactQ:'',_editGroup:false,_pendingGroupImg:null,
-  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set()};
+  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{}};
 
 async function loadState(){
   if(D())console.log('[-> loadState]');
@@ -550,6 +550,12 @@ async function fsLoadPublicGroups(){if(!hasFS())return[];if(D())console.log('[->
   }catch(e){if(D())console.log('[fsLoadPublicGroups] error',e.message);return[];}}
 async function fsRegisterUser(){if(D())console.log('[-> fsRegisterUser]',{myId:A.myId,myName:A.myName});if(!hasFS()||!A.myId||!A.myName)return;try{await fbDb.collection('users').doc(A.myId).set({name:A.myName,nameLower:A.myName.toLowerCase(),fylke:A.myFylke||'',by:A.myBy||'',avatar:ls('oAvatar')||'',updatedAt:Date.now()},{merge:true});if(D())console.log('[<- fsRegisterUser] success');}catch(e){console.warn('[FS] registerUser',e);}}
 async function fsSearchUsers(query){if(!hasFS()||!query||query.length<2)return[];try{var q=query.toLowerCase();var snap=await fbDb.collection('users').where('nameLower','>=',q).where('nameLower','<=',q+'\uf8ff').limit(20).get();return snap.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.id!==A.myId&&!A.blocked.has(u.id));}catch(e){console.warn('[FS] searchUsers',e);return[];}}
+async function fsHydrateUserNames(ids){if(!hasFS()||!ids.length)return;
+  var unknown=ids.filter(id=>!A._userNames[id]&&id!==A.myId&&!A.contacts.find(c=>c.id===id)&&!A.peers.get(id)?.name);
+  if(!unknown.length)return;unknown=unknown.slice(0,10);
+  for(var id of unknown){try{var doc=await fbDb.collection('users').doc(id).get();
+    if(doc.exists&&doc.data().name){A._userNames[id]=doc.data().name;if(D())console.log('[hydrate]',id,doc.data().name);}
+  }catch(e){}}sR();}
 async function fsWritePost(p){if(D())console.log('[-> fsWritePost]',{jid:p.id,visibility:p.visibility});if(!hasFS())return false;try{await fbDb.collection('posts').doc(p.id).set({id:p.id,type:p.type,title:p.title,desc:p.desc,reward:p.reward||'',location:p.location||'',fylke:p.fylke||'',by:p.by||'',
   imageUrl:p.imageUrl||null,items:(p.items||[]).map(it=>({text:it.text,audioUrl:it.audioUrl||null,duration:it.duration||0,mode:it.mode||'list',status:it.status||'open'})),jobDate:p.jobDate||null,jobTime:p.jobTime||null,
   groupId:p.groupId||null,groupName:p.groupName||null,creatorId:p.creatorId,creatorName:p.creatorName,creatorAvatar:ls('oAvatar')||'',ts:p.ts,expiresAt:p.expiresAt,visibility:p.visibility||'public',status:p.status||'open'});
@@ -865,9 +871,9 @@ function onData(from,m){try{if(!m||A.blocked.has(from))return;
     if(m.gids?.length){const myGids=new Set(A.groups.map(g=>g.id));const shared=m.gids.filter(g=>myGids.has(g));
       if(shared.length){const gSet=new Set(shared);const cc=A.conns.get(from);if(cc?.open){let gc=0;
         A.myJobs.filter(j=>j.status==='open'&&j.creatorId===A.myId&&j.groupId&&gSet.has(j.groupId)).forEach(j=>{
-          try{cc.send({t:'INV',job:{...stripJobForSend(j),fromContact:true}});}catch(e){}});
-        A.openJobs.forEach(j=>{if(gc>=50)return;if(j.groupId&&gSet.has(j.groupId)&&!['cancelled','done','never_done','declined'].includes(j.status)&&(!j.expiresAt||j.expiresAt===0||j.expiresAt>now())){
-          try{cc.send({t:'INV',job:{...stripJobForSend(j),fromContact:true}});gc++;}catch(e){}}});
+          gc++;try{cc.send({t:'INV',job:{...stripJobForSend(j),fromContact:true}});}catch(e){}});
+        // openJobs resend disabled — Firestore is backbone for group post discovery
+        if(D())console.log('[HI] group sync',{from,shared:shared.length,myJobsSent:gc});
         shared.forEach(gid=>{const g=A.groups.find(x=>x.id===gid);
           if(g?.name&&g.name!==gid)try{cc.send({t:'GM',gid,name:g.name,desc:g.desc||'',private:g.private||false});}catch(e){}});}}}
     flushQ();
@@ -1339,8 +1345,14 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
 
 window.cancelMyJob=function(jobId){
   var x=A.myJobs.find(z=>z.id===jobId);
-  if(D())console.log('[cancelMyJob]',{jobId,found:!!x,status:x?.status,isOwner:x?.creatorId===A.myId});
-  if(!x){notify('⚠️','Jobben ble ikke funnet');return;}
+  if(D())console.log('[cancelMyJob]',{jobId,inMyJobs:!!x,inOpenJobs:A.openJobs.has(jobId),status:x?.status});
+  // Ghost-job cleanup: job visible in vDetail via openJobs but not in myJobs
+  if(!x){var gh=A.openJobs.get(jobId);
+    if(gh){A._deadJobs.add(jobId);A.openJobs.delete(jobId);
+      if(gh.creatorId===A.myId){fsDeletePost(jobId);notify('🧹','Fjernet gammel kopi');if(D())console.log('[cancelMyJob] ghost cleanup — own post',jobId);}
+      else{notify('🧹','Skjulte gammel kopi');if(D())console.log('[cancelMyJob] ghost cleanup — other post',jobId);}
+      persist();render();return;}
+    notify('⚠️','Jobben ble ikke funnet');return;}
   if(x.creatorId!==A.myId){notify('⚠️','Du er ikke eier av denne jobben');return;}
   if(['cancelled','done','never_done','declined'].includes(x.status)){notify('ℹ️','Jobben er allerede avsluttet');return;}
   var _hid=x.helperId;
@@ -1451,8 +1463,15 @@ window.doHelp=(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A.open
   send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0});
   if(hasFS()){try{fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId).set({id:A.myId,name:A.myName,msg:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,ts:Date.now()}).catch(e=>console.warn('[FS] interest write',e));}catch(e){}}
   persist();go('mine');notify('✅','Interesse sendt!');};
-window.withdrawHelp=(jid,cid)=>{if(D())console.log('[withdrawHelp]',{jid,cid,connOpen:!!A.conns.get(cid)?.open,offlineQbefore:A.offlineQ.length});
-  A.myJobs=A.myJobs.filter(z=>z.id!==jid);send(cid,{t:'JW',jid});
+window.withdrawHelp=(jid,cid)=>{if(D())console.log('[withdrawHelp]',{jid,cid,connOpen:!!A.conns.get(cid)?.open});
+  var wj=A.myJobs.find(z=>z.id===jid);
+  if(wj){
+    if(wj.status==='pending')wj.status='declined';
+    else if(['active','pending_review'].includes(wj.status))wj.status='cancelled';
+    wj.helperDone=false;
+    if(D())console.log('[withdrawHelp] terminal',{jid,newStatus:wj.status});
+  }
+  A._deadJobs.add(jid);send(cid,{t:'JW',jid});
   if(hasFS())try{var _iRef=fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId);
     _iRef.get().then(d=>{if(d.exists){var dt=d.data();if(dt.audioUrl){fsDeleteMediaUrl(dt.audioUrl);if(D())console.log('[withdrawHelp] cleanup audioUrl',jid);}}
       _iRef.delete().catch(function(){});}).catch(function(){});}catch(e){}
@@ -1612,9 +1631,8 @@ window.dmS=async pid=>{const inp=$('dmi');if(!inp?.value.trim())return;const raw
 function vContacts(){const cq=(A._contactQ||'').toLowerCase();
   const filtered=cq?A.contacts.filter(c=>{const nm=c.alias||c.name||'';return nm.toLowerCase().includes(cq);}):A.contacts;
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('profile')">Tilbake</button><div class="pgt">Venner (${A.contacts.length})</div></div>
-  <div class="fld"><input class="fi" id="usr-search" placeholder="Søk blant venner eller finn nye folk..." value="${esc(A._contactQ||'')}" oninput="A._contactQ=this.value;searchUsers(this.value);render()" autocomplete="off"></div>
+  <div class="fld"><label class="fl">Filtrer venner</label><input class="fi" id="cf" placeholder="Søk blant venner..." value="${esc(A._contactQ||'')}" oninput="A._contactQ=this.value;render()" autocomplete="off"></div>
   ${!A.contacts.length&&!cq?'<div class="emp"><div class="emp-i">👥</div><div class="emp-t">Ingen venner ennå. Søk etter folk eller del koden din.</div></div>':''}
-  ${cq?'<span class="slbl">DINE VENNER</span>':''}
   ${cq&&!filtered.length?'<div style="padding:8px;color:var(--t3);font-size:12px">Ingen treff blant venner</div>':''}
   ${filtered.map(c=>{const peer=A.peers.get(c.id);const dn2=c.alias||peer?.name||c.name||c.id.substr(0,12);
     const loc2=[peer?.by,peer?.fylke?FYLKER.find(f=>f.id===peer.fylke)?.name:''].filter(Boolean).join(', ');
@@ -1628,7 +1646,8 @@ function vContacts(){const cq=(A._contactQ||'').toLowerCase();
       ${peer?.bio?`<div style="font-size:11px;color:var(--t3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(peer.bio.substr(0,60))}</div>`:''}</div>
     <button style="width:36px;height:36px;border-radius:18px;background:var(--pb);border:1px solid var(--pbb);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0" onclick="event.stopPropagation();go('dm',{peerId:'${escA(c.id)}'})">💬</button>
     </div></div>`;}).join('')}
-  ${cq?'<span class="slbl" style="margin-top:12px;display:block">ANDRE FOLK</span>':''}
+  <div class="dv"></div>
+  <div class="fld"><label class="fl">Finn nye folk</label><input class="fi" id="usr-search" placeholder="Søk på navn i hele appen..." oninput="searchUsers(this.value)" autocomplete="off"></div>
   <div id="search-results"></div>
   <div class="dv" style="margin-top:16px"></div>
   <button class="btn bs bsm" style="margin-bottom:4px" onclick="copyId()">📋 Del din vennekode</button>
@@ -1955,15 +1974,18 @@ function vGroupMembers(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===
   const mids=g._members||[];const allIds=new Set(mids);allIds.add(A.myId);
   // Also add online peers who have this group in gids
   A.peers.forEach((p,pid)=>{if(p.gids?.includes(gid))allIds.add(pid);});
+  // Hydrate unknown member names from Firestore (async, re-renders when done)
+  fsHydrateUserNames([...allIds]);
   const list=[...allIds].map(mid=>{const peer=A.peers.get(mid);const ct=A.contacts.find(c=>c.id===mid);
-    const nm=mid===A.myId?A.myName:(ct?.alias||peer?.name||ct?.name||mid.substr(0,12));const online=mid===A.myId||!!A.conns.get(mid)?.open;
+    const nm=mid===A.myId?A.myName:(ct?.alias||peer?.name||ct?.name||A._userNames[mid]||mid.substr(0,12));const online=mid===A.myId||!!A.conns.get(mid)?.open;
     const loc=[peer?.by,peer?.fylke?FYLKER.find(f=>f.id===peer.fylke)?.name:''].filter(Boolean).join(', ');
     const pr=avgR(mid);const isAdmin=g.creatorId===mid;const isMe=mid===A.myId;
     return{mid,nm,online,loc,pr,isAdmin,isMe,known:!!peer?.name||isMe};});
   list.sort((a,b)=>{if(a.isAdmin!==b.isAdmin)return a.isAdmin?-1:1;if(a.isMe!==b.isMe)return a.isMe?-1:1;
     if(a.online!==b.online)return a.online?-1:1;if(a.known!==b.known)return a.known?-1:1;return 0;});
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groupDetail',{gid:'${escA(gid)}'})">Tilbake</button><div class="pgt">Medlemmer (${list.length})</div></div>
-  ${list.map(m=>{return`<div class="cd cdt" style="padding:12px;margin-bottom:8px" onclick="${m.isMe?'':`go(&#39;repProfile&#39;,{uid:&#39;${escA(m.mid)}&#39;,name:&#39;${escA(m.nm)}&#39;})`}
+  ${list.map(m=>{const clk=m.isMe?'':` onclick="go('repProfile',{uid:'${escA(m.mid)}',name:'${escA(m.nm)}'})"`;
+    return`<div class="cd cdt" style="padding:12px;margin-bottom:8px;${m.isMe?'cursor:default':''}"${clk}>
     <div style="display:flex;align-items:center;gap:12px">
     ${avHtml(m.mid,m.nm,48)}
     <div style="flex:1"><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
