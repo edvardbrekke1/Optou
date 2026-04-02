@@ -117,13 +117,27 @@ input,textarea,select{font-family:inherit;outline:none;-webkit-appearance:none;b
 // - syncP/HI/group-sync must NEVER resend from A.openJobs — Firestore is backbone for discovery
 // - fsJoinGroup/fsLeaveGroup must handle missing Firestore docs (deleted groups)
 // - joinKnownGroup must verify Firestore doc exists before local join
-// - Deleted groups must be removed from A.groups, A.knownGroups AND A._publicGroups (GDEL + cleanup)
+// - Deleted groups must be removed from A.groups AND A._publicGroups (via fsCleanupOrphanedGroups + dropMissingGroup)
 // - Groups must hydrate creatorId, _members, imageUrl from Firestore at every join path
 // - vGroupDetail must not assume current user is admin when creatorId is missing or empty
 // - cancelMyJob must handle ghost-jobs in A.openJobs, not just A.myJobs
 // - withdrawHelp must set terminal status + _deadJobs, not hard-delete from myJobs
 // - updatePointStatus syncs via PU message to owner, not just BM text
 // - Keep checkRules R65 meaningful — do not suppress without fixing source
+// - Public post discovery must NOT use gossip POST — use direct INV to contacts + Firestore (fsWritePost + fsLoadPublicPosts)
+// - Public group discovery must NOT use gossip GRP — use Firestore (fsWriteGroup + fsLoadPublicGroups)
+// - Group deletion must NOT use gossip GDEL — use fsDeleteGroup + fsCleanupOrphanedGroups (every ~10 min) + dropMissingGroup
+// - fsCleanupOrphanedGroups runs every 2nd sync round (~10 min) and uses dropMissingGroup for complete cleanup
+// - HI must NOT do group post backfill or GM metadata exchange — Firestore handles group discovery
+// - syncP must NOT resend INV for post discovery — it only does BS status sync for shared jobs
+// - HI must NOT resend INV for personal post discovery on first contact — Firestore + doPost direct INV handle this
+// - GM metadata handler removed — group metadata must come from Firestore (fsReadGroup), not P2P GM messages
+// - HI payload must NOT send redundant city field — use by + fylke for location
+// - HI periodic broadcast is 25s (not 12s) — discovery is handled by Firestore, HI is presence-only
+// - HI payload must NOT send raw jobs count — imprecise and not needed for presence
+// - knownGroups cache is removed — public group discovery/UI uses only _publicGroups from Firestore
+// - syncP/BS must only sync active statuses (open/accepting/active/pending_review), never terminal
+// - BS handler must no-op on same/lower priority status to avoid redundant persist/render on reconnect
 // ═══════════════════════════════════════
 
 const V='1.0.0';
@@ -171,7 +185,6 @@ function openDB(){return new Promise((res,rej)=>{const r=indexedDB.open('optou',
   r.onsuccess=e=>{db=e.target.result;res(db);};r.onerror=e=>rej(e);});}
 function dbGet(store,key){return new Promise((res,rej)=>{if(!db)return res(null);const tx=db.transaction(store,'readonly');const r=tx.objectStore(store).get(key);r.onsuccess=()=>res(r.result);r.onerror=()=>res(null);});}
 function dbPut(store,key,val){return new Promise((res,rej)=>{if(!db)return res();const tx=db.transaction(store,'readwrite');tx.objectStore(store).put(val,key);tx.oncomplete=()=>res();tx.onerror=()=>res();});}
-function dbGetAll(store){return new Promise((res,rej)=>{if(!db)return res({});const tx=db.transaction(store,'readonly');const r=tx.objectStore(store).getAll();const rk=tx.objectStore(store).getAllKeys();const result={};rk.onsuccess=()=>{r.onsuccess=()=>{rk.result.forEach((k,i)=>result[k]=r.result[i]);res(result);};};rk.onerror=()=>res({});});}
 function dbDel(store,key){return new Promise(res=>{if(!db)return res();const tx=db.transaction(store,'readwrite');tx.objectStore(store).delete(key);tx.oncomplete=()=>res();tx.onerror=()=>res();});}
 
 // ═══ STATE ═══
@@ -179,7 +192,7 @@ const A={myId:'',myName:'',myBio:'',myCity:'',myFylke:'',myBy:'',pubB64:'',privK
   peer:null,ready:false,conns:new Map(),peers:new Map(),seen:new Set(),openJobs:new Map(),myJobs:[],jobChats:{},dms:{},
   contacts:[],blocked:new Set(),ratings:{},activity:[],offlineQ:[],relayQ:[],completedCount:0,
   screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,unreadActivity:0,unreadGroups:0,unreadFeed:0,_seenMids:new Set(),_seenAcks:new Set(),groups:[],
-  feedFilter:{type:'',locs:[]},knownGroups:new Map(),tempConns:new Map(),_publicGroups:[],_contactQ:'',_editGroup:false,_pendingGroupImg:null,
+  feedFilter:{type:'',locs:[]},tempConns:new Map(),_publicGroups:[],_contactQ:'',_editGroup:false,_pendingGroupImg:null,
   _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{}};
 
 async function loadState(){
@@ -197,7 +210,6 @@ async function loadState(){
   A.offlineQ=(await dbGet('config','offlineQ'))||[];
   A.relayQ=(await dbGet('config','relayQ'))||[];
   A.groups=(await dbGet('config','groups'))||[];
-  const kg=(await dbGet('config','knownGroups'))||[];A.knownGroups=new Map(kg);
   const tc=(await dbGet('config','tempConns'))||[];A.tempConns=new Map(tc);
   A._seenMids=new Set((await dbGet('config','seenMids'))||[]);
   A._seenAcks=new Set((await dbGet('config','seenAcks'))||[]);
@@ -244,7 +256,6 @@ async function persist(){
     dbPut('config','offlineQ',A.offlineQ),dbPut('config','relayQ',A.relayQ),
     dbPut('config','openJobs',ojForStore),dbPut('config','rated',[...A.rated]),
     dbPut('config','seenMids',[...A._seenMids]),dbPut('config','seenAcks',[...A._seenAcks].slice(-300)),dbPut('config','groups',A.groups),
-    dbPut('config','knownGroups',[...A.knownGroups.entries()].slice(0,50)),
     dbPut('config','tempConns',[...A.tempConns.entries()]),
     dbPut('config','removedContacts',[...A._removedContacts]),
     dbPut('config','deadJobs',[...A._deadJobs])
@@ -327,13 +338,10 @@ function checkRules(){
     if(!g.id)E('R61','Gruppe uten id');
     if(!g.name||g.name===g.id||g.name==='Gruppe...')W('R62','Gruppe uten ordentlig navn',{id:g.id,name:g.name});
     if(g.id&&!g.id.startsWith('g'))E('R63','Gruppe-ID starter ikke med g',{id:g.id});
-    if(g.private&&A.knownGroups.has(g.id))W('R64','Privat gruppe i knownGroups (gossipet?)',{id:g.id});
     if(!g.creatorId)W('R65','Gruppe uten creatorId (admin)',{id:g.id,name:g.name});
     if(g._members&&!Array.isArray(g._members))E('R68','_members er ikke array',{id:g.id,type:typeof g._members});
   });
-  // R69: stale knownGroups that were deleted
-  A.knownGroups.forEach((kg,kgid)=>{if(A.groups.find(g=>g.id===kgid))return;
-    if(!(A._publicGroups||[]).find(g=>g.id===kgid))W('R69','knownGroup ikke i publicGroups (mulig stale)',{id:kgid,name:kg.name});});
+  // R64/R69 removed — knownGroups cache eliminated, public groups come from _publicGroups via Firestore
   // ═══ R70-R74: OPENJOBS ═══
   A.openJobs.forEach((j,id)=>{
     if(A.myJobs.find(x=>x.id===id))E('R70','Jobb i BÅDE myJobs og openJobs',{jid:id});
@@ -396,8 +404,7 @@ function checkRules(){
   A.myJobs.forEach(j=>{
     if(j.status==='done'&&!j.helperId&&!j.isHelper)E('R138','Done uten helperId (migrering bør fjernet)',{jid:j.id,title:j.title});
   });
-  // R139: syncP guard — sjekk at ingen done+!helperId sendes (statisk guard i syncP, runtime-sjekk her)
-  A.myJobs.forEach(j=>{if(j.status==='done'&&!j.helperId&&(j.creatorId===A.myId))W('R139','Done-jobb uten helperId kan lekke via syncP',{jid:j.id});});
+  // R139 removed — syncP now only sends active statuses, done can never leak via BS
   // R140: declined i openJobs (skal tillate re-adding, men declined bør ikke ligge i openJobs)
   A.openJobs.forEach((j,id)=>{if(j.status==='declined')E('R140','Declined jobb i openJobs',{jid:id});});
   // R154: fsCleanupOrphanedJobs rører aldri myJobs — statisk sjekk, verifisert i kode
@@ -411,7 +418,6 @@ function addDM(pid,m){if(!A.dms[pid])A.dms[pid]=[];A.dms[pid].push(m);}
 function dn(id,fb){const c=A.contacts.find(x=>x.id===id);return c?c.alias||c.name:fb||(id||'?').substr(0,8);}
 function avgR(u){const r=(A.ratings[u]||[]).filter(x=>!x.nd);if(!r.length)return null;return Math.round(r.reduce((s,x)=>s+x.score,0)/r.length*10)/10;}
 function npC(u){return(A.ratings[u]||[]).filter(x=>x.nd).length;}
-function isGroup(id){return id&&id.startsWith('g');}
 function avHtml(id,name,size){const sz=size||40;const av=id===A.myId?ls('oAvatar'):(A.peers.get(id)?.avatar||null);
   if(av)return`<img src="${esc(av)}" style="width:${sz}px;height:${sz}px;border-radius:${sz/2}px;object-fit:cover;flex-shrink:0;border:2px solid var(--pbb)">`;
   return`<div class="av" style="width:${sz}px;height:${sz}px;border-radius:${sz/2}px;font-size:${Math.round(sz*.38)}px">${((name||'?')[0]||'?').toUpperCase()}</div>`;}
@@ -552,7 +558,7 @@ function initFB(){
   catch(e){console.warn('[FB]',e);}}
 function hasFS(){return!!fbDb;}
 function dropMissingGroup(gid,reason){if(D())console.log('[dropMissingGroup]',{gid,reason});
-  A.groups=A.groups.filter(g=>g.id!==gid);A.knownGroups.delete(gid);
+  A.groups=A.groups.filter(g=>g.id!==gid);
   A._publicGroups=(A._publicGroups||[]).filter(g=>g.id!==gid);
   A.openJobs.forEach((j,id)=>{if(j.groupId===gid)A.openJobs.delete(id);});
   var _rmJobs=0;A.myJobs=A.myJobs.filter(j=>{if(j.groupId===gid){delete A.jobChats[j.id];delete A._unreadJobs[j.id];_rmJobs++;return false;}return true;});
@@ -672,11 +678,11 @@ async function fsCleanupOrphanedJobs(){if(!hasFS())return;
       else{const d=doc.data();if(['done','cancelled','never_done'].includes(d.status)){A.openJobs.delete(jid);removed++;if(D())console.log('[fsCleanup] terminal',jid,d.status);}}
     }catch(e){}}if(removed>0){if(D())console.log('[fsCleanup] removed',removed);persist();sR();}}
 async function fsCleanupOrphanedGroups(){if(!hasFS()||!A.groups.length)return;
-  var removed=0;for(var i=A.groups.length-1;i>=0;i--){var g=A.groups[i];
-    try{var doc=await fbDb.collection('groups').doc(g.id).get();
-      if(!doc.exists){if(D())console.log('[fsCleanup] group deleted from Firestore',g.id,g.name);
-        A.groups.splice(i,1);A.openJobs.forEach((j,id)=>{if(j.groupId===g.id)A.openJobs.delete(id);});removed++;}
-    }catch(e){}}if(removed>0){persist();sR();}}
+  var gids=[...A.groups.map(g=>g.id)];var removed=0;
+  for(var gid of gids){try{var doc=await fbDb.collection('groups').doc(gid).get();
+      if(!doc.exists){if(D())console.log('[fsCleanup] group missing from Firestore',gid);
+        dropMissingGroup(gid,'fsCleanupOrphanedGroups');removed++;}
+    }catch(e){}}if(D()&&removed)console.log('[fsCleanupOrphanedGroups]',{checked:gids.length,removed});}
 async function fsSyncMyPosts(){if(!hasFS()||!A.myId)return;if(D())console.log('[-> fsSyncMyPosts]');
   try{const snap=await fbDb.collection('posts').where('creatorId','==',A.myId).get();
     const myLocalIds=new Set(A.myJobs.filter(j=>j.creatorId===A.myId).map(j=>j.id));
@@ -794,7 +800,7 @@ const TURN_USERNAME='32287330a6d0d137941c7b34';const TURN_CREDENTIAL='+Tk8ARkmnw
 function buildIceServers(){var ice=[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
   if(TURN_URLS.length)TURN_URLS.forEach(u=>ice.push({urls:u,username:TURN_USERNAME,credential:TURN_CREDENTIAL}));return ice;}
 const _gr=new Map();function chkRate(p){const n=now();const r=_gr.get(p)||{c:0,r:n+1e4};if(n>r.r){r.c=0;r.r=n+1e4;}_gr.set(p,r);return++r.c<=30;}
-function myPres(){return{id:A.myId,name:A.myName,bio:A.myBio,city:A.myCity,fylke:A.myFylke,by:A.myBy,avatar:ls('oAvatar')||'',pub:A.pubB64,epub:A.ecdhPubB64,esig:A.ecdhSig,done:A.completedCount,jobs:A.myJobs.length,ts:now(),pr:avgR(A.myId),cids:A.contacts.map(c=>c.id),gids:A.groups.map(g=>g.id)};}
+function myPres(){return{id:A.myId,name:A.myName,bio:A.myBio,fylke:A.myFylke,by:A.myBy,avatar:ls('oAvatar')||'',pub:A.pubB64,epub:A.ecdhPubB64,esig:A.ecdhSig,done:A.completedCount,ts:now(),pr:avgR(A.myId),cids:A.contacts.map(c=>c.id),gids:A.groups.map(g=>g.id)};}
 const RBK=[2e3,5e3,15e3,3e4,6e4];
 function initPeer(){A._pg=(A._pg||0)+1;const gen=A._pg;
   const cfg=A._useFallback?PEER_FALLBACK:PEER_CONFIG;
@@ -804,7 +810,7 @@ function initPeer(){A._pg=(A._pg||0)+1;const gen=A._pg;
   A.peer=new Peer(A.myId,pOpts);
   A.peer.on('open',()=>{if(gen!==A._pg)return;A.ready=true;clearTimeout(A._rt2);A._rt2=null;A._rs=0;sR();
     A.contacts.forEach(c=>tryC(c.id));flushQ();
-    clearInterval(A._hi);A._hi=setInterval(()=>{if(A.conns.size)bcast({t:'HI',...myPres()});A.contacts.forEach(c=>tryC(c.id));flushQ();},12e3);});
+    clearInterval(A._hi);A._hi=setInterval(()=>{if(A.conns.size)bcast({t:'HI',...myPres()});A.contacts.forEach(c=>tryC(c.id));flushQ();},25e3);});
   A.peer.on('error',e=>{if(gen!==A._pg)return;
     if(e.type==='unavailable-id'){A._ir=(A._ir||1)*2;setTimeout(()=>{try{A.peer.destroy();}catch(x){}initPeer();},Math.min(A._ir*1e3,6e4));return;}
     if(e.type==='peer-unavailable')return;A.ready=false;schRec();});
@@ -873,16 +879,10 @@ function offerRH(hid){const c=A.conns.get(hid);if(!c?.open||!A.contacts.find(x=>
       i.fwd.push(hid);}catch(e){}});}
 function syncP(id){const c=A.conns.get(id);if(!c?.open)return;
   const ls2=A._lastSync.get(id)||0;if(now()-ls2<3e4)return;A._lastSync.set(id,now());
-  // 1. Re-send active posts (open, accepting, active) — deduplicated per peer+job
-  if(!A._lastInvSent)A._lastInvSent=new Map();
-  A.myJobs.filter(j=>['open','accepting','active'].includes(j.status)&&j.creatorId===A.myId).forEach(j=>{
-    var ik=id+':'+j.id;if(A._lastInvSent.has(ik)&&now()-A._lastInvSent.get(ik)<30000)return;A._lastInvSent.set(ik,now());
-    try{c.send({t:'INV',job:{...stripJobForSend(j),fromContact:true}});}catch(e){}});
-  // 2. Send BS sync for shared jobs (status only — no event re-sends to avoid notify spam)
-  // Skip 'pending' — it's a local helper-only status that must not overwrite owner's 'open'
+  // INV resend removed — post discovery via doPost direct INV + HI first-contact INV + Firestore
+  // BS sync only for active statuses — terminal statuses handled by dedicated messages + Firestore
   A.myJobs.forEach(j=>{
-    if((j.creatorId===id||j.helperId===id)&&j.status!=='pending'&&!(j.status==='done'&&!j.helperId)&&
-      !(['done','cancelled','never_done','declined'].includes(j.status)&&j.ts&&now()-j.ts>864e5)){
+    if((j.creatorId===id||j.helperId===id)&&['open','accepting','active','pending_review'].includes(j.status)){
       if(D())console.log('[syncP] BS→',id,{jid:j.id,status:j.status,helperId:j.helperId,reason:j.creatorId===id?'creator':'helper'});
       try{c.send({t:'BS',jid:j.id,status:j.status,helperId:j.helperId,helperName:j.helperName});}catch(e){}}
   });flushQ();deliverR(id);}
@@ -891,23 +891,16 @@ function onData(from,m){try{if(!m||A.blocked.has(from))return;
   if(m.t==='PING')return;
   if(m.t==='HI'){const ex=A.peers.get(from)||{};
     const needsV=m.epub&&m.pub&&m.esig;
-    A.peers.set(from,{...ex,id:from,name:m.name,bio:m.bio,city:m.city,pub:m.pub,epub:needsV?ex.epub||null:m.epub,esig:m.esig,done:m.done||0,jobs:m.jobs||0,online:true,ts:m.ts,pr:m.pr,epubV:needsV?ex.epubV:undefined,gids:m.gids||[],fylke:m.fylke||'',by:m.by||'',avatar:m.avatar||ex.avatar||''});
+    A.peers.set(from,{...ex,id:from,name:m.name,bio:m.bio,pub:m.pub,epub:needsV?ex.epub||null:m.epub,esig:m.esig,done:m.done||0,online:true,ts:m.ts,pr:m.pr,epubV:needsV?ex.epubV:undefined,gids:m.gids||[],fylke:m.fylke||'',by:m.by||'',avatar:m.avatar||ex.avatar||''});
     if(needsV)verifyECDHSig(m.pub,m.epub,m.esig).then(ok=>{const p=A.peers.get(from);if(p){p.epubV=ok;if(ok)p.epub=m.epub;else{console.warn('[SEC] Peer',from,'ECDH sig INVALID');p.epub=null;}}});
     if(m.cids?.includes(A.myId)&&!A.contacts.find(c=>c.id===from)){
       if(A._removedContacts.has(from)){if(D())console.log('[HI] auto-add blocked — removedContacts',{from,name:m.name});}
       else{A.contacts.push({id:from,name:m.name||from.substr(0,12),alias:m.name||from.substr(0,12)});persist();}}
     if(m.name){const ec=A.contacts.find(c=>c.id===from);if(ec&&ec.name!==m.name&&(!ec.name||ec.name===from.substr(0,12)||ec.name.startsWith('o'))){ec.name=m.name;if(!ec.alias||ec.alias===ec.name||ec.alias.startsWith('o'))ec.alias=m.name;qPersist();}}
     if(!ex.name){try{A.conns.get(from)?.send({t:'HI',...myPres()});}catch(e){}
-      if(A.contacts.find(c=>c.id===from)){A.myJobs.filter(j=>j.status==='open'&&j.creatorId===A.myId).forEach(j=>{try{A.conns.get(from)?.send({t:'INV',job:{...stripJobForSend(j),fromContact:true}});}catch(e){}});}}
-    // Group sync: exchange posts+metadata for shared groups
-    if(m.gids?.length){const myGids=new Set(A.groups.map(g=>g.id));const shared=m.gids.filter(g=>myGids.has(g));
-      if(shared.length){const gSet=new Set(shared);const cc=A.conns.get(from);if(cc?.open){let gc=0;
-        A.myJobs.filter(j=>j.status==='open'&&j.creatorId===A.myId&&j.groupId&&gSet.has(j.groupId)).forEach(j=>{
-          gc++;try{cc.send({t:'INV',job:{...stripJobForSend(j),fromContact:true}});}catch(e){}});
-        // openJobs resend disabled — Firestore is backbone for group post discovery
-        if(D())console.log('[HI] group sync',{from,shared:shared.length,myJobsSent:gc});
-        shared.forEach(gid=>{const g=A.groups.find(x=>x.id===gid);
-          if(g?.name&&g.name!==gid)try{cc.send({t:'GM',gid,name:g.name,desc:g.desc||'',private:g.private||false});}catch(e){}});}}}
+      // HI first-contact INV removed — post discovery via doPost direct INV + Firestore only
+    }
+    // HI group sync removed — group post discovery and metadata via Firestore only
     flushQ();
     // Only render if something visible changed
     if(!ex.name)sR();
@@ -921,15 +914,10 @@ function onData(from,m){try{if(!m||A.blocked.has(from))return;
 function applyG(p){if(!p)return;if(p.t==='TAKE'||p.t==='CANCEL'){A.openJobs.delete(p.jobId);sR();}
   if(p.t==='RAT'&&p.uid&&p.ratings){if(!A.ratings[p.uid])A.ratings[p.uid]=[];
     p.ratings.forEach(r=>{if(!A.ratings[p.uid].find(x=>x.jobId===r.jobId&&x.ts===r.ts))A.ratings[p.uid].push(r);});persist();}
-  if(p.t==='POST'&&p.job?.id){if(!A.openJobs.has(p.job.id)&&!A.myJobs.find(j=>j.id===p.job.id)&&!A.blocked.has(p.job.creatorId)){
-    A.openJobs.set(p.job.id,{...p.job,isFromContact:false,isPublic:true});if(A.screen!=='feed')A.unreadFeed++;updateB();sR();}}
-  if(p.t==='GRP'&&p.group?.id&&/^g[a-zA-Z0-9]{1,20}$/.test(p.group.id)&&!p.group.private){A.knownGroups.set(p.group.id,p.group);}
-  if(p.t==='GDEL'&&p.gid){if(D())console.log('[GDEL] group deleted',p.gid);
-    A.groups=A.groups.filter(g=>g.id!==p.gid);A.knownGroups.delete(p.gid);
-    A._publicGroups=(A._publicGroups||[]).filter(g=>g.id!==p.gid);
-    A.openJobs.forEach((j,id)=>{if(j.groupId===p.gid)A.openJobs.delete(id);});
-    A.myJobs=A.myJobs.filter(j=>j.groupId!==p.gid||j.creatorId===A.myId);
-    if(A.screen!=='groups')A.unreadGroups++;updateB();persist();sR();}}
+  // POST gossip removed — public post discovery via direct INV + Firestore only
+  // GRP gossip removed — public group discovery via Firestore (fsLoadPublicGroups) only
+  // GDEL gossip removed — deleted groups detected via fsCleanupOrphanedGroups + dropMissingGroup
+}
 
 function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','JW'].includes(m.t))console.log('[MSG]',m.t,{from,jid:m.jid||m.job?.id});switch(m.t){
   case 'INV':{if(!m.job?.id||!/^[a-zA-Z0-9_-]{1,50}$/.test(m.job.id)||!m.job.creatorId||!/^[a-zA-Z0-9_-]{1,50}$/.test(m.job.creatorId))break;
@@ -998,14 +986,15 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     const origId=m.originalFrom;if(origId&&origId!==A.myId){const oc=A.conns.get(origId);if(oc?.open)try{oc.send({t:'RA',mid:m.mid,finalTo:m.finalTo,originalFrom:origId});}catch(e){}}
     persist();break;}
   case 'BS':{if(!m.jid)break;const j=A.myJobs.find(x=>x.id===m.jid);if(!j){if(D())console.log('[BS] job not found',m.jid);break;}
-    // Reject 'pending' via BS — it's a local helper status that must not propagate
     if(m.status==='pending'){if(D())console.log('[BS] REJECTED pending from',from,{jid:m.jid,myStatus:j.status});break;}
     const pri={open:0,accepting:1,active:2,pending_review:3,done:4,cancelled:5,never_done:5,declined:5};
     const myP=pri[j.status]||0;const theirP=pri[m.status]||0;
-    if(D())console.log('[BS] received',{from,jid:m.jid,myStatus:j.status,theirStatus:m.status,myP,theirP,willUpdate:theirP>myP});
-    if(theirP>myP){j.status=m.status;if(m.helperId&&!j.helperId){j.helperId=m.helperId;j.helperName=m.helperName;}
-      if(m.status==='done'){A.completedCount++;ss('oDone',A.completedCount);}
-      if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;persist();updateB();sR();}break;}
+    // No-op: same or lower priority and no missing helper info to fill
+    if(theirP<myP||(theirP===myP&&(j.helperId||!m.helperId))){if(D())console.log('[BS] no-op',{jid:m.jid,myStatus:j.status,theirStatus:m.status});break;}
+    if(D())console.log('[BS] applying',{from,jid:m.jid,from:j.status,to:m.status,fillHelper:!!(m.helperId&&!j.helperId)});
+    j.status=m.status;if(m.helperId&&!j.helperId){j.helperId=m.helperId;j.helperName=m.helperName;}
+    if(m.status==='done'){A.completedCount++;ss('oDone',A.completedCount);}
+    if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;persist();updateB();sR();break;}
   case 'MA':{if(!m._mid)break;
     // Find message in jobChats or dms and mark as delivered
     var found=false;Object.values(A.jobChats).forEach(msgs=>{if(found)return;const msg=msgs.find(x=>x._mid===m._mid);if(msg){msg._status='delivered';found=true;}});
@@ -1041,8 +1030,7 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
       if(res.missing){dropMissingGroup(m.gid,'GI accept — fsJoin missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
       if(D())console.log('[GI] joined',{gid:m.gid,name:data.name,creatorId:data.creatorId});
       notify('✅','Ble med i '+(data.name||m.gname||'gruppen')+'!');go('groupDetail',{gid:m.gid});});break;}
-  case 'GM':{if(!m.gid||!m.name)break;const g=A.groups.find(x=>x.id===m.gid);
-    if(g&&(!g.name||g.name===g.id||g.name==='Gruppe...')){g.name=m.name;if(m.desc)g.desc=m.desc;if(m.private!==undefined)g.private=m.private;persist();sR();}break;}
+  // GM handler removed — group metadata comes from Firestore, not P2P
   case 'UF':{if(D())console.log('[UF] received unfriend from',from);
     A._removedContacts.add(from);A.contacts=A.contacts.filter(c=>c.id!==from);persist();sR();break;}
 }}catch(e){console.error('[handleD]',m?.t,e);}}
@@ -1373,12 +1361,11 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
   // Route based on visibility (P2P for speed, Firestore for reliability)
   if(job.visibility==='direct'){(job.targetIds||[]).forEach(id=>send(id,{t:'INV',job:{...toSend,fromContact:true}}));}
   else if(job.visibility==='group'){const gid=job.groupId;A.contacts.forEach(c=>{const p=A.peers.get(c.id);if(!gid||p?.gids?.includes(gid))send(c.id,{t:'INV',job:{...toSend,fromContact:true}});});}
-  else if(job.visibility==='public'){A.contacts.forEach(c=>send(c.id,{t:'INV',job:{...toSend,fromContact:true}}));
-    gossip({t:'POST',job:{...toSend,fromContact:false}});}
+  else if(job.visibility==='public'){A.contacts.forEach(c=>send(c.id,{t:'INV',job:{...toSend,fromContact:true}}));}
   else{A.contacts.forEach(c=>send(c.id,{t:'INV',job:{...toSend,fromContact:true}}));}
   // All posts go to Firestore (backbone for offline delivery)
   await fsWritePost(job);
-  if(D())console.log('[POST] routing',{vis:job.visibility,fsWrite:true,gossip:job.visibility==='public'});
+  if(D())console.log('[POST] routing',{vis:job.visibility,fsWrite:true});
   if(D())console.log('[← POST] done',{jid:jobId});
   addAct('Nytt: '+t.substr(0,30),'📋');persist();A.nb={};go(job.visibility==='direct'?'chatHub':'mine');
   }finally{window._postBusy=false;}};
@@ -1767,7 +1754,7 @@ function vRep(){const u=A.params.uid;const un=A.params.name||u?.substr(0,12);con
   ${np.length?`<div style="background:var(--rb);border:1px solid var(--rbb);border-radius:8px;padding:6px 12px;font-size:12px;color:var(--rd);font-weight:700;display:inline-block;margin-top:8px">⚠️ ${np.length}× aldri gjort opp</div>`:''}
   ${pr!==null?`<div style="margin-top:8px"><span class="badge by1">⭐ ${pr}</span></div>`:''}
   <div class="psts"><div class="ps"><div class="psn" style="color:var(--g2)">${isMe?A.completedCount:(peer.done||0)}</div><div class="psl">Fullført</div></div>
-  <div class="ps"><div class="psn">${isMe?countActivePosts():(peer.jobs||0)}</div><div class="psl">Innlegg</div></div>
+  <div class="ps"><div class="psn">${isMe?countActivePosts():'—'}</div><div class="psl">Innlegg</div></div>
   <div class="ps"><div class="psn">${allR.length}</div><div class="psl">Vurderinger</div></div></div></div>
   ${!isMe?`<button class="btn bp" style="margin-bottom:8px" onclick="go('dm',{peerId:'${escA(u)}'})">💬 Send melding</button>`:''}
   ${gR.length?`<span class="slbl">⭐ Vurderinger (${gR.length})</span>${gR.map(r=>`<div class="cd" style="margin-bottom:6px"><div style="color:var(--yw);margin-bottom:4px">${starStr(r.score)}</div>
@@ -1900,10 +1887,11 @@ window.searchGroups=async q=>{const el=$('grp-search-results');if(!el)return;q=(
       ${already?'<span class="badge bg1" style="font-size:11px">Medlem</span>':`<button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="joinKnownGroup('${escA(gid)}')">Bli med</button>`}</div>`;}).join('');
   }catch(e){console.warn('[searchGroups]',e);el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:8px">Søk feilet.</div>';}};
 window.deleteGroup=(gid)=>{if(D())console.log('[deleteGroup]',gid);
-  A.groups=A.groups.filter(x=>x.id!==gid);A.knownGroups.delete(gid);
+  A.groups=A.groups.filter(x=>x.id!==gid);
   A.openJobs.forEach((j,id)=>{if(j.groupId===gid)A.openJobs.delete(id);});
   A.myJobs=A.myJobs.filter(j=>j.groupId!==gid);
-  fsDeleteGroup(gid);gossip({t:'GDEL',gid});
+  fsDeleteGroup(gid);
+  // GDEL gossip removed — other peers detect deletion via fsCleanupOrphanedGroups + dropMissingGroup
   persist();bcast({t:'HI',...myPres()});notify('🗑️','Gruppen er slettet');go('groups');};
 window.doCreateGroup=async()=>{if(D())console.log('[-> doCreateGroup]');const n=$('gn')?.value?.trim();if(!n){notify('⚠️','Skriv et gruppenavn');return;}
   const priv=A.nb._gPriv!==false;
@@ -1915,7 +1903,7 @@ window.doCreateGroup=async()=>{if(D())console.log('[-> doCreateGroup]');const n=
   if(A.nb._gImg&&hasFB()){try{imageUrl=await fbUpload(A.nb._gImg,'groups/'+id+'.webp');}catch(e){if(D())console.log('[doCreateGroup] img upload err',e.message);}}
   A.groups.push({id,name:n,desc,creatorId:A.myId,createdTs:now(),isGroup:true,private:priv,imageUrl,fylke});
   persist();bcast({t:'HI',...myPres()});
-  if(!priv)gossip({t:'GRP',group:{id,name:n,desc,fylke,imageUrl,memberCount:1,private:false}});
+  // GRP gossip removed — public group discovery via Firestore (fsLoadPublicGroups) only
   fsWriteGroup(id,{name:n,nameLower:n.toLowerCase(),desc,private:priv,fylke,imageUrl:imageUrl||null,creatorId:A.myId,createdAt:Date.now(),members:[A.myId]});
   A.nb={};
   if(priv){go('groupCreated',{gid:id});}else{notify('✅','Gruppe opprettet!');go('groupDetail',{gid:id});}};
@@ -1936,17 +1924,10 @@ function vGroups(){
       :`<div style="width:48px;height:48px;border-radius:50%;background:#F5F3FF;border:2px solid #DDD6FE;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">${g.private?'🔒':'🔓'}</div>`}
       <div style="flex:1"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:15px;font-weight:700">${esc(g.name||g.id)}</span><span style="font-size:12px">${g.private?'🔒':'🌐'}</span>${itemBadge(_gu)}</div>
       <div style="font-size:12px;color:var(--t3)">${mc} medlemmer · ${gp} innlegg</div></div></div></div>`;};
-    const myGids=new Set(A.groups.map(g=>g.id));const suggested=[...A.knownGroups.values()].filter(g=>!myGids.has(g.id)&&!g.private).slice(0,5);
-    const explore=(A._publicGroups||[]).filter(g=>!myGids.has(g.id)&&!suggested.find(s=>s.id===g.id));
+    const myGids=new Set(A.groups.map(g=>g.id));
+    const explore=(A._publicGroups||[]).filter(g=>!myGids.has(g.id));
     return(priv.length?`<span class="slbl">🔒 PRIVATE</span>${priv.map(gc).join('')}`:'')
       +(pub.length?`<span class="slbl" style="margin-top:14px;display:block">🔓 ÅPNE</span>${pub.map(gc).join('')}`:'')
-      +(suggested.length?`<span class="slbl" style="margin-top:14px;display:block">💡 FORESLÅTTE</span>${suggested.map(sg=>
-        `<div class="cd" style="margin-bottom:8px;padding:10px 14px;display:flex;align-items:center;gap:10px">
-        ${sg.imageUrl?`<img src="${esc(sg.imageUrl)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:1px solid var(--s3);flex-shrink:0">`
-        :`<div style="width:36px;height:36px;border-radius:50%;background:#F5F3FF;border:1px solid #DDD6FE;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">🔓</div>`}
-        <div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(sg.name)}</div>
-        <div style="font-size:11px;color:var(--t3)">${esc(sg.memberCount||'?')} medlemmer${sg.fylke?' · '+esc(FYLKER.find(f=>f.id===sg.fylke)?.name||''):''}</div></div>
-        <button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="joinKnownGroup('${escA(sg.id)}')">Bli med</button></div>`).join('')}`:'')
       +(explore.length?`<span class="slbl" style="margin-top:18px;display:block">🌍 UTFORSK GRUPPER</span>${explore.slice(0,10).map(eg=>
         `<div class="cd" style="margin-bottom:8px;padding:10px 14px;display:flex;align-items:center;gap:10px">
         ${eg.imageUrl?`<img src="${esc(eg.imageUrl)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:1px solid var(--s3);flex-shrink:0">`
@@ -2170,7 +2151,6 @@ async function boot(){
     A.openJobs.forEach((j,id)=>{if(j.expiresAt&&j.expiresAt!==0&&j.expiresAt<now())A.openJobs.delete(id);});
     A.relayQ=A.relayQ.filter(r=>r.expiresAt>now());
     A.tempConns.forEach((tc,jid)=>{if(now()-tc.ts>30*864e5)A.tempConns.delete(jid);});
-    if(A._lastInvSent){const cut=now()-300000;A._lastInvSent.forEach((v,k)=>{if(v<cut)A._lastInvSent.delete(k);});}
     await persist();sR();
   },3e5);
   // Periodic Firestore sync (every 5 min, tiered frequency)
@@ -2182,17 +2162,18 @@ async function boot(){
     fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
     fsCheckInterests();
     fsCheckJobStatus();
-    // EVERY 2nd round: job chats + public groups + group posts
+    // EVERY 2nd round: job chats + public groups + group posts + group orphan cleanup
     if(r%2===0){
       fsCheckJobChats();
       fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();}).catch(()=>{});
+      fsCleanupOrphanedGroups();
       if(A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
         .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){if(A.screen!=='groups')A.unreadGroups+=added;if(!(A.screen==='groupDetail'&&A.params.gid===g.id))A._unreadGroupPosts[g.id]=(A._unreadGroupPosts[g.id]||0)+added;updateB();persist();sR();}}).catch(()=>{});});
     }
     // EVERY 3rd round: master-slave sync
     if(r%3===0)fsSyncMyPosts();
-    // EVERY 4th round: orphan cleanup
-    if(r%4===3){fsCleanupOrphanedJobs();fsCleanupOrphanedGroups();}
+    // EVERY 4th round: orphan job cleanup
+    if(r%4===3)fsCleanupOrphanedJobs();
   },3e5);
   // Foreground recovery
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&A.myName){
