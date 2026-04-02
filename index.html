@@ -138,6 +138,7 @@ input,textarea,select{font-family:inherit;outline:none;-webkit-appearance:none;b
 // - knownGroups cache is removed — public group discovery/UI uses only _publicGroups from Firestore
 // - syncP/BS must only sync active statuses (open/accepting/active/pending_review), never terminal
 // - BS handler must no-op on same/lower priority status to avoid redundant persist/render on reconnect
+// - Hotspot coords (_cx/_cy) are draft-only — published image-items use flattened baked-in markers, no coords needed
 // ═══════════════════════════════════════
 
 const V='1.0.0';
@@ -318,7 +319,7 @@ function checkRules(){
     j.items.forEach((it,i)=>{
       if(!['list','image'].includes(it.mode||'list'))E('R40','Ugyldig item mode',{jid:j.id,idx:i,mode:it.mode});
       if(!['open','taken','done'].includes(it.status||'open'))E('R41','Ugyldig item status',{jid:j.id,idx:i,status:it.status});
-      if(it.mode==='image'&&(it._cx==null||it._cy==null))W('R43','Image-item uten koordinater',{jid:j.id,idx:i});
+      // R43 removed — coords are draft-only; published image-items use flattened baked-in markers
       if(it.audioUrl&&(!it.duration||it.duration<=0))W('R44','Audio uten duration',{jid:j.id,idx:i});
     });
   });
