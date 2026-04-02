@@ -555,6 +555,8 @@ function dropMissingGroup(gid,reason){if(D())console.log('[dropMissingGroup]',{g
   A.groups=A.groups.filter(g=>g.id!==gid);A.knownGroups.delete(gid);
   A._publicGroups=(A._publicGroups||[]).filter(g=>g.id!==gid);
   A.openJobs.forEach((j,id)=>{if(j.groupId===gid)A.openJobs.delete(id);});
+  var _rmJobs=0;A.myJobs=A.myJobs.filter(j=>{if(j.groupId===gid){delete A.jobChats[j.id];delete A._unreadJobs[j.id];_rmJobs++;return false;}return true;});
+  if(D()&&_rmJobs)console.log('[dropMissingGroup] removed myJobs',{gid,count:_rmJobs});
   persist();sR();}
 async function fsWriteGroup(gid,data){if(D())console.log('[-> fsWriteGroup]',{gid});if(!hasFS())return false;try{await fbDb.collection('groups').doc(gid).set(data,{merge:true});if(D())console.log('[<- fsWriteGroup] success',gid);return true;}catch(e){console.warn('[FS] write',e);return false;}}
 async function fsReadGroup(gid){if(!hasFS())return null;try{const doc=await fbDb.collection('groups').doc(gid).get();return doc.exists?doc.data():null;}catch(e){console.warn('[FS] read',e);return null;}}
@@ -1028,12 +1030,17 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(D())console.log('[PU] received',{jid:m.jid,idx:m.idx,status:m.status});persist();sR();break;}
   case 'GI':{if(!m.gid||!m.gname)break;if(A.groups.find(g=>g.id===m.gid))break;
     if(A.screen!=='groups')A.unreadGroups++;A._unreadGroupPosts[m.gid]=(A._unreadGroupPosts[m.gid]||0)+1;updateB();
-    showConfirm('🏘️ Gruppeinvitasjon',(m.fromName||'Noen')+' inviterer deg til gruppen "'+(m.gname||'')+'"','Bli med',()=>{
+    showConfirm('🏘️ Gruppeinvitasjon',(m.fromName||'Noen')+' inviterer deg til gruppen "'+(m.gname||'')+'"','Bli med',async()=>{
       if(A.groups.find(g=>g.id===m.gid)){notify('ℹ️','Du er allerede med i denne gruppen');return;}
-      A.groups.push({id:m.gid,name:m.gname,desc:m.gdesc||'',creatorId:'',createdTs:now(),isGroup:true,private:m.gprivate||false});
-      persist();bcast({t:'HI',...myPres()});fsJoinGroup(m.gid,A.myId);
-      fsReadGroup(m.gid).then(data=>{if(data){var g=A.groups.find(x=>x.id===m.gid);if(g){if(data.name)g.name=data.name;if(data.creatorId)g.creatorId=data.creatorId;if(data.imageUrl)g.imageUrl=data.imageUrl;if(data.desc)g.desc=data.desc;if(data.members)g._members=data.members;}persist();sR();}});
-      notify('✅','Ble med i '+(m.gname||'gruppen')+'!');go('groupDetail',{gid:m.gid});});break;}
+      var data=await fsReadGroup(m.gid);
+      if(!data){if(D())console.log('[GI] FS doc missing',m.gid);notify('⚠️','Gruppen finnes ikke lenger');return;}
+      A.groups.push({id:m.gid,name:data.name||m.gname,desc:data.desc||m.gdesc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
+        private:data.private!=null?data.private:(m.gprivate||false),_members:data.members||[],imageUrl:data.imageUrl||null});
+      persist();bcast({t:'HI',...myPres()});
+      var res=await fsJoinGroup(m.gid,A.myId);
+      if(res.missing){dropMissingGroup(m.gid,'GI accept — fsJoin missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
+      if(D())console.log('[GI] joined',{gid:m.gid,name:data.name,creatorId:data.creatorId});
+      notify('✅','Ble med i '+(data.name||m.gname||'gruppen')+'!');go('groupDetail',{gid:m.gid});});break;}
   case 'GM':{if(!m.gid||!m.name)break;const g=A.groups.find(x=>x.id===m.gid);
     if(g&&(!g.name||g.name===g.id||g.name==='Gruppe...')){g.name=m.name;if(m.desc)g.desc=m.desc;if(m.private!==undefined)g.private=m.private;persist();sR();}break;}
   case 'UF':{if(D())console.log('[UF] received unfriend from',from);
@@ -1733,17 +1740,18 @@ window.searchGroupInvite=(q,gid,gname)=>{clearTimeout(_grpSearchTimer);var el=$(
         ${isMember?'<span style="font-size:11px;color:var(--g2)">✓ Medlem</span>'
           :`<button class="btn bp bsm" style="padding:4px 10px;font-size:11px" onclick="if(!A.contacts.find(c=>c.id==='${escA(u.id)}'))addF('${escA(u.id)}','${escA(u.name)}');inviteToGroup('${escA(gid)}','${escA(gname)}','${escA(u.id)}');var s=$('grp-inv-search');if(s)s.value='';var r=$('grp-inv-results');if(r)r.innerHTML='';">Inviter</button>`}
         </div>`;}).join('');},300);};
-window.connectById=()=>{const inp=$('add-id');if(!inp)return;const id=inp.value.trim();if(D())console.log('[connectById]',{id});
+window.connectById=async()=>{const inp=$('add-id');if(!inp)return;const id=inp.value.trim();if(D())console.log('[connectById]',{id});
   if(id.startsWith('g')){if(!/^g[a-zA-Z0-9]{1,20}$/.test(id)){notify('⚠️','Ugyldig gruppe-ID');return;}
     if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
-    A.groups.push({id,name:'Gruppe...',desc:'',creatorId:'',createdTs:now(),isGroup:true,private:true});
-    persist();bcast({t:'HI',...myPres()});notify('✅','Ble med i gruppe!');inp.value='';render();
-    fsReadGroup(id).then(data=>{if(data){const g=A.groups.find(x=>x.id===id);if(g){
-      if(data.name)g.name=data.name;if(data.desc)g.desc=data.desc;if(data.private!==undefined)g.private=data.private;
-      if(data.creatorId)g.creatorId=data.creatorId;if(data.members)g._members=data.members;if(data.imageUrl)g.imageUrl=data.imageUrl;
-      if(D())console.log('[joinKnownGroup] hydrated',{id,creatorId:g.creatorId,members:g._members?.length,hasImage:!!g.imageUrl});
-      persist();sR();}}});
-    fsJoinGroup(id,A.myId);return;}
+    var data=await fsReadGroup(id);
+    if(!data){if(D())console.log('[connectById] group doc missing',id);notify('⚠️','Gruppen finnes ikke');return;}
+    A.groups.push({id,name:data.name||'Gruppe...',desc:data.desc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
+      private:data.private||false,_members:data.members||[],imageUrl:data.imageUrl||null});
+    persist();bcast({t:'HI',...myPres()});inp.value='';
+    var res=await fsJoinGroup(id,A.myId);
+    if(res.missing){dropMissingGroup(id,'connectById — fsJoin missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
+    if(D())console.log('[connectById] group joined',{id,name:data.name});
+    notify('✅','Ble med i '+(data.name||'gruppen')+'!');render();return;}
   if(!id||!id.startsWith('o')||id.length<8){notify('⚠️','Ugyldig ID');return;}if(id===A.myId)return;tryC(id);
   if(!A.contacts.find(c=>c.id===id))A.contacts.push({id,name:id.substr(0,12),alias:id.substr(0,12)});
   persist();notify('✅','Koblet til!');inp.value='';render();};
@@ -1862,20 +1870,23 @@ window.joinKnownGroup=async id=>{if(D())console.log('[joinKnownGroup]',{id});if(
     dropMissingGroup(id,'joinKnownGroup — doc missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
   A.groups.push({id,name:data.name||'Gruppe...',desc:data.desc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
     private:data.private||false,_members:data.members||[],imageUrl:data.imageUrl||null});
-  persist();bcast({t:'HI',...myPres()});fsJoinGroup(id,A.myId);
+  persist();bcast({t:'HI',...myPres()});
+  var res=await fsJoinGroup(id,A.myId);
+  if(res.missing){if(D())console.log('[joinKnownGroup] fsJoin missing',id);dropMissingGroup(id,'joinKnownGroup — fsJoin missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
   if(D())console.log('[joinKnownGroup] joined',{id,name:data.name,creatorId:data.creatorId,members:data.members?.length});
   notify('✅','Ble med i '+(data.name||'gruppen')+'!');go('groupDetail',{gid:id});};
-window.joinGroup=()=>{const inp=$('add-gid');if(!inp)return;const id=inp.value.trim();if(D())console.log('[joinGroup]',{id});
+window.joinGroup=async()=>{const inp=$('add-gid');if(!inp)return;const id=inp.value.trim();if(D())console.log('[joinGroup]',{id});
   if(!id||!/^g[a-zA-Z0-9]{1,20}$/.test(id)){notify('⚠️','Ugyldig gruppe-ID (starter med g)');return;}
   if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
-  A.groups.push({id,name:'Gruppe...',desc:'',creatorId:'',createdTs:now(),isGroup:true,private:true});
-  persist();bcast({t:'HI',...myPres()});notify('✅','Ble med i gruppe!');inp.value='';render();
-  fsReadGroup(id).then(data=>{if(data){const g=A.groups.find(x=>x.id===id);if(g){
-    if(data.name)g.name=data.name;if(data.desc)g.desc=data.desc;if(data.private!==undefined)g.private=data.private;
-    if(data.creatorId)g.creatorId=data.creatorId;if(data.members)g._members=data.members;if(data.imageUrl)g.imageUrl=data.imageUrl;
-    if(D())console.log('[joinGroup] hydrated',{id,creatorId:g.creatorId,members:g._members?.length,hasImage:!!g.imageUrl});
-    persist();sR();}}});
-  fsJoinGroup(id,A.myId);};
+  var data=await fsReadGroup(id);
+  if(!data){if(D())console.log('[joinGroup] FS doc missing',id);notify('⚠️','Gruppen finnes ikke');return;}
+  A.groups.push({id,name:data.name||'Gruppe...',desc:data.desc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
+    private:data.private||false,_members:data.members||[],imageUrl:data.imageUrl||null});
+  persist();bcast({t:'HI',...myPres()});inp.value='';
+  var res=await fsJoinGroup(id,A.myId);
+  if(res.missing){dropMissingGroup(id,'joinGroup — fsJoin missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
+  if(D())console.log('[joinGroup] joined',{id,name:data.name,creatorId:data.creatorId});
+  notify('✅','Ble med i '+(data.name||'gruppen')+'!');render();};
 window.searchGroups=async q=>{const el=$('grp-search-results');if(!el)return;q=(q||'').trim().toLowerCase();
   if(q.length<2){el.innerHTML='';return;}if(!hasFS()){el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:8px">Firestore ikke tilgjengelig.</div>';return;}
   try{const snap=await fbDb.collection('groups').where('nameLower','>=',q).where('nameLower','<=',q+'\uf8ff').where('private','==',false).limit(10).get();
