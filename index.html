@@ -194,7 +194,7 @@ const A={myId:'',myName:'',myBio:'',myCity:'',myFylke:'',myBy:'',pubB64:'',privK
   contacts:[],blocked:new Set(),ratings:{},activity:[],offlineQ:[],relayQ:[],completedCount:0,
   screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,unreadActivity:0,unreadGroups:0,unreadFeed:0,_seenMids:new Set(),_seenAcks:new Set(),groups:[],
   feedFilter:{type:'',locs:[]},tempConns:new Map(),_publicGroups:[],_contactQ:'',_editGroup:false,_pendingGroupImg:null,
-  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{}};
+  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{}};
 
 async function loadState(){
   if(D())console.log('[-> loadState]');
@@ -274,12 +274,12 @@ function checkRules(){
   const validS=['open','accepting','pending','active','pending_review','done','cancelled','declined','never_done'];
   // ═══ R1-R19: JOBB-STATUS ═══
   A.myJobs.forEach(j=>{
-    if(j.status==='active'&&!j.helperId)E('R1','Aktiv jobb uten helperId',{jid:j.id,title:j.title});
-    if(j.status==='active'&&!j.helperName)E('R2','Aktiv jobb uten helperName',{jid:j.id});
+    if(j.status==='active'&&!j.helperId&&!(j.items?.some(it=>it.assignedTo)))E('R1','Aktiv jobb uten helperId',{jid:j.id,title:j.title});
+    if(j.status==='active'&&!j.helperName&&!(j.items?.some(it=>it.assignedTo)))E('R2','Aktiv jobb uten helperName',{jid:j.id});
     if(j.status==='open'&&j.helperId)E('R3','Open jobb med helperId',{jid:j.id,helperId:j.helperId});
     if(j.status==='accepting'&&(!j.interests||!j.interests.length))W('R4','Accepting uten interests',{jid:j.id});
-    if(j.status==='pending_review'&&!j.helperId)E('R5','Pending_review uten helperId',{jid:j.id});
-    if(j.status==='done'&&!j.helperId)E('R6','Done uten helperId',{jid:j.id});
+    if(j.status==='pending_review'&&!j.helperId&&!(j.items?.some(it=>it.assignedTo)))E('R5','Pending_review uten helperId',{jid:j.id});
+    if(j.status==='done'&&!j.helperId&&!(j.items?.some(it=>it.assignedTo)))E('R6','Done uten helperId',{jid:j.id});
     if(j.status==='pending'&&!j.isHelper)E('R7','Pending uten isHelper',{jid:j.id});
     if(j.status==='pending'&&j.creatorId===A.myId)E('R8','Eier har pending status (BS-bug)',{jid:j.id,title:j.title});
     if(!validS.includes(j.status))E('R9','Ugyldig status',{jid:j.id,status:j.status});
@@ -403,7 +403,7 @@ function checkRules(){
   A.offlineQ.forEach(i=>{if(i.msg?.t==='JR'&&n-i.ts>60000&&A.conns.get(i.to)?.open)W('R136','Gammel JR i offlineQ men conn åpen',{to:i.to,age:Math.round((n-i.ts)/1000)+'s'});});
   // R138-R140: nye kjente bugs
   A.myJobs.forEach(j=>{
-    if(j.status==='done'&&!j.helperId&&!j.isHelper)E('R138','Done uten helperId (migrering bør fjernet)',{jid:j.id,title:j.title});
+    if(j.status==='done'&&!j.helperId&&!j.isHelper&&!(j.items?.some(it=>it.assignedTo)))E('R138','Done uten helperId (migrering bør fjernet)',{jid:j.id,title:j.title});
   });
   // R139 removed — syncP now only sends active statuses, done can never leak via BS
   // R140: declined i openJobs (skal tillate re-adding, men declined bør ikke ligge i openJobs)
@@ -472,11 +472,11 @@ window.stopRec=()=>{if(!_recorder||_recorder.state!=='recording')return;_recorde
 window.reRecord=idx=>{if(!A.nb.items?.[idx])return;A.nb.items[idx].audioData=null;A.nb.items[idx].audioUrl=null;A.nb.items[idx].duration=0;render();};
 window.removeAudio=idx=>{if(!A.nb.items?.[idx])return;A.nb.items[idx].audioData=null;A.nb.items[idx].audioUrl=null;A.nb.items[idx].duration=0;render();};
 window.addItem=(mode)=>{if(!A.nb.items)A.nb.items=[];if(A.nb.items.length>=6)return;
-  A.nb.items.push({text:'',audioData:null,audioUrl:null,duration:0,mode:mode||'list',_cx:null,_cy:null,status:'open'});render();};
+  A.nb.items.push({text:'',audioData:null,audioUrl:null,duration:0,mode:mode||'list',_cx:null,_cy:null,status:'open',assignedTo:null,assignedName:null,assignedStatus:null});render();};
 window.startHotspot=()=>{if(!A.nb.imageData){notify('⚠️','Last opp bilde først');return;}A.nb._hotspotMode=true;render();};
 window.canvasClick=e=>{var c=e.target;var r=c.getBoundingClientRect();var cx=(e.clientX-r.left)/r.width;var cy=(e.clientY-r.top)/r.height;
   if(A.nb._hotspotMode){if(!A.nb.items)A.nb.items=[];if(A.nb.items.length>=6){notify('⚠️','Maks 6 punkter');A.nb._hotspotMode=false;render();return;}
-    A.nb.items.push({text:'',audioData:null,audioUrl:null,duration:0,mode:'image',_cx:cx,_cy:cy,status:'open'});A.nb._hotspotMode=false;render();return;}
+    A.nb.items.push({text:'',audioData:null,audioUrl:null,duration:0,mode:'image',_cx:cx,_cy:cy,status:'open',assignedTo:null,assignedName:null,assignedStatus:null});A.nb._hotspotMode=false;render();return;}
   // Check if clicking near existing image point
   var best=-1,bestD=0.05;(A.nb.items||[]).forEach((it,i)=>{if(it.mode==='image'&&it._cx!=null){var d=Math.hypot(cx-it._cx,cy-it._cy);if(d<bestD){bestD=d;best=i;}}});
   if(best>=0){A.nb._selPt=best;render();}};
@@ -494,15 +494,52 @@ window.playLocal=idx=>{const it=A.nb.items?.[idx];if(!it)return;const url=it.aud
   if(_audio){_audio.pause();_audio=null;}
   _audio=new Audio(url);_audio.play().catch(()=>notify('⚠️','Kunne ikke spille av lyd'));};
 window.removeItem=idx=>{if(!A.nb.items)return;A.nb.items.splice(idx,1);A.nb._selPt=null;A.nb._movePt=undefined;render();};
+window.showAssignPicker=idx=>{A.nb._assignIdx=idx;
+  var bg=document.createElement('div');bg.className='modal-bg';bg.id='assign-modal';
+  var candidates=A.contacts.slice();
+  if(A.nb.vis==='group'&&A.nb.groupId){var g=A.groups.find(x=>x.id===A.nb.groupId);var mSet=new Set((g?._members||[]));
+    candidates=candidates.filter(c=>mSet.has(c.id));}
+  var otherAssigned=new Set((A.nb.items||[]).filter((_,i)=>i!==idx&&_?.assignedTo).map(x=>x.assignedTo));
+  bg.innerHTML=`<div class="modal" style="max-height:70vh;overflow-y:auto">
+    <div style="font-size:16px;font-weight:800;margin-bottom:12px">Hvem skal gjøre punkt ${idx+1}?</div>
+    <div style="cursor:pointer;padding:12px 0;border-bottom:1px solid var(--s2);display:flex;align-items:center;gap:10px" onclick="clearAssign(${idx})">
+      <span style="font-size:20px">🔓</span><span style="font-size:14px;font-weight:600">Åpent for alle</span></div>
+    ${candidates.map(c=>{var peer=A.peers.get(c.id);var nm=c.alias||c.name;var pr=avgR(c.id);var alreadyOn=otherAssigned.has(c.id);
+      return`<div style="cursor:pointer;padding:12px 0;border-bottom:1px solid var(--s2);display:flex;align-items:center;gap:10px" onclick="assignItem(${idx},'${escA(c.id)}','${escA(nm)}')">
+      ${avHtml(c.id,nm,36)}<div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(nm)}</div>
+      <div style="font-size:11px;color:var(--t3)">${pr?'⭐ '+pr:''}${alreadyOn?' · allerede valgt på annet punkt':''}</div></div></div>`;}).join('')}
+    ${!candidates.length?'<div style="padding:16px;color:var(--t3);font-size:13px;text-align:center">Ingen tilgjengelige personer</div>':''}
+    <button class="btn bs" style="margin-top:12px" onclick="document.getElementById(\'assign-modal\')?.remove()">Avbryt</button></div>`;
+  document.body.appendChild(bg);bg.onclick=e=>{if(e.target===bg)bg.remove();};};
+window.assignItem=(idx,pid,name)=>{if(!A.nb.items?.[idx])return;A.nb.items[idx].assignedTo=pid;A.nb.items[idx].assignedName=name;A.nb.items[idx].assignedStatus=null;
+  document.getElementById('assign-modal')?.remove();render();};
+window.clearAssign=idx=>{if(!A.nb.items?.[idx])return;A.nb.items[idx].assignedTo=null;A.nb.items[idx].assignedName=null;A.nb.items[idx].assignedStatus=null;
+  document.getElementById('assign-modal')?.remove();render();};
+function jobParticipants(j){var ids=new Set();if(j.helperId)ids.add(j.helperId);if(j.creatorId)ids.add(j.creatorId);
+  (j.items||[]).forEach(it=>{if(it.assignedTo)ids.add(it.assignedTo);});ids.delete(A.myId);return[...ids];}
+function canTogglePoint(j,idx){var it=j?.items?.[idx];if(!j||!it)return false;
+  if(j.creatorId===A.myId)return false;if(it.assignedTo!==A.myId)return false;
+  var s=it.status||'open';return s==='taken'||s==='done';}
 window.updatePointStatus=function(jobId,idx){if(D())console.log('[updatePointStatus]',{jobId,idx});
-  var j=A.myJobs.find(j=>j.id===jobId)||A.openJobs.get(jobId);
-  if(!j||!j.isHelper)return;
-  var targets=[A.myJobs.find(j=>j.id===jobId)];var oj=A.openJobs.get(jobId);if(oj)targets.push(oj);
-  targets.forEach(j=>{if(j&&j.items&&j.items[idx]){var s=j.items[idx].status||'open';var ns=s==='done'?'open':'done';if(D())console.log('[updatePointStatus]',{idx,from:s,to:ns});j.items[idx].status=ns;}});
-  // Sync point status to owner
-  if(j.creatorId&&j.creatorId!==A.myId){var it=j.items?.[idx];
-    if(it){send(j.creatorId,{t:'PU',jid:jobId,idx:idx,status:it.status||'open'});if(D())console.log('[PU] sent',{jid:jobId,idx,status:it.status});
-      if(it.status==='done')send(j.creatorId,{t:'BM',jid:jobId,name:A.myName,text:'Punkt "'+(it.text||'#'+(idx+1))+'" er fullført!',ts:now()});}}
+  var j=A.myJobs.find(x=>x.id===jobId);if(!j)return;
+  // Point-mode: only assignedTo can toggle taken↔done
+  if(j.items?.[idx]?.assignedTo){
+    if(!canTogglePoint(j,idx)){if(D())console.log('[updatePointStatus] blocked — not assignedTo',{jobId,idx});return;}
+    var it=j.items[idx];var s=it.status||'open';var ns=s==='done'?'taken':'done';
+    if(D())console.log('[updatePointStatus] point-mode',{idx,from:s,to:ns});
+    it.status=ns;fsUpdatePostItems(jobId,j.items);
+    // Send PU to all relevant participants
+    var puTargets=new Set();if(j.creatorId&&j.creatorId!==A.myId)puTargets.add(j.creatorId);
+    (j.items||[]).forEach(x=>{if(x.assignedTo&&x.assignedTo!==A.myId)puTargets.add(x.assignedTo);});
+    puTargets.forEach(pid=>send(pid,{t:'PU',jid:jobId,idx,status:ns}));
+    if(ns==='done'&&j.creatorId&&j.creatorId!==A.myId)send(j.creatorId,{t:'BM',jid:jobId,name:A.myName,text:'Punkt "'+(it.text||'#'+(idx+1))+'" er fullført!',ts:now()});
+    persist();render();return;}
+  // Legacy mode: old helper toggle open↔done (no assignedTo)
+  if(!j.isHelper)return;
+  var it2=j.items?.[idx];if(!it2)return;var s2=it2.status||'open';var ns2=s2==='done'?'open':'done';
+  if(D())console.log('[updatePointStatus] legacy',{idx,from:s2,to:ns2});it2.status=ns2;
+  if(j.creatorId&&j.creatorId!==A.myId){send(j.creatorId,{t:'PU',jid:jobId,idx,status:ns2});
+    if(ns2==='done')send(j.creatorId,{t:'BM',jid:jobId,name:A.myName,text:'Punkt "'+(it2.text||'#'+(idx+1))+'" er fullført!',ts:now()});}
   persist();render();};
 window.playBullet=(jobId,idx)=>{const j=A.openJobs.get(jobId)||A.myJobs.find(x=>x.id===jobId);
   const item=j?.items?.[idx];if(!item)return;const url=item.audioUrl||item.audioData;if(!url)return;
@@ -523,7 +560,8 @@ window.stopChatRec=()=>{if(!_chatRec||_chatRec.state!=='recording')return;const 
     window._pendingAudio={url:url||dataUrl,dur};render();};_chatRec.stop();};
 window.sendChatAudio=(type,id1,id2)=>{if(!window._pendingAudio)return;const{url,dur}=window._pendingAudio;window._pendingAudio=null;
   if(type==='jc'){const msg={from:A.myId,name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,ts:now(),_mid:uid(),_status:'sent'};
-    addJMsg(id1,msg);fsWriteJobChat(id1,msg);if(id2)send(id2,{t:'BM',jid:id1,name:A.myName,text:msg.text,audioUrl:url,duration:dur,ts:msg.ts,_mid:msg._mid});}
+    addJMsg(id1,msg);fsWriteJobChat(id1,msg);var _aj=A.myJobs.find(x=>x.id===id1);var _at=_aj?jobParticipants(_aj):(id2?[id2]:[]);
+    _at.forEach(pid=>send(pid,{t:'BM',jid:id1,name:A.myName,text:msg.text,audioUrl:url,duration:dur,ts:msg.ts,_mid:msg._mid}));}
   else if(type==='dm'){var dmaid=uid();var dts=now();addDM(id1,{from:A.myId,name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,ts:dts,_mid:dmaid,_status:'sent'});
     send(id1,{t:'DM',name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,enc:false,ts:dts,_mid:dmaid});}
   persist();render();setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},50);};
@@ -545,7 +583,8 @@ window.sendChatImg=async()=>{if(!window._pendingImg)return;var pi=window._pendin
   var url=null;if(hasFB())url=await fbUpload(pi.data,'chatImg/'+uid()+'.webp');
   var imgUrl=url||pi.data;var mid=uid();
   if(pi.type==='jc'){var msg={from:A.myId,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:now(),_mid:mid,_status:'sent'};
-    addJMsg(pi.id1,msg);fsWriteJobChat(pi.id1,msg);if(pi.id2)send(pi.id2,{t:'BM',jid:pi.id1,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:msg.ts,_mid:mid});}
+    addJMsg(pi.id1,msg);fsWriteJobChat(pi.id1,msg);var _ij=A.myJobs.find(x=>x.id===pi.id1);var _it=_ij?jobParticipants(_ij):(pi.id2?[pi.id2]:[]);
+    _it.forEach(pid=>send(pid,{t:'BM',jid:pi.id1,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:msg.ts,_mid:mid}));}
   else if(pi.type==='dm'){var its=now();addDM(pi.id1,{from:A.myId,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:its,_mid:mid,_status:'sent'});
     send(pi.id1,{t:'DM',name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,enc:false,ts:its,_mid:mid});}
   persist();render();setTimeout(()=>{var m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},50);};
@@ -596,9 +635,70 @@ async function fsHydrateUserNames(ids){if(!hasFS()||!ids.length)return;
     if(doc.exists&&doc.data().name){A._userNames[id]=doc.data().name;if(D())console.log('[hydrate]',id,doc.data().name);}
   }catch(e){}}sR();}
 async function fsWritePost(p){if(D())console.log('[-> fsWritePost]',{jid:p.id,visibility:p.visibility});if(!hasFS())return false;try{await fbDb.collection('posts').doc(p.id).set({id:p.id,type:p.type,title:p.title,desc:p.desc,reward:p.reward||'',location:p.location||'',fylke:p.fylke||'',by:p.by||'',
-  imageUrl:p.imageUrl||null,items:(p.items||[]).map(it=>({text:it.text,audioUrl:it.audioUrl||null,duration:it.duration||0,mode:it.mode||'list',status:it.status||'open'})),jobDate:p.jobDate||null,jobTime:p.jobTime||null,
+  imageUrl:p.imageUrl||null,items:(p.items||[]).map(it=>({text:it.text,audioUrl:it.audioUrl||null,duration:it.duration||0,mode:it.mode||'list',status:it.status||'open',assignedTo:it.assignedTo||null,assignedName:it.assignedName||null,assignedStatus:it.assignedStatus||null})),jobDate:p.jobDate||null,jobTime:p.jobTime||null,
   groupId:p.groupId||null,groupName:p.groupName||null,creatorId:p.creatorId,creatorName:p.creatorName,creatorAvatar:ls('oAvatar')||'',ts:p.ts,expiresAt:p.expiresAt,visibility:p.visibility||'public',status:p.status||'open'});
   if(D())console.log('[<- fsWritePost] success',p.id);return true;}catch(e){console.warn('[FS] writePost',e);return false;}}
+async function fsUpdatePostItems(pid,items){if(!hasFS())return false;try{await fbDb.collection('posts').doc(pid).update({
+    items:(items||[]).map(it=>({text:it.text||'',audioUrl:it.audioUrl||null,duration:it.duration||0,mode:it.mode||'list',status:it.status||'open',assignedTo:it.assignedTo||null,assignedName:it.assignedName||null,assignedStatus:it.assignedStatus||null}))});
+    if(D())console.log('[FS] updatePostItems',pid);return true;}catch(e){if(D())console.log('[FS] updatePostItems error',pid,e.message);return false;}}
+async function fsWritePointInvitation(userId,inv){if(!hasFS())return;try{var invId=inv.jid+'_'+inv.idx;
+  await fbDb.collection('users').doc(userId).collection('invitations').doc(invId).set(inv);
+  if(D())console.log('[FS] writePointInvitation',userId,invId);}catch(e){if(D())console.log('[FS] writePointInvitation error',e.message);}}
+async function fsUpdatePointInvitation(userId,invId,patch){if(!hasFS())return;try{
+  await fbDb.collection('users').doc(userId).collection('invitations').doc(invId).update({...patch,updatedAt:Date.now()});
+  if(D())console.log('[FS] updatePointInvitation',userId,invId);}catch(e){if(D())console.log('[FS] updatePointInvitation error',e.message);}}
+async function fsDeletePointInvitation(userId,invId){if(!hasFS())return;try{
+  await fbDb.collection('users').doc(userId).collection('invitations').doc(invId).delete();
+  if(D())console.log('[FS] deletePointInvitation',userId,invId);}catch(e){}}
+async function fsCheckMyInvitations(){if(!hasFS()||!A.myId)return;try{
+  var snap=await fbDb.collection('users').doc(A.myId).collection('invitations').where('status','==','pending').limit(20).get();
+  if(!snap.docs.length)return;var added=0;
+  for(var doc of snap.docs){var inv=doc.data();if(!inv.jid||inv.idx==null)continue;
+    // Verify job still exists and item still assigned to me
+    try{var jDoc=await fbDb.collection('posts').doc(inv.jid).get();
+      if(!jDoc.exists||!jDoc.data().items?.[inv.idx]||jDoc.data().items[inv.idx].assignedTo!==A.myId){
+        fsDeletePointInvitation(A.myId,doc.id);continue;}}catch(e){continue;}
+    // Skip if already in local queue
+    if(A._pendingInvites.find(x=>x.jid===inv.jid&&x.idx===inv.idx))continue;
+    A._pendingInvites.push(inv);added++;}
+  if(added>0){if(D())console.log('[fsCheckMyInvitations]',{added});showNextInvite();}
+}catch(e){if(D())console.log('[fsCheckMyInvitations] error',e.message);}}
+function showNextInvite(){if(A._showingInvite)return;if(!A._pendingInvites.length)return;
+  A._showingInvite=A._pendingInvites.shift();
+  var inv=A._showingInvite;
+  var bg=document.createElement('div');bg.className='modal-bg';bg.id='invite-modal';
+  bg.innerHTML=`<div class="modal"><div style="font-size:16px;font-weight:800;margin-bottom:4px">📩 Punkt-invitasjon</div>
+    <div style="font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:16px">
+    <strong>${esc(inv.creatorName||'Noen')}</strong> vil at du gjør:<br>
+    <div style="background:var(--s2);border-radius:10px;padding:10px 12px;margin:8px 0;font-weight:600">${esc(inv.itemText||'Punkt '+(inv.idx+1))}</div>
+    i oppgaven: <em>${esc(inv.title||'')}</em></div>
+    <div class="brow"><button class="btn br" style="flex:1;min-height:44px" id="_inv-no">Nei takk</button>
+    <button class="btn bg" style="flex:1;min-height:44px" id="_inv-yes">Ja, jeg tar det</button></div></div>`;
+  document.body.appendChild(bg);
+  bg.querySelector('#_inv-no').onclick=()=>respondInvite(false);
+  bg.querySelector('#_inv-yes').onclick=()=>respondInvite(true);}
+async function respondInvite(accepted){var inv=A._showingInvite;if(!inv){document.getElementById('invite-modal')?.remove();return;}
+  var invId=inv.jid+'_'+inv.idx;
+  document.getElementById('invite-modal')?.remove();A._showingInvite=null;
+  // Always resolve job reference — local first, then Firestore
+  var j=A.myJobs.find(x=>x.id===inv.jid)||A.openJobs.get(inv.jid);
+  if(!j||!j.items){try{var jDoc=await fbDb.collection('posts').doc(inv.jid).get();
+    if(jDoc.exists){j={...jDoc.data()};}}catch(e){}}
+  send(inv.creatorId,{t:'PA',jid:inv.jid,idx:inv.idx,accepted});
+  fsUpdatePointInvitation(A.myId,invId,{status:accepted?'accepted':'declined'});
+  if(j&&j.items&&j.items[inv.idx]){
+    if(accepted){j.items[inv.idx].assignedStatus='accepted';j.items[inv.idx].status='taken';}
+    else{j.items[inv.idx].assignedTo=null;j.items[inv.idx].assignedName=null;j.items[inv.idx].assignedStatus=null;j.items[inv.idx].status='open';}
+    fsUpdatePostItems(inv.jid,j.items);
+    // Sync back to local job if it exists
+    var lj=A.myJobs.find(x=>x.id===inv.jid);if(lj&&lj.items&&lj.items[inv.idx]){
+      Object.assign(lj.items[inv.idx],j.items[inv.idx]);}
+  }else{if(D())console.log('[respondInvite] skipped fsUpdatePostItems — no valid items',{jid:inv.jid});}
+  if(accepted){
+    if(!A.myJobs.find(x=>x.id===inv.jid)&&j){A.openJobs.delete(inv.jid);A.myJobs.push({...j,isHelper:true,isPointHelper:true});}
+    notify('✅','Du tok punkt: '+(inv.itemText||'').substr(0,30));
+  }else{notify('↩️','Takket nei til punkt');}
+  persist();sR();showNextInvite();}
 async function fsLoadPublicPosts(){if(D())console.log('[-> fsLoadPublicPosts]');if(!hasFS())return[];try{var cutoff=now()-30*864e5;
   // NOTE: Requires composite index (visibility, status, ts) on posts collection
   var snap=await fbDb.collection('posts').where('visibility','==','public').where('status','==','open').where('ts','>',cutoff).orderBy('ts','desc').limit(100).get();
@@ -626,7 +726,7 @@ async function fsCheckInterests(){if(!hasFS())return;try{const jobs=A.myJobs.fil
     // Add new interests from Firestore
     let added=0;snap.docs.forEach(d=>{const p=d.data();if(!p.id||A.blocked.has(p.id))return;
       if(j.interests.find(x=>x.id===p.id))return;
-      j.interests.push({id:p.id,name:p.name||'',msg:p.msg||'',audioUrl:p.audioUrl||null,audioDur:p.audioDur||0,ts:p.ts||now()});added++;});
+      j.interests.push({id:p.id,name:p.name||'',msg:p.msg||'',audioUrl:p.audioUrl||null,audioDur:p.audioDur||0,points:Array.isArray(p.points)?p.points.slice():[],ts:p.ts||now()});added++;});
     // Remove stranger-interests that were deleted from Firestore
     const before=j.interests.length;
     j.interests=j.interests.filter(x=>A.contacts.find(c=>c.id===x.id)||fsIds.has(x.id));
@@ -709,7 +809,13 @@ async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if
     try{const doc=await fbDb.collection('posts').doc(j.id).get();
       if(!doc.exists){if(j.isHelper&&['pending','active','pending_review'].includes(j.status)){
         j.status='cancelled';j.helperId=null;j.helperName=null;j.helperDone=false;if(D())console.log('[fsSync] owner deleted job, marking cancelled',j.id);}continue;}
-      const fs=doc.data();if(!fs.status||fs.status===j.status)continue;
+      const fs=doc.data();
+      // Sync item assignment from Firestore (owner catchup for PA responses — both accepted and declined)
+      if(fs.items&&j.items&&j.creatorId===A.myId){var _itChanged=false;fs.items.forEach((fi,idx)=>{var li=j.items[idx];if(!li)return;
+        var diff=(fi.assignedStatus||null)!==(li.assignedStatus||null)||(fi.assignedTo||null)!==(li.assignedTo||null)||(fi.status||'open')!==(li.status||'open');
+        if(diff){li.assignedTo=fi.assignedTo||null;li.assignedName=fi.assignedName||null;li.assignedStatus=fi.assignedStatus||null;li.status=fi.status||'open';_itChanged=true;}});
+        if(_itChanged&&D())console.log('[fsSync] item assignment synced',{jid:j.id});}
+      if(!fs.status||fs.status===j.status)continue;
       const pri={open:0,accepting:1,active:2,pending_review:3,done:4,cancelled:5,never_done:5,declined:5};
       const myP=pri[j.status]||0;const fsP=pri[fs.status]||0;
       if(fsP>myP){if(D())console.log('[fsSync] status update',{jid:j.id,from:j.status,to:fs.status,fsHelperId:fs.helperId,fsCreatorName:fs.creatorName});
@@ -722,6 +828,22 @@ async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if
         if(fs.status==='done'){A.completedCount++;ss('oDone',A.completedCount);}
         if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[j.id]=(A._unreadJobs[j.id]||0)+1;}
     }catch(e){}}if(D())console.log('[<- fsCheckJobStatus]');updateB();persist();sR();}catch(e){if(D())console.log('[fsSync] error',e);}}
+async function fsCheckPointUpdates(){if(!hasFS())return;if(D())console.log('[-> fsCheckPointUpdates]');
+  try{const terminal=['done','cancelled','never_done','declined'];var changed=0;
+    for(const j of A.myJobs){if(!j?.items?.length||terminal.includes(j.status))continue;
+      try{const doc=await fbDb.collection('posts').doc(j.id).get();if(!doc.exists)continue;
+        const fs=doc.data();if(!fs?.items?.length)continue;var lc=false;
+        fs.items.forEach((fi,idx)=>{var li=j.items?.[idx];if(!li)return;
+          var diff=(fi.assignedTo||null)!==(li.assignedTo||null)||(fi.assignedName||null)!==(li.assignedName||null)||(fi.assignedStatus||null)!==(li.assignedStatus||null)||(fi.status||'open')!==(li.status||'open');
+          if(diff){li.assignedTo=fi.assignedTo||null;li.assignedName=fi.assignedName||null;li.assignedStatus=fi.assignedStatus||null;li.status=fi.status||'open';lc=true;}});
+        var myPts=(j.items||[]).map((it,idx)=>it.assignedTo===A.myId?idx:-1).filter(idx=>idx>=0);
+        if(myPts.length){if(!j.isPointHelper){j.isPointHelper=true;lc=true;}if(!j.isHelper){j.isHelper=true;lc=true;}
+          var np=JSON.stringify(myPts),pp=JSON.stringify(j._myPoints||[]);if(np!==pp){j._myPoints=myPts.slice();lc=true;}}
+        if(lc)changed++;
+      }catch(e){if(D())console.log('[fsCheckPointUpdates] error',j.id,e.message);}}
+    if(changed){persist();updateB();sR();}
+    if(D())console.log('[<- fsCheckPointUpdates]',{changed});
+  }catch(e){if(D())console.log('[fsCheckPointUpdates] error',e.message);}}
 async function fsWriteJobChat(jid,msg){if(!hasFS())return;
   try{await fbDb.collection('posts').doc(jid).collection('chat').doc(msg._mid).set({
     from:msg.from,name:msg.name||A.myName,text:msg.text||'',audioUrl:msg.audioUrl||null,
@@ -860,7 +982,7 @@ function flushQ(){const keep=[];var flushed=0;A.offlineQ.forEach(i=>{if(now()-i.
   if(c?.open){try{c.send(i.msg);flushed++;if(D())console.log('[flushQ] sent',i.msg.t,{to:i.to,jid:i.msg.jid||i.msg.job?.id});}catch(e){keep.push(i);}}else{keep.push(i);tryC(i.to);}});
   if(D()&&flushed)console.log('[flushQ]',flushed,'msgs flushed,',keep.length,'still queued');A.offlineQ=keep;persist();}
 
-function stripJobForSend(j){var out={...j,imageData:null};if(out.items)out.items=out.items.map(it=>({text:it.text,audioUrl:it.audioUrl||null,duration:it.duration||0,mode:it.mode||'list',status:it.status||'open'}));return out;}
+function stripJobForSend(j){var out={...j,imageData:null};if(out.items)out.items=out.items.map(it=>({text:it.text,audioUrl:it.audioUrl||null,duration:it.duration||0,mode:it.mode||'list',status:it.status||'open',assignedTo:it.assignedTo||null,assignedName:it.assignedName||null,assignedStatus:it.assignedStatus||null}));return out;}
 // ═══ RELAY ═══
 function relayM(to,msg,mid){if(D())console.log('[-> relayM]',{to,type:msg?.t,mid});if(!A.myId||!to||!msg)return;const rid=uid();const ts=now();const exp=ts+RTTL;
   addRQ({mid,id:rid,to,from:A.myId,msg,ts,expiresAt:exp});
@@ -930,7 +1052,7 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(m.job.groupId&&!A.groups.find(g=>g.id===m.job.groupId))break;
     const rj={...m.job,isFromContact:true};
     if(rj.imageData){dbPut('images',m.job.id,rj.imageData);rj.imageData=null;}
-    if(rj.items)rj.items=rj.items.map(it=>({text:it.text,audioUrl:it.audioUrl,duration:it.duration,mode:it.mode||'list',status:it.status||'open'}));
+    if(rj.items)rj.items=rj.items.map(it=>({text:it.text,audioUrl:it.audioUrl,duration:it.duration,mode:it.mode||'list',status:it.status||'open',assignedTo:it.assignedTo||null,assignedName:it.assignedName||null,assignedStatus:it.assignedStatus||null}));
     A.openJobs.set(m.job.id,rj);
     if(!m.job.groupId&&!A.contacts.find(c=>c.id===m.job.creatorId))A.contacts.push({id:m.job.creatorId,name:m.job.creatorName||m.job.creatorId.substr(0,12),alias:m.job.creatorName});
     if(m.job.groupId&&m.job.groupName){const g=A.groups.find(x=>x.id===m.job.groupId);if(g&&(!g.name||g.name===g.id||g.name==='Gruppe...'))g.name=m.job.groupName;}
@@ -943,23 +1065,49 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(D())console.log('[JR] received',{from,jid:m.jid,jobFound:!!j,jobStatus:j?.status,alreadyInInterests:j?.interests?.some(x=>x.id===from)});
     if(!j){if(D())console.log('[JR] ignored — job not found',{jid:m.jid});break;}
     if(!['open','accepting'].includes(j.status)){if(D())console.log('[JR] ignored — wrong status',{jid:m.jid,status:j.status});break;}
-    if(!j.interests)j.interests=[];if(!j.interests.find(x=>x.id===from))j.interests.push({id:from,name:m.name,msg:m.message||'',audioUrl:m.audioUrl||null,audioDur:m.audioDur||0,ts:now()});
+    if(!j.interests)j.interests=[];if(!j.interests.find(x=>x.id===from))j.interests.push({id:from,name:m.name,msg:m.message||'',audioUrl:m.audioUrl||null,audioDur:m.audioDur||0,points:Array.isArray(m.points)?m.points.slice():[],ts:now()});
     if(!A.contacts.find(c=>c.id===from))A.tempConns.set(m.jid,{peerId:from,name:m.name||'',ts:now()});
     j.status='accepting';fsUpdatePostStatus(m.jid,'accepting');if(D())console.log('[JR] accepted',{jid:m.jid,interests:j.interests.length,status:j.status});
     if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;notify('⚡ '+(m.name||''),'Vil hjelpe!',()=>go('jobDetail',{jobId:m.jid}));persist();updateB();sR();break;}
   case 'JY':{const j=A.myJobs.find(x=>x.id===m.jid);
-    if(D())console.log('[JY] received',{from,jid:m.jid,jobFound:!!j,jobStatus:j?.status});
-    if(j&&j.status==='pending'){j.helperId=from;j.helperName=m.name;j.status='active';
+    if(D())console.log('[JY] received',{from,jid:m.jid,jobFound:!!j,jobStatus:j?.status,points:m.points});
+    if(!j)break;
+    // Point-branch: JY with points array
+    if(Array.isArray(m.points)&&m.points.length&&j.items?.length){
+      var ap=m.points.filter((idx,i,a)=>a.indexOf(idx)===i&&Number.isInteger(idx)&&j.items[idx]);
+      if(ap.length){ap.forEach(idx=>{j.items[idx].assignedTo=A.myId;j.items[idx].assignedName=A.myName;j.items[idx].assignedStatus='accepted';j.items[idx].status='taken';});
+        j.isPointHelper=true;j._myPoints=ap.slice();j.status='active';
+        if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;
+        notify('✅ Du fikk '+ap.length+' punkt'+(ap.length>1?'er':'')+'!',m.name||'');persist();}updateB();sR();break;}
+    // Whole-job branch
+    if(j.status==='pending'){j.helperId=from;j.helperName=m.name;j.status='active';
     if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;notify('✅ Godkjent!',m.name||'');persist();}updateB();sR();break;}
-  case 'JN':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[JN] received',{from,jid:m.jid,jobFound:!!j,isHelper:j?.isHelper,status:j?.status});
-    if(j?.isHelper){j.status='declined';if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;}persist();updateB();sR();break;}
+  case 'JN':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[JN] received',{from,jid:m.jid,jobFound:!!j,isHelper:j?.isHelper,status:j?.status,points:m.points});
+    if(!j)break;
+    // Point-branch: declined for point-application
+    if(Array.isArray(m.points)&&m.points.length&&j.isPointApplicant){j.status='declined';
+      if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;
+      notify('↩️','Punkt-søknaden ble avslått');persist();updateB();sR();break;}
+    // Whole-job branch
+    if(j.isHelper){j.status='declined';if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;}persist();updateB();sR();break;}
   case 'HC':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[HC] received',{from,jid:m.jid,jobFound:!!j,status:j?.status});
     if(j&&j.status==='active'){j.helperDone=true;j.status='pending_review';
     if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;fsUpdatePostStatus(m.jid,'pending_review');notify('🔔 Ferdigmeldt!',j.title?.substr(0,30));persist();}updateB();sR();break;}
   case 'PC':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[PC] received',{from,jid:m.jid,jobFound:!!j,status:j?.status});
     if(j&&j.status!=='done'){j.status='done';A.completedCount++;ss('oDone',A.completedCount);
     if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;notify('🎉 Godkjent!','Fullført!');persist();}updateB();sR();break;}
-  case 'NP':{const j=A.myJobs.find(x=>x.id===m.jid);if(!j)break;j.status='never_done';fsUpdatePostStatus(m.jid,'never_done');
+  case 'NP':{const j=A.myJobs.find(x=>x.id===m.jid);if(!j)break;
+    // Point-mode: only penalize this participant's points, don't terminal entire job
+    if(j.items?.length&&j.isPointHelper){
+      j.isHelper=false;j.isPointHelper=false;j._myPoints=[];
+      (j.items||[]).forEach(it=>{if(it.assignedTo===A.myId){it.assignedTo=null;it.assignedName=null;it.assignedStatus=null;it.status='open';}});
+      if(!A.ratings[A.myId])A.ratings[A.myId]=[];
+      A.ratings[A.myId].push({score:1,comment:'Fullførte aldri.',jobId:m.jid,raterName:j.creatorName||'?',ts:now(),nd:true});
+      gossip({t:'RAT',uid:A.myId,ratings:A.ratings[A.myId]});
+      if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;
+      notify('⚠️','Du fikk et permanent merke for denne oppgaven');persist();updateB();sR();break;}
+    // Legacy: terminate entire job
+    j.status='never_done';fsUpdatePostStatus(m.jid,'never_done');
     if(!A.ratings[A.myId])A.ratings[A.myId]=[];
     A.ratings[A.myId].push({score:1,comment:'Fullførte aldri.',jobId:m.jid,raterName:j.creatorName||'?',ts:now(),nd:true});
     if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;gossip({t:'RAT',uid:A.myId,ratings:A.ratings[A.myId]});persist();updateB();sR();break;}
@@ -1002,8 +1150,16 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(!found)Object.values(A.dms).forEach(msgs=>{if(found)return;const msg=msgs.find(x=>x._mid===m._mid);if(msg){msg._status='delivered';found=true;}});
     if(found){persist();sR();}break;}
   case 'JW':{const j=A.myJobs.find(x=>x.id===m.jid);
-    if(D())console.log('[JW] received',{from,jid:m.jid,jobFound:!!j,jobStatus:j?.status,helperId:j?.helperId,interestsCount:j?.interests?.length,interestIds:j?.interests?.map(x=>x.id)});
+    if(D())console.log('[JW] received',{from,jid:m.jid,jobFound:!!j,jobStatus:j?.status,helperId:j?.helperId,pointWithdraw:m.pointWithdraw});
     if(!j)break;
+    // Point-branch: reopen only the withdrawing user's assigned points
+    if(j.items?.length&&hasPointAssignment(j,from)){
+      var _rn=reopenWithdrawnPoints(j,from);var _ns=pointOwnerStatus(j);j.status=_ns;
+      fsUpdatePostItems(j.id,j.items);fsUpdatePostStatus(j.id,_ns);
+      j.interests=(j.interests||[]).filter(x=>x.id!==from);
+      if(hasFS())try{fbDb.collection('posts').doc(j.id).collection('interests').doc(from).delete().catch(function(){});}catch(e){}
+      if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;
+      notify('↩️',dn(from)+' trakk seg fra '+_rn+' oppgave'+(_rn>1?'r':''));persist();updateB();sR();break;}
     if(j.helperId===from){j.helperId=null;j.helperName=null;j.helperDone=false;j.status='open';
       if(D())console.log('[JW] helper withdrew, status→open');
       if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;fsUpdatePostStatus(j.id,'open');notify('↩️',dn(from)+' trakk seg fra jobben');persist();updateB();sR();break;}
@@ -1018,6 +1174,20 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     var _pj=A.myJobs.find(x=>x.id===m.jid);if(!_pj||!_pj.items||!_pj.items[m.idx])break;
     _pj.items[m.idx].status=m.status;
     if(D())console.log('[PU] received',{jid:m.jid,idx:m.idx,status:m.status});persist();sR();break;}
+  case 'PI':{if(!m.jid||m.idx==null||!m.creatorId)break;
+    if(D())console.log('[PI] received',{jid:m.jid,idx:m.idx,from:m.creatorName});
+    if(A._pendingInvites.find(x=>x.jid===m.jid&&x.idx===m.idx))break;
+    A._pendingInvites.push({jid:m.jid,idx:m.idx,title:m.title||'',itemText:m.itemText||'',creatorId:m.creatorId,creatorName:m.creatorName||'',recipientId:A.myId,status:'pending',ts:now()});
+    if(A.screen!=='mine')A.unreadActivity++;updateB();showNextInvite();break;}
+  case 'PA':{if(!m.jid||m.idx==null)break;
+    if(D())console.log('[PA] received',{jid:m.jid,idx:m.idx,accepted:m.accepted});
+    var _paj=A.myJobs.find(x=>x.id===m.jid);if(!_paj||!_paj.items||!_paj.items[m.idx])break;
+    if(m.accepted){_paj.items[m.idx].assignedStatus='accepted';_paj.items[m.idx].status='taken';
+      notify('✅',dn(from)+' tok punkt: '+(_paj.items[m.idx].text||'').substr(0,30));}
+    else{_paj.items[m.idx].assignedTo=null;_paj.items[m.idx].assignedName=null;_paj.items[m.idx].assignedStatus=null;_paj.items[m.idx].status='open';
+      notify('↩️',dn(from)+' takket nei til punkt');}
+    fsUpdatePostItems(m.jid,_paj.items);
+    if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;persist();updateB();sR();break;}
   case 'GI':{if(!m.gid||!m.gname)break;if(A.groups.find(g=>g.id===m.gid))break;
     if(A.screen!=='groups')A.unreadGroups++;A._unreadGroupPosts[m.gid]=(A._unreadGroupPosts[m.gid]||0)+1;updateB();
     showConfirm('🏘️ Gruppeinvitasjon',(m.fromName||'Noen')+' inviterer deg til gruppen "'+(m.gname||'')+'"','Bli med',async()=>{
@@ -1261,8 +1431,8 @@ function vCreate(){
       :`<label style="display:block;height:100px;border:2px dashed var(--s3);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--t3);cursor:pointer">
         📸 Trykk for å legge til bilde<input type="file" accept="image/*" style="display:none" onchange="handleImg(this)"></label>`}</div>
     <div class="fld"><div class="slbl">PUNKTER (VALGFRITT)</div>
-      <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px">Legg til ting som skal gjøres. Hvert punkt kan ha stemmeforklaring.</div>
-      ${(A.nb.items||[]).map((it,i)=>`<div class="itm">
+      <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px">Legg til ting som skal gjøres. Trykk 👤 for å velge hvem punktet er ment for, eller la det stå åpent.</div>
+      ${(A.nb.items||[]).map((it,i)=>`<div class="itm" style="flex-wrap:wrap">
         <span style="width:24px;height:24px;border-radius:12px;background:${it.mode==='image'?'var(--pr)':'var(--s3)'};color:${it.mode==='image'?'#fff':'var(--t2)'};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;flex-shrink:0">${i+1}</span>
         <input class="fi" style="flex:1;padding:8px 10px;font-size:13px" placeholder="${it.mode==='image'?'Beskriv dette punktet':'F.eks. Klippe hekk'}" maxlength="60" value="${esc(it.text)}" oninput="A.nb.items[${i}].text=this.value">
         ${_isRec&&_recIdx===i?`<button class="chsn rec-pulse" style="background:var(--rd);width:44px;height:44px;font-size:16px" onclick="toggleRec(${i})">🔴</button>`
@@ -1270,7 +1440,9 @@ function vCreate(){
           <button style="width:36px;height:36px;border-radius:18px;background:var(--pr);color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center" onclick="playLocal(${i})">▶</button>
           <button style="font-size:11px;color:var(--t3);padding:2px 4px" onclick="reRecord(${i})">🔄</button></div>`
         :`<button class="chsn" style="background:var(--pr);color:#fff;width:44px;height:44px;font-size:16px" onclick="toggleRec(${i})">🎙️</button>`}
+        <button style="width:44px;height:44px;border-radius:22px;background:${it.assignedTo?'var(--gb)':'var(--s2)'};border:1.5px solid ${it.assignedTo?'var(--gbb)':'var(--s3)'};display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;cursor:pointer" onclick="showAssignPicker(${i})">${it.assignedTo?'✓':'👤'}</button>
         <button style="font-size:14px;color:var(--t3);padding:4px" onclick="removeItem(${i})">✕</button>
+        ${it.assignedName?`<div style="width:100%;font-size:11px;color:var(--g2);font-weight:600;padding:2px 0 0 34px">→ ${esc(it.assignedName)}</div>`:''}
       </div>`).join('')}
       ${(A.nb.items||[]).length===0?'<div style="text-align:center;padding:12px;color:var(--t3);font-size:13px">Ingen punkter ennå</div>':''}
       ${(A.nb.items||[]).length<6?`<div style="display:flex;gap:8px;margin-top:8px">
@@ -1290,7 +1462,8 @@ function vCreate(){
       <input type="time" class="fi" style="width:110px" value="${A.nb.jobTime||''}" oninput="A.nb.jobTime=this.value"></div>
       <div style="font-size:11px;color:var(--t3);margin-top:4px">Tidspunkt er valgfritt. Dato hjelper folk å planlegge.</div></div>
     <div class="fld"><div class="slbl">HVEM SER DETTE?</div><div class="ttypes" style="grid-template-columns:1fr 1fr">
-      ${[['direct','👤','Direkte','Send til én bestemt person'],['friends','👥','Mine venner','Alle vennene dine ser dette'],['group','🏘️','Gruppe','Velg en gruppe'],['public','🌐','Offentlig','Alle i ditt område ser dette']].map(([v,i,n,d])=>
+      ${(A.nb.vis==='group'&&A.nb.groupId?[['group','🏘️',esc(A.nb.groupName||'Gruppe'),'Gruppepost']]
+        :[['direct','👤','Direkte','Send til én bestemt person'],['friends','👥','Mine venner','Alle vennene dine ser dette'],['public','🌐','Offentlig','Alle i ditt område ser dette']]).map(([v,i,n,d])=>
         `<div class="ttype${(A.nb.vis||((A.nb.type||'help')==='help'?'friends':'public'))===v?' act':''}" onclick="A.nb.vis='${v}';render()"><div class="ttype-i">${i}</div><div class="ttype-n">${n}</div><div class="ttype-d">${d}</div></div>`).join('')}
     </div></div>
     ${(A.nb.vis||'')==='direct'?`<div class="fld"><label class="fl">Velg person</label>${A.contacts.length?A.contacts.map(c=>{const sel=(A.nb.targetIds||[]).includes(c.id);
@@ -1298,9 +1471,7 @@ function vCreate(){
       <div style="width:22px;height:22px;border-radius:6px;border:2px solid ${sel?'var(--pr)':'var(--s3)'};background:${sel?'var(--pr)':'transparent'};display:flex;align-items:center;justify-content:center;flex-shrink:0">${sel?'<span style="color:#fff;font-size:14px;font-weight:800">✓</span>':''}</div>
       ${avHtml(c.id,c.alias||c.name,32)}<span style="font-size:14px;font-weight:600">${esc(c.alias||c.name)}</span></div>`;}).join('')
       :'<div style="font-size:13px;color:var(--t3)">Ingen venner ennå.</div>'}</div>`:''}
-    ${(A.nb.vis||'')==='group'?`<div class="fld"><label class="fl">Velg gruppe</label><div style="display:flex;flex-wrap:wrap;gap:6px">
-      ${A.groups.map(g=>`<div class="chip${A.nb.groupId===g.id?' act':''}" onclick="A.nb.groupId='${escA(g.id)}';A.nb.groupName='${escA(g.name)}';render()">${g.private?'🔒':'🔓'} ${esc(g.name||g.id)}</div>`).join('')}
-      ${!A.groups.length?'<div style="font-size:13px;color:var(--t3)">Ingen grupper ennå.</div>':''}</div></div>`:''}
+    ${(A.nb.vis==='group'&&A.nb.groupId)?`<div class="ibox" style="display:flex;align-items:center;gap:10px">🏘️ <span style="font-weight:700">${esc(A.nb.groupName||A.nb.groupId)}</span></div>`:''}
     ${['public','friends'].includes(A.nb.vis||((A.nb.type||'help')==='help'?'friends':'public'))?`<div class="fld"><div class="slbl">UTLØPER</div><div style="display:flex;gap:6px;flex-wrap:wrap">
       ${[[1,'1 dag'],[3,'3 dager'],[7,'1 uke'],[14,'2 uker'],[30,'30 dager']].map(([d,l])=>
         `<button style="flex:1;min-width:70px;padding:10px;border-radius:10px;font-size:13px;font-weight:600;border:1.5px solid ${A.nb.expiry==d?'var(--pr)':'var(--s3)'};background:${A.nb.expiry==d?'var(--pb)':'var(--sf)'};color:${A.nb.expiry==d?'var(--pr)':'var(--t2)'}" onclick="A.nb.expiry=${d};render()">${l}</button>`).join('')}
@@ -1348,7 +1519,7 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
     else{audioFailed=true;}}}
   if(audioFailed)notify('⚠️','Noe lyd kunne ikke lastes opp. Andre vil ikke høre den.');
   if(D())console.log('[POST] audioUpload',{total:items.length,failed:audioFailed});
-  const job={id:jobId,type:A.nb.type||'help',title:t,desc:A.nb.desc.trim(),items:items.map(it=>({text:it.text.trim(),audioUrl:it.audioUrl||null,audioData:it.audioUrl?null:(it.audioData||null),duration:it.duration||0,mode:it.mode||'list',status:it.status||'open'})),
+  const job={id:jobId,type:A.nb.type||'help',title:t,desc:A.nb.desc.trim(),items:items.map(it=>({text:it.text.trim(),audioUrl:it.audioUrl||null,audioData:it.audioUrl?null:(it.audioData||null),duration:it.duration||0,mode:it.mode||'list',status:it.status||'open',assignedTo:it.assignedTo||null,assignedName:it.assignedName||null,assignedStatus:it.assignedStatus||null})),
     reward:A.nb.reward||'',location:A.nb.location||'',fylke:A.nb.fylke||A.myFylke||'',by:A.nb.by||A.myBy||'',
     imageData:imageUrl?null:A.nb.imageData||null, // Inline only if no Firebase
     imageUrl:imageUrl||null, // Firebase URL
@@ -1367,6 +1538,13 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
   // All posts go to Firestore (backbone for offline delivery)
   await fsWritePost(job);
   if(D())console.log('[POST] routing',{vis:job.visibility,fsWrite:true});
+  // Send point invitations for assigned items
+  var _piSent=0;var lj=A.myJobs.find(x=>x.id===jobId);
+  if(lj&&lj.items){lj.items.forEach((it,i)=>{if(it.assignedTo&&it.assignedTo!==A.myId){
+    it.assignedStatus='pending';_piSent++;
+    send(it.assignedTo,{t:'PI',jid:jobId,idx:i,title:job.title,itemText:it.text||'Punkt '+(i+1),creatorId:A.myId,creatorName:A.myName});
+    fsWritePointInvitation(it.assignedTo,{jid:jobId,idx:i,creatorId:A.myId,creatorName:A.myName,title:job.title,itemText:it.text||'Punkt '+(i+1),recipientId:it.assignedTo,recipientName:it.assignedName||'',status:'pending',ts:now(),updatedAt:now()});}});
+    if(_piSent>0){fsUpdatePostItems(jobId,lj.items);if(D())console.log('[POST] sent',_piSent,'point invitations');}}
   if(D())console.log('[← POST] done',{jid:jobId});
   addAct('Nytt: '+t.substr(0,30),'📋');persist();A.nb={};go(job.visibility==='direct'?'chatHub':'mine');
   }finally{window._postBusy=false;}};
@@ -1388,7 +1566,8 @@ window.cancelMyJob=function(jobId){
   A._deadJobs.add(jobId);A.openJobs.delete(jobId);
   gossip({t:'CANCEL',jobId});fsUpdatePostStatus(jobId,'cancelled');
   (x.interests||[]).forEach(p=>send(p.id,{t:'JN',jid:jobId}));
-  if(_hid)send(_hid,{t:'BS',jid:jobId,status:'cancelled'});
+  if(x.items?.length){jobParticipants(x).forEach(pid=>send(pid,{t:'BS',jid:jobId,status:'cancelled'}));}
+  else if(_hid){send(_hid,{t:'BS',jid:jobId,status:'cancelled'});}
   fsClearInterests(jobId);persist();render();};
 window.removeTerminalJob=function(jobId){
   var j=A.myJobs.find(x=>x.id===jobId);
@@ -1415,13 +1594,16 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   <div class="cd" style="margin-bottom:16px"><div style="font-size:18px;font-weight:800;line-height:1.4;margin-bottom:10px">${esc(j.title)}</div>
   <div style="font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:12px">${esc(j.desc||'')}</div>
   ${j.items?.length?`${(()=>{var dn3=j.items.filter(it=>(it.status||'open')==='done').length;return dn3?`<div style="font-size:13px;color:var(--g2);font-weight:600;margin-bottom:8px">✅ ${dn3}/${j.items.length} punkter fullført</div>`:''})()}
-  <div style="margin-bottom:12px">${j.items.map((it,idx)=>{var ps=it.status||'open';var psIco=ps==='done'?'☑':'☐';var psIcoO=ps==='done'?'✅':'○';var psCol=ps==='done'?'var(--g2)':'var(--t3)';
+  <div style="margin-bottom:12px">${j.items.map((it,idx)=>{var ps=it.status||'open';var _canTog=canTogglePoint(j,idx);var psIco=ps==='done'?'☑':'☐';var psIcoO=ps==='done'?'✅':'○';var psCol=ps==='done'?'var(--g2)':'var(--t3)';
     return`<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--s2)">
-    ${isH?`<button style="width:24px;height:24px;background:none;border:none;font-size:16px;cursor:pointer;flex-shrink:0;color:${psCol}" onclick="updatePointStatus('${escA(j.id)}',${idx})">${psIco}</button>`
+    ${_canTog?`<button style="width:28px;height:28px;background:none;border:none;font-size:16px;cursor:pointer;flex-shrink:0;color:${psCol}" onclick="updatePointStatus('${escA(j.id)}',${idx})">${psIco}</button>`
       :isO?`<span style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;color:${psCol}">${psIcoO}</span>`
+      :(isH&&!_canTog)?`<span style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;color:${psCol}">${psIcoO}</span>`
       :`<span style="width:28px;height:28px;border-radius:14px;background:${(it.mode||'list')==='image'?'var(--pr)':'var(--s3)'};color:${(it.mode||'list')==='image'?'#fff':'var(--t2)'};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">${idx+1}</span>`}
     ${it.audioUrl?`<button style="width:32px;height:32px;border-radius:16px;background:var(--pr);color:#fff;font-size:12px;flex-shrink:0;display:flex;align-items:center;justify-content:center" onclick="playBullet('${escA(j.id)}',${idx})">${_playingId===j.id+'_'+idx?'⏸':'▶'}</button>`:''}
     <div style="flex:1"><div style="font-size:14px;font-weight:600;${ps==='done'?'text-decoration:line-through;color:var(--t3)':''}">${esc(it.text||'Punkt '+(idx+1))}</div>
+    ${it.assignedTo?`<div style="font-size:11px;color:${it.assignedTo===A.myId?'var(--g2)':'var(--t3)'};margin-top:2px">${it.assignedTo===A.myId?'✅ Din oppgave':'👤 '+esc(it.assignedName||'')}${it.assignedStatus==='pending'?' (venter svar)':it.assignedStatus==='declined'?' (takket nei — åpent)':''}</div>`
+    :`<div style="font-size:11px;color:var(--t3);margin-top:2px">🔓 Åpent for alle</div>`}
     ${it.audioUrl?`<div style="font-size:11px;color:var(--t3)">Trykk ▶ for å høre (${esc(it.duration)}s)</div>`:''}</div></div>`;}).join('')}</div>`:''}${imgSrc&&imgSrc!=='[img]'?`<img src="${esc(imgSrc)}" style="width:100%;max-height:250px;object-fit:contain;background:var(--s2);display:block;border-radius:12px;margin:0 0 12px 0;cursor:pointer" onclick="showImg('${escA(imgSrc)}')">`:''}
   <div class="dv"></div>
   ${[['Lagt ut av',esc(j.creatorName)+(pr?' · ⭐'+pr:'')],j.reward?['Tilbud',esc(j.reward)]:null,j.by||j.fylke||j.location?['Sted','📍 '+esc([j.by,FYLKER.find(f=>f.id===j.fylke)?.name,j.location].filter(Boolean).join(', '))]:null,j.groupName?['Gruppe','🏘️ '+esc(j.groupName)]:null,
@@ -1430,20 +1612,49 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   if(isO&&j.status==='accepting'&&ints.length)b+=`<div class="cd cdt" onclick="go('interests',{jobId:'${escA(j.id)}'})" style="background:var(--yb);border-color:#FDE68A"><div style="font-size:14px;font-weight:700;color:#92400E">⚡ ${ints.length} vil hjelpe → velg</div></div>`;
   if(isO&&['open','accepting'].includes(j.status))b+=`<button class="btn br" style="margin-bottom:10px" onclick="showConfirm('Kansellere?','Vil du kansellere innlegget?','Ja, kanseller',()=>cancelMyJob('${escA(j.id)}'))">🗑 Kanseller</button>`;
   if(isO&&['active','pending_review'].includes(j.status))b+=`<button class="btn br" style="margin-bottom:10px" onclick="showConfirm('Kansellere?','Du har allerede en hjelper. Er du sikker på at du vil kansellere?','Ja, kanseller',()=>cancelMyJob('${escA(j.id)}'))">🗑 Kanseller</button>`;
-  if(isH&&j.status==='active')b+=`<div class="cd" style="border-color:var(--pbb);background:var(--pb)"><div style="font-size:14px;font-weight:700;color:var(--pr);margin-bottom:8px">Er du ferdig?</div>
+  if(isH&&j.status==='active'&&j.items?.length){
+    var _ad=allPointsDone(j);var _dc=j.items.filter(it=>(it.status||'open')==='done').length;
+    if(_ad)b+=`<div class="cd" style="border-color:var(--gbb);background:var(--gb)"><div style="font-size:14px;font-weight:700;color:var(--g2);margin-bottom:8px">✅ Alle oppgaver er gjort!</div>
+      <button class="btn bg" style="min-height:44px" onclick="markJobComplete('${escA(j.id)}')">Send til godkjenning →</button></div>`;
+    else b+=`<div class="ibox">${_dc}/${j.items.length} oppgaver fullført. Hele jobben kan sendes til godkjenning når alle er ferdige.</div>`;}
+  if(isH&&j.status==='active'&&!j.items?.length)b+=`<div class="cd" style="border-color:var(--pbb);background:var(--pb)"><div style="font-size:14px;font-weight:700;color:var(--pr);margin-bottom:8px">Er du ferdig?</div>
     <button class="btn bg" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='pending_review';send(x.creatorId,{t:'HC',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','pending_review');persist();render();}">✅ Marker som ferdig</button></div>`;
-  if(isO&&j.status==='active')b+=`<button class="btn br" style="margin-bottom:4px" onclick="showConfirm('Aldri gjort opp?','Er du sikker? Dette gir personen et permanent merke som alle kan se.','Ja, merk som aldri gjort',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='never_done';send(x.helperId,{t:'NP',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','never_done');if(!A.ratings[x.helperId])A.ratings[x.helperId]=[];A.ratings[x.helperId].push({score:1,comment:'Aldri gjort opp.',jobId:'${escA(j.id)}',raterName:A.myName,ts:now(),nd:true});gossip({t:'RAT',uid:x.helperId,ratings:A.ratings[x.helperId]});}persist();render();})">⚠️ Aldri gjort opp</button>
+  if(isO&&j.status==='active'&&j.items?.length){var _pa=pointAssignees(j);
+    if(_pa.length)b+=`<div class="cd" style="margin-bottom:10px"><div class="slbl">DELTAKERE</div>${_pa.map(pid=>{var nm=pointAssigneeName(j,pid);var pts=(j.items||[]).filter(it=>it.assignedTo===pid);
+      var dn4=pts.filter(it=>(it.status||'open')==='done').length;
+      return`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--s2)">
+      ${avHtml(pid,nm,32)}<div style="flex:1"><div style="font-size:13px;font-weight:600">${esc(nm)}</div>
+      <div style="font-size:11px;color:var(--t3)">${dn4}/${pts.length} punkt ferdig</div></div>
+      <button class="btn br bsm" style="width:auto;padding:6px 10px;font-size:11px" onclick="showConfirm('Aldri gjort opp?','${escA(nm)} får et permanent merke synlig for alle.','Ja, merk',()=>markParticipantNeverDone('${escA(j.id)}','${escA(pid)}'))">⚠️</button></div>`;}).join('')}</div>`;}
+  if(isO&&j.status==='active'&&!j.items?.length)b+=`<button class="btn br" style="margin-bottom:4px" onclick="showConfirm('Aldri gjort opp?','Er du sikker? Dette gir personen et permanent merke som alle kan se.','Ja, merk som aldri gjort',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='never_done';send(x.helperId,{t:'NP',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','never_done');if(!A.ratings[x.helperId])A.ratings[x.helperId]=[];A.ratings[x.helperId].push({score:1,comment:'Aldri gjort opp.',jobId:'${escA(j.id)}',raterName:A.myName,ts:now(),nd:true});gossip({t:'RAT',uid:x.helperId,ratings:A.ratings[x.helperId]});}persist();render();})">⚠️ Aldri gjort opp</button>
     <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Gir personen et permanent merke synlig for alle.</div>`;
   // Chat is inline below — no separate "Åpne chat" button needed
   if(isH&&j.status==='active')b+=`<button class="btn br" style="margin-top:8px" onclick="showConfirm('Trekke deg?','Er du sikker? Eieren blir varslet.','Ja, trekk meg',()=>{withdrawHelp('${escA(j.id)}','${escA(j.creatorId)}');go('mine');})">↩️ Trekk meg fra jobben</button>`;
-  if(isO&&j.status==='pending_review')b+=`<div class="cd" style="border-color:var(--gbb);background:var(--gb)"><div style="font-size:14px;font-weight:700;color:var(--g2);margin-bottom:8px">Hjelper sier det er ferdig!</div>
-    <div class="brow"><button class="btn bg" style="flex:1" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='done';A.completedCount++;ss('oDone',A.completedCount);if(x.helperId)send(x.helperId,{t:'PC',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','done');persist();render();}">✅ Godkjenn — jobben er gjort</button>
-    <button class="btn br" style="flex:1" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='active';x.helperDone=false;if(x.helperId)send(x.helperId,{t:'RJ',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','active');persist();render();}">↩️ Ikke ferdig ennå</button></div></div>`;
+  if(isO&&j.status==='pending_review'){var _pm=!!j.items?.length;
+    b+=`<div class="cd" style="border-color:var(--gbb);background:var(--gb)"><div style="font-size:14px;font-weight:700;color:var(--g2);margin-bottom:8px">${_pm?'Jobben er sendt til godkjenning':'Hjelper sier det er ferdig!'}</div>
+    <div class="brow"><button class="btn bg" style="flex:1" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='done';A.completedCount++;ss('oDone',A.completedCount);
+      ${_pm?`jobParticipants(x).forEach(pid=>{send(pid,{t:'PC',jid:'${escA(j.id)}'});send(pid,{t:'BS',jid:'${escA(j.id)}',status:'done'});});`:`if(x.helperId)send(x.helperId,{t:'PC',jid:'${escA(j.id)}'});`}
+      fsUpdatePostStatus('${escA(j.id)}','done');persist();render();}">✅ Godkjenn</button>
+    <button class="btn br" style="flex:1" onclick="var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='active';x.helperDone=false;
+      ${_pm?`jobParticipants(x).forEach(pid=>{send(pid,{t:'RJ',jid:'${escA(j.id)}'});send(pid,{t:'BS',jid:'${escA(j.id)}',status:'active'});});`:`if(x.helperId)send(x.helperId,{t:'RJ',jid:'${escA(j.id)}'});`}
+      fsUpdatePostStatus('${escA(j.id)}','active');persist();render();}">↩️ Ikke ferdig ennå</button></div></div>`;}
   if(j.status==='done'){b+=`<div style="text-align:center;padding:20px 0"><div style="font-size:48px;margin-bottom:8px">🎉</div><div style="font-size:24px;font-weight:800">Fullført!</div></div>`;
-    if(!rated){const tid=isO?j.helperId:j.creatorId;const tn=isO?j.helperName:j.creatorName;
-      b+=`<div class="cd"><div class="slbl">Vurder ${esc(tn||'?')}</div><div class="stars">${[1,2,3,4,5].map(n=>`<button class="star${(A.nb.rating||0)>=n?' act':''}" onclick="A.nb.rating=${n};render()">★</button>`).join('')}</div>
+    if(j.items?.length&&isO&&!j.helperId){
+      // Multi-person rating for point-mode
+      var _rpa=pointAssignees(j);
+      if(_rpa.length){b+=`<div class="slbl">VURDER DELTAKERE</div>`;
+        _rpa.forEach((pid,ri)=>{var nm=pointAssigneeName(j,pid);var _rk=j.id+'_'+pid;var _rd=A.rated.has(_rk);
+          if(!_rd)b+=`<div class="cd" style="margin-bottom:8px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">${avHtml(pid,nm,32)}<span style="font-size:14px;font-weight:700">${esc(nm)}</span></div>
+          <div class="stars">${[1,2,3,4,5].map(n=>`<button class="star${(A.nb['_pr'+ri]||0)>=n?' act':''}" onclick="A.nb['_pr'+${ri}]=${n};render()">★</button>`).join('')}</div>
+          <textarea class="fi" rows="1" placeholder="Kommentar..." style="margin:6px 0;font-size:12px" oninput="A.nb['_pc'+${ri}]=this.value"></textarea>
+          <button class="btn bp bsm" onclick="A.nb.rating=A.nb['_pr'+${ri}]||0;A.nb._rc=A.nb['_pc'+${ri}]||'';doRate('${escA(j.id)}','${escA(pid)}');A.rated.add('${escA(_rk)}');persist();render();">Vurder ✓</button></div>`;
+          else b+=`<div style="font-size:12px;color:var(--g2);margin-bottom:6px">✓ ${esc(nm)} — vurdert</div>`;});}
+      else b+=`<div class="ibox" style="text-align:center">Ingen deltakere å vurdere.</div>`;}
+    else if(!rated){const tid=isO?j.helperId:j.creatorId;const tn=isO?j.helperName:j.creatorName;
+      if(tid)b+=`<div class="cd"><div class="slbl">Vurder ${esc(tn||'?')}</div><div class="stars">${[1,2,3,4,5].map(n=>`<button class="star${(A.nb.rating||0)>=n?' act':''}" onclick="A.nb.rating=${n};render()">★</button>`).join('')}</div>
       <textarea class="fi" id="rc" rows="2" placeholder="Kommentar..." style="margin:8px 0" oninput="A.nb._rc=this.value"></textarea>
-      <button class="btn bp" onclick="doRate('${escA(j.id)}','${escA(tid)}')">Send vurdering ✓</button></div>`;}else b+=`<div class="ibox" style="text-align:center">✓ Vurdering sendt!</div>`;}
+      <button class="btn bp" onclick="doRate('${escA(j.id)}','${escA(tid)}')">Send vurdering ✓</button></div>`;
+    }else b+=`<div class="ibox" style="text-align:center">✓ Vurdering sendt!</div>`;}
   if(isH&&j.status==='pending')b+=`<div class="ibox">⏳ Venter på svar fra eieren...</div>
     <button class="btn br" style="margin-bottom:10px" onclick="withdrawHelp('${escA(j.id)}','${escA(j.creatorId)}');go('feed');">↩️ Trekk tilbake</button>`;
   if(isH&&j.status==='pending_review')b+=`<div class="ibox">⏳ Venter på at eieren godkjenner...</div>`;
@@ -1454,14 +1665,36 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   if(!isO&&!isH&&!A.myJobs.find(x=>x.id===jid)&&['open','accepting'].includes(j.status)){
     const isContact=A.contacts.find(c=>c.id===j.creatorId);
     if(j.isPublic&&!isContact)b+=`<div style="font-size:12px;color:var(--t2);margin-bottom:8px">🌐 Offentlig — du trenger ikke bli venn. Tilknytningen varer kun for denne oppgaven.</div>`;
-    b+=`<div class="fld"><label class="fl">Melding (valgfritt)</label><input class="fi" id="jmsg" placeholder="Kort melding til eieren..." maxlength="200"></div>
-    <div style="text-align:center;color:var(--t3);font-size:12px;margin:8px 0">eller</div>
-    ${_isHelpRec?`<button class="btn br rec-pulse" onclick="stopHelpRec()">🔴 Stopp opptak</button>`
-    :window._helpAudio?`<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--gb);border:1px solid var(--gbb);border-radius:10px;margin-bottom:8px">
-      <span style="font-size:13px;color:var(--g2)">🎙️ Lydmelding klar (${window._helpAudio.dur}s)</span>
-      <button style="font-size:14px;color:var(--t3);padding:4px;margin-left:auto" onclick="removeHelpAudio()">✕</button></div>`
-    :`<button class="btn bs" style="margin-bottom:8px" onclick="startHelpRec()">🎙️ Ta opp lydmelding</button>`}
-    <button class="btn bp" onclick="doHelp('${escA(j.id)}','${escA(j.creatorId)}')">🤝 Jeg kan hjelpe!</button>`;}
+    if(j.items?.length){
+      // Point-based application
+      var _pp=A._pointPick[jid]||[];var _openPts=j.items.filter((it,i)=>(it.status||'open')==='open'&&!it.assignedTo).length;
+      b+=`<div class="cd" style="border-color:var(--pbb);background:var(--pb);margin-bottom:12px"><div style="font-size:14px;font-weight:700;color:var(--pr);margin-bottom:8px">Velg punkter du vil ta</div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:12px">Trykk på åpne punkter for å velge dem. Du kan søke på ett eller flere.</div>
+      ${j.items.map((it,idx)=>{var open=(it.status||'open')==='open'&&!it.assignedTo;var sel=_pp.includes(idx);
+        return`<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--s2)${!open?';opacity:0.5':''}">
+        <button style="width:44px;height:44px;border-radius:22px;background:${sel?'var(--pr)':open?'var(--s2)':'var(--s3)'};border:2px solid ${sel?'var(--pr)':open?'var(--s3)':'var(--b)'};color:${sel?'#fff':'var(--t2)'};font-size:16px;font-weight:800;flex-shrink:0;cursor:${open?'pointer':'default'}" ${open?`onclick="togglePointInterest('${escA(jid)}',${idx})"`:''}>
+        ${sel?'✓':(idx+1)}</button>
+        <div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(it.text||'Punkt '+(idx+1))}</div>
+        <div style="font-size:11px;color:var(--t3)">${!open?(it.assignedTo?'👤 Tildelt':'Ikke tilgjengelig'):'Åpent'}</div></div></div>`;}).join('')}
+      <div style="font-size:12px;color:var(--t3);margin-top:8px">${_openPts} åpne punkt${_openPts!==1?'er':''} · ${_pp.length} valgt</div></div>`;
+      b+=`<div class="fld"><label class="fl">Melding (valgfritt)</label><input class="fi" id="jmsg" placeholder="Kort melding til eieren..." maxlength="200"></div>`;
+      b+=`${_isHelpRec?`<button class="btn br rec-pulse" onclick="stopHelpRec()">🔴 Stopp opptak</button>`
+        :window._helpAudio?`<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--gb);border:1px solid var(--gbb);border-radius:10px;margin-bottom:8px">
+        <span style="font-size:13px;color:var(--g2)">🎙️ Lydmelding klar (${window._helpAudio.dur}s)</span>
+        <button style="font-size:14px;color:var(--t3);padding:4px;margin-left:auto" onclick="removeHelpAudio()">✕</button></div>`
+        :`<button class="btn bs" style="margin-bottom:8px" onclick="startHelpRec()">🎙️ Ta opp lydmelding</button>`}`;
+      b+=`<button class="btn bp" style="min-height:44px" ${_pp.length?'':`disabled`} onclick="doHelpPoints('${escA(j.id)}','${escA(j.creatorId)}')">📋 Søk på ${_pp.length||'...'} punkt${_pp.length!==1?'er':''}</button>`;
+    }else{
+      // Whole-job application (no items)
+      b+=`<div class="fld"><label class="fl">Melding (valgfritt)</label><input class="fi" id="jmsg" placeholder="Kort melding til eieren..." maxlength="200"></div>
+      <div style="text-align:center;color:var(--t3);font-size:12px;margin:8px 0">eller</div>
+      ${_isHelpRec?`<button class="btn br rec-pulse" onclick="stopHelpRec()">🔴 Stopp opptak</button>`
+      :window._helpAudio?`<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--gb);border:1px solid var(--gbb);border-radius:10px;margin-bottom:8px">
+        <span style="font-size:13px;color:var(--g2)">🎙️ Lydmelding klar (${window._helpAudio.dur}s)</span>
+        <button style="font-size:14px;color:var(--t3);padding:4px;margin-left:auto" onclick="removeHelpAudio()">✕</button></div>`
+      :`<button class="btn bs" style="margin-bottom:8px" onclick="startHelpRec()">🎙️ Ta opp lydmelding</button>`}
+      <button class="btn bp" onclick="doHelp('${escA(j.id)}','${escA(j.creatorId)}')">🤝 Jeg kan hjelpe!</button>`;
+    }}
   // Inline job chat for active/pending_review/done jobs where user is owner or helper
   if((isO||isH)&&['active','pending_review','done'].includes(j.status)){
     const _msgs=A.jobChats[jid]||[];const _oId=j.isHelper?j.creatorId:j.helperId;const _last20=_msgs.slice(-20);
@@ -1491,8 +1724,37 @@ window.doHelp=(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A.open
   send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0});
   if(hasFS()){try{fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId).set({id:A.myId,name:A.myName,msg:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,ts:Date.now()}).catch(e=>console.warn('[FS] interest write',e));}catch(e){}}
   persist();go('mine');notify('✅','Interesse sendt!');};
-window.withdrawHelp=(jid,cid)=>{if(D())console.log('[withdrawHelp]',{jid,cid,connOpen:!!A.conns.get(cid)?.open});
+window.togglePointInterest=(jid,idx)=>{if(!A._pointPick[jid])A._pointPick[jid]=[];
+  var arr=A._pointPick[jid];var i=arr.indexOf(idx);
+  if(i>=0)arr.splice(i,1);else{
+    var oj=A.openJobs.get(jid);var it=oj?.items?.[idx];
+    if(!it||(it.status||'open')!=='open'||it.assignedTo)return;
+    arr.push(idx);}render();};
+window.doHelpPoints=(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;
+  var oj=A.openJobs.get(jid);var pts=A._pointPick[jid]||[];
+  if(!pts.length){notify('⚠️','Velg minst ett punkt');return;}
+  var msg=$('jmsg')?.value?.trim()||'';var ha=window._helpAudio;window._helpAudio=null;
+  if(D())console.log('[doHelpPoints]',{jid,cid,points:pts});
+  if(!A.contacts.find(c=>c.id===cid)){A.tempConns.set(jid,{peerId:cid,name:oj?.creatorName||'',ts:now()});tryC(cid);}
+  A.openJobs.delete(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
+    fylke:oj?.fylke,by:oj?.by,imageUrl:oj?.imageUrl,imageData:oj?.imageData,groupId:oj?.groupId,groupName:oj?.groupName,jobDate:oj?.jobDate,jobTime:oj?.jobTime,
+    creatorId:cid,creatorName:oj?.creatorName,status:'pending',isHelper:true,isPointApplicant:true,_myPoints:pts.slice(),ts:now()});
+  send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,points:pts.slice()});
+  if(hasFS()){try{fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId).set({id:A.myId,name:A.myName,msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,points:pts.slice(),type:'application',ts:Date.now()}).catch(e=>console.warn('[FS] interest write',e));}catch(e){}}
+  delete A._pointPick[jid];persist();go('mine');notify('✅','Søknad sendt for '+pts.length+' punkt'+(pts.length>1?'er':'')+'!');};
+window.withdrawHelp=async(jid,cid)=>{if(D())console.log('[withdrawHelp]',{jid,cid,connOpen:!!A.conns.get(cid)?.open});
   var wj=A.myJobs.find(z=>z.id===jid);
+  // Point-branch: only reopen my assigned points, don't terminate entire job
+  if(wj&&hasPointAssignment(wj,A.myId)){
+    var n=reopenWithdrawnPoints(wj,A.myId);
+    wj.isPointHelper=false;wj.isHelper=false;wj._myPoints=[];
+    if(D())console.log('[withdrawHelp] point-branch',{jid,reopened:n});
+    send(cid,{t:'JW',jid,pointWithdraw:true});
+    await fsUpdatePostItems(jid,wj.items);
+    fsUpdatePostStatus(jid,'open');
+    if(hasFS())try{fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId).delete().catch(function(){});}catch(e){}
+    persist();notify('↩️','Du trakk deg fra '+n+' oppgave'+(n>1?'r':''));return;}
+  // Legacy whole-job branch
   if(wj){
     if(wj.status==='pending')wj.status='declined';
     else if(['active','pending_review'].includes(wj.status))wj.status='cancelled';
@@ -1529,10 +1791,56 @@ function vInterests(){const j=A.myJobs.find(x=>x.id===A.params.jobId);
     ${ipeer?.bio?`<div style="font-size:12px;color:var(--t2);margin-top:4px">${esc(ipeer.bio.substr(0,80))}</div>`:''}</div></div>
     ${p.msg?`<div style="font-size:13px;color:var(--t2);background:var(--s2);padding:10px 12px;border-radius:10px;margin-bottom:10px;line-height:1.5">"${esc(p.msg)}"</div>`:''}
     ${p.audioUrl?`<div style="margin-bottom:10px"><button style="display:flex;align-items:center;gap:8px;background:var(--s2);border:none;padding:10px 14px;border-radius:10px;font-size:13px;cursor:pointer;color:var(--tx)" onclick="event.stopPropagation();playChatAudio('${escA(p.audioUrl)}')">▶ Lydmelding (${p.audioDur||'?'}s)</button></div>`:''}
+    ${p.points?.length?`<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px">${p.points.map(idx=>{var it=j.items?.[idx];return`<span class="badge bb1" style="font-size:11px">📋 ${esc(it?.text||'Punkt '+(idx+1))}</span>`;}).join('')}</div>`:''}
     <div class="brow"><button class="btn bs bsm" style="flex:1" onclick="go('repProfile',{uid:'${escA(p.id)}',name:'${escA(p.name)}'})">Se profil</button>
-    <button class="btn bg bsm" style="flex:1" onclick="accH('${escA(j.id)}','${escA(p.id)}','${escA(p.name)}')">✓ Velg</button>
+    <button class="btn bg bsm" style="flex:1" onclick="accH('${escA(j.id)}','${escA(p.id)}','${escA(p.name)}')">${p.points?.length?'✓ Tildel punkter':'✓ Velg'}</button>
     <button class="btn br bsm" style="flex:0;padding:10px 14px" onclick="decH('${escA(j.id)}','${escA(p.id)}')">✕</button></div></div>`;}).join('')}</div>`;}
-window.accH=(jid,pid,name)=>{const j=A.myJobs.find(x=>x.id===jid);if(!j)return;
+function pointAssignees(j){var s=new Set();(j?.items||[]).forEach(it=>{if(it.assignedTo)s.add(it.assignedTo);});return[...s];}
+function pointAssigneeName(j,pid){var it=(j?.items||[]).find(x=>x.assignedTo===pid);if(it?.assignedName)return it.assignedName;
+  var c=A.contacts.find(x=>x.id===pid);if(c)return c.alias||c.name;var p=A.peers.get(pid);return p?.name||A._userNames[pid]||pid.substr(0,8);}
+function allPointsDone(j){if(!j?.items?.length)return false;return j.items.every(it=>(it.status||'open')==='done');}
+window.markJobComplete=function(jid){var j=A.myJobs.find(x=>x.id===jid);if(!j||!j.items?.length||!allPointsDone(j)||j.status!=='active')return;
+  j.status='pending_review';fsUpdatePostStatus(jid,'pending_review');
+  if(j.creatorId&&j.creatorId!==A.myId)send(j.creatorId,{t:'HC',jid});
+  jobParticipants(j).forEach(pid=>send(pid,{t:'BS',jid,status:'pending_review'}));
+  if(D())console.log('[markJobComplete]',{jid});persist();updateB();render();};
+window.markParticipantNeverDone=async function(jid,pid){var j=A.myJobs.find(x=>x.id===jid);
+  if(!j||!j.items?.length||j.creatorId!==A.myId)return;
+  var nm=pointAssigneeName(j,pid);var n=reopenWithdrawnPoints(j,pid);
+  if(!n){notify('⚠️','Fant ingen punkt for denne deltakeren');return;}
+  if(!A.ratings[pid])A.ratings[pid]=[];
+  A.ratings[pid].push({score:1,comment:'Aldri gjort opp.',jobId:jid,raterName:A.myName,ts:now(),nd:true});
+  gossip({t:'RAT',uid:pid,ratings:A.ratings[pid]});
+  var ns=pointOwnerStatus(j);j.status=ns;
+  await fsUpdatePostItems(jid,j.items);fsUpdatePostStatus(jid,ns);
+  send(pid,{t:'NP',jid});
+  jobParticipants(j).forEach(p=>send(p,{t:'BS',jid,status:ns}));
+  if(D())console.log('[markParticipantNeverDone]',{jid,pid,reopened:n,newStatus:ns});
+  notify('⚠️',nm+' fikk permanent merke. '+n+' punkt åpnet igjen.');persist();updateB();render();};
+function hasPointAssignment(j,uid){return!!(j?.items?.some(it=>it.assignedTo===uid));}
+function reopenWithdrawnPoints(j,uid){var n=0;(j.items||[]).forEach(it=>{if(it.assignedTo===uid){it.assignedTo=null;it.assignedName=null;it.assignedStatus=null;it.status='open';n++;}});return n;}
+function pointOwnerStatus(j){var its=j.items||[];if(!its.length)return j.status||'open';
+  var hasOpen=its.some(it=>(it.status||'open')==='open'&&!it.assignedTo);
+  var hasInt=(j.interests||[]).length>0;
+  if(hasOpen&&hasInt)return'accepting';if(hasOpen)return'open';return'active';}
+window.accH=async(jid,pid,name)=>{const j=A.myJobs.find(x=>x.id===jid);if(!j)return;
+  var itx=(j.interests||[]).find(x=>x.id===pid);
+  // Point-branch: interest with specific points on a job with items
+  if(itx?.points?.length&&j.items?.length){
+    var vp=itx.points.filter((idx,i,a)=>a.indexOf(idx)===i&&Number.isInteger(idx)&&j.items[idx]&&(j.items[idx].status||'open')==='open'&&!j.items[idx].assignedTo);
+    if(!vp.length){j.interests=(j.interests||[]).filter(x=>x.id!==pid);
+      if(hasFS())try{fbDb.collection('posts').doc(jid).collection('interests').doc(pid).delete().catch(function(){});}catch(e){}
+      var ns=pointOwnerStatus(j);j.status=ns;fsUpdatePostStatus(jid,ns);notify('⚠️','Disse punktene er ikke lenger åpne.');persist();render();return;}
+    if(D())console.log('[accH] point-branch',{jid,pid,name,validPoints:vp});
+    vp.forEach(idx=>{j.items[idx].assignedTo=pid;j.items[idx].assignedName=name;j.items[idx].assignedStatus='accepted';j.items[idx].status='taken';});
+    // Remove interest BEFORE computing owner status so accepting/open is correct
+    j.interests=(j.interests||[]).filter(x=>x.id!==pid);
+    if(hasFS())try{fbDb.collection('posts').doc(jid).collection('interests').doc(pid).delete().catch(function(){});}catch(e){}
+    var ns2=pointOwnerStatus(j);j.status=ns2;
+    await fsUpdatePostItems(jid,j.items);fsUpdatePostStatus(jid,ns2);
+    send(pid,{t:'JY',jid,name:A.myName,points:vp.slice()});
+    notify('✅',name+' fikk '+vp.length+' punkt'+(vp.length>1?'er':''));persist();go('jobDetail',{jobId:jid});return;}
+  // Whole-job branch (no points or no items)
   if(D())console.log('[accH]',{jid,pid,name,prevStatus:j.status,interests:j.interests?.length});
   j.helperId=pid;j.helperName=name;j.status='active';
   gossip({t:'TAKE',jobId:jid});fsUpdatePostStatus(jid,'active',{helperId:pid,helperName:name});send(pid,{t:'JY',jid,name:A.myName});
@@ -1540,8 +1848,12 @@ window.accH=(jid,pid,name)=>{const j=A.myJobs.find(x=>x.id===jid);if(!j)return;
   fsClearInterests(jid);persist();go('jobDetail',{jobId:jid});};
 window.decH=(jid,pid)=>{const j=A.myJobs.find(x=>x.id===jid);if(!j)return;
   if(D())console.log('[decH]',{jid,pid,interestsBefore:j.interests?.length});
-  j.interests=(j.interests||[]).filter(x=>x.id!==pid);send(pid,{t:'JN',jid});
-  if(hasFS())try{fbDb.collection('posts').doc(jid).collection('interests').doc(pid).delete().catch(function(){});}catch(e){}persist();render();};
+  var itx=(j.interests||[]).find(x=>x.id===pid);
+  j.interests=(j.interests||[]).filter(x=>x.id!==pid);
+  send(pid,{t:'JN',jid,points:itx?.points?.length?itx.points.slice():undefined});
+  if(hasFS())try{fbDb.collection('posts').doc(jid).collection('interests').doc(pid).delete().catch(function(){});}catch(e){}
+  if(j.items?.length){var ns=pointOwnerStatus(j);j.status=ns;fsUpdatePostStatus(jid,ns);}
+  persist();render();};
 
 // ═══ MY JOBS ═══
 if(!A._mineFilter)A._mineFilter='active';
@@ -1623,9 +1935,11 @@ function vJobChat(){const jid=A.params.jobId;const j=A.myJobs.find(x=>x.id===jid
   <button style="width:44px;height:44px;border-radius:22px;background:var(--pr);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="jcS('${escA(jid)}','${escA(oId||'')}')">➤</button>
   </div></div></div></div>`;}
 window.jcS=(jid,oId)=>{const inp=$('jci');if(!inp?.value.trim())return;const msg={from:A.myId,name:A.myName,text:inp.value.trim(),ts:now(),_mid:uid(),_status:'sent'};
-  addJMsg(jid,msg);fsWriteJobChat(jid,msg);if(oId)send(oId,{t:'BM',jid,name:A.myName,text:msg.text,ts:msg.ts,_mid:msg._mid});inp.value='';persist();render();setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},50);};
+  addJMsg(jid,msg);fsWriteJobChat(jid,msg);var _j=A.myJobs.find(x=>x.id===jid);var _tgts=_j?jobParticipants(_j):(oId?[oId]:[]);
+  _tgts.forEach(pid=>send(pid,{t:'BM',jid,name:A.myName,text:msg.text,ts:msg.ts,_mid:msg._mid}));inp.value='';persist();render();setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},50);};
 window.jdCS=(jid,oId)=>{const inp=$('jd-ci');if(!inp?.value.trim())return;const msg={from:A.myId,name:A.myName,text:inp.value.trim(),ts:now(),_mid:uid(),_status:'sent'};
-  addJMsg(jid,msg);fsWriteJobChat(jid,msg);if(oId)send(oId,{t:'BM',jid,name:A.myName,text:msg.text,ts:msg.ts,_mid:msg._mid});inp.value='';persist();render();setTimeout(()=>{const m=$('jd-chat');if(m)m.scrollTop=m.scrollHeight;},50);};
+  addJMsg(jid,msg);fsWriteJobChat(jid,msg);var _j=A.myJobs.find(x=>x.id===jid);var _tgts=_j?jobParticipants(_j):(oId?[oId]:[]);
+  _tgts.forEach(pid=>send(pid,{t:'BM',jid,name:A.myName,text:msg.text,ts:msg.ts,_mid:msg._mid}));inp.value='';persist();render();setTimeout(()=>{const m=$('jd-chat');if(m)m.scrollTop=m.scrollHeight;},50);};
 
 // ═══ DM ═══
 function vDM(){const pid=A.params.peerId;const nm=dn(pid,A.peers.get(pid)?.name);const msgs=A.dms[pid]||[];
@@ -2133,7 +2447,7 @@ async function boot(){
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
     fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'friends posts');});
     fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();});
-    fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsCleanupOrphanedGroups();fsSyncMyPosts();
+    fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsCheckPointUpdates();fsCleanupOrphanedGroups();fsSyncMyPosts();fsCheckMyInvitations();
     // Load group posts from Firestore
     if(hasFS()&&A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
       .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(e=>console.warn('[FS] groupPosts',e));});
@@ -2162,10 +2476,10 @@ async function boot(){
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
     fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
     fsCheckInterests();
-    fsCheckJobStatus();
-    // EVERY 2nd round: job chats + public groups + group posts + group orphan cleanup
+    fsCheckJobStatus();fsCheckMyInvitations();
+    // EVERY 2nd round: job chats + public groups + group posts + group orphan cleanup + point updates
     if(r%2===0){
-      fsCheckJobChats();
+      fsCheckJobChats();fsCheckPointUpdates();
       fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();}).catch(()=>{});
       fsCleanupOrphanedGroups();
       if(A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
