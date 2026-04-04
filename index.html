@@ -520,6 +520,44 @@ window.assignItem=(idx,pid,name)=>{if(!A.nb.items?.[idx])return;A.nb.items[idx].
   document.getElementById('assign-modal')?.remove();render();};
 window.clearAssign=idx=>{if(!A.nb.items?.[idx])return;A.nb.items[idx].assignedTo=null;A.nb.items[idx].assignedName=null;A.nb.items[idx].assignedStatus=null;
   document.getElementById('assign-modal')?.remove();render();};
+window.ownerAssignPoint=(jid,idx)=>{var j=A.myJobs.find(x=>x.id===jid);if(!j||j.creatorId!==A.myId||!j.items?.[idx])return;
+  var it=j.items[idx];if((it.status||'open')!=='open'||it.assignedTo)return;
+  var candidates=A.contacts.slice();
+  if(j.groupId){var g=A.groups.find(x=>x.id===j.groupId);if(g?._members){var mSet=new Set(g._members);candidates=candidates.filter(c=>mSet.has(c.id));}}
+  var bg=document.createElement('div');bg.className='modal-bg';bg.id='owner-assign-modal';
+  bg.innerHTML=`<div class="modal" style="max-height:70vh;overflow-y:auto">
+    <div style="font-size:16px;font-weight:800;margin-bottom:12px">Tildel punkt ${idx+1}</div>
+    ${candidates.map(c=>{var nm=c.alias||c.name;var pr=avgR(c.id);
+      return`<div style="cursor:pointer;padding:12px 0;border-bottom:1px solid var(--s2);display:flex;align-items:center;gap:10px" onclick="doOwnerAssign('${escA(jid)}',${idx},'${escA(c.id)}','${escA(nm)}')">
+      ${avHtml(c.id,nm,36)}<div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(nm)}</div>
+      <div style="font-size:11px;color:var(--t3)">${pr?'⭐ '+pr:''}</div></div></div>`;}).join('')}
+    ${!candidates.length?'<div style="padding:16px;color:var(--t3);font-size:13px;text-align:center">Ingen tilgjengelige personer</div>':''}
+    <button class="btn bs" style="margin-top:12px" onclick="document.getElementById('owner-assign-modal')?.remove()">Avbryt</button></div>`;
+  document.body.appendChild(bg);bg.onclick=e=>{if(e.target===bg)bg.remove();};};
+window.doOwnerAssign=async(jid,idx,pid,name)=>{document.getElementById('owner-assign-modal')?.remove();
+  var j=A.myJobs.find(x=>x.id===jid);if(!j||!j.items?.[idx])return;
+  var it=j.items[idx];if((it.status||'open')!=='open'||it.assignedTo)return;
+  it.assignedTo=pid;it.assignedName=name;it.assignedStatus='pending';
+  // Cleanup other applicants who had this point in their application
+  var _cleaned=0;
+  j.interests=(j.interests||[]).filter(x=>{
+    if(x.id===pid||!Array.isArray(x.points)||!x.points.includes(idx))return true;
+    x.points=x.points.filter(p=>p!==idx);
+    if(x.points.length>0){
+      // Still has other points — update FS doc
+      if(hasFS())try{fbDb.collection('posts').doc(jid).collection('interests').doc(x.id).update({points:x.points}).catch(function(){});}catch(e){}
+      return true;}
+    // No points left — send JN and remove
+    send(x.id,{t:'JN',jid,points:[idx]});_cleaned++;
+    if(hasFS())try{fbDb.collection('posts').doc(jid).collection('interests').doc(x.id).delete().catch(function(){});}catch(e){}
+    return false;});
+  if(D()&&_cleaned)console.log('[doOwnerAssign] cleaned applicants',{jid,idx,removed:_cleaned});
+  await fsUpdatePostItems(jid,j.items);
+  send(pid,{t:'PI',jid,idx,title:j.title,itemText:it.text||'Punkt '+(idx+1),creatorId:A.myId,creatorName:A.myName});
+  fsWritePointInvitation(pid,{jid,idx,creatorId:A.myId,creatorName:A.myName,title:j.title,itemText:it.text||'Punkt '+(idx+1),recipientId:pid,recipientName:name,status:'pending',ts:now(),updatedAt:now()});
+  var ns=pointOwnerStatus(j);if(ns!==j.status){j.status=ns;fsUpdatePostStatus(jid,ns);}
+  if(D())console.log('[ownerAssignPoint]',{jid,idx,pid,name});
+  notify('✅','Punkt tildelt '+name);persist();render();};
 function jobParticipants(j){var ids=new Set();if(j.helperId)ids.add(j.helperId);if(j.creatorId)ids.add(j.creatorId);
   (j.items||[]).forEach(it=>{if(it.assignedTo)ids.add(it.assignedTo);});ids.delete(A.myId);return[...ids];}
 function canTogglePoint(j,idx){var it=j?.items?.[idx];if(!j||!it)return false;
@@ -677,11 +715,35 @@ function showNextInvite(){if(A._showingInvite)return;if(!A._pendingInvites.lengt
     <strong>${esc(inv.creatorName||'Noen')}</strong> vil at du gjør:<br>
     <div style="background:var(--s2);border-radius:10px;padding:10px 12px;margin:8px 0;font-weight:600">${esc(inv.itemText||'Punkt '+(inv.idx+1))}</div>
     i oppgaven: <em>${esc(inv.title||'')}</em></div>
+    <button class="btn bs bsm" style="margin-bottom:12px;width:100%" id="_inv-preview">👁 Se hele jobben</button>
     <div class="brow"><button class="btn br" style="flex:1;min-height:44px" id="_inv-no">Nei takk</button>
     <button class="btn bg" style="flex:1;min-height:44px" id="_inv-yes">Ja, jeg tar det</button></div></div>`;
   document.body.appendChild(bg);
   bg.querySelector('#_inv-no').onclick=()=>respondInvite(false);
-  bg.querySelector('#_inv-yes').onclick=()=>respondInvite(true);}
+  bg.querySelector('#_inv-yes').onclick=()=>respondInvite(true);
+  bg.querySelector('#_inv-preview').onclick=()=>showInvitePreview();}
+async function showInvitePreview(){var inv=A._showingInvite;if(!inv)return;
+  var bg=document.getElementById('invite-modal');if(!bg)return;
+  var j=A.myJobs.find(x=>x.id===inv.jid)||A.openJobs.get(inv.jid);
+  if(!j||!j.items){try{var d=await fbDb.collection('posts').doc(inv.jid).get();if(d.exists)j=d.data();}catch(e){}}
+  var modal=bg.querySelector('.modal');if(!modal)return;
+  if(!j){modal.innerHTML=`<div style="font-size:16px;font-weight:800;margin-bottom:12px">👁 Hele jobben</div>
+    <div style="font-size:13px;color:var(--t3);padding:20px 0;text-align:center">Kunne ikke hente hele jobben akkurat nå.</div>
+    <button class="btn bs" id="_inv-back">← Tilbake til invitasjonen</button>`;
+    bg.querySelector('#_inv-back').onclick=()=>{document.getElementById('invite-modal')?.remove();A._showingInvite=null;A._pendingInvites.unshift(inv);showNextInvite();};return;}
+  var imgSrc=j.imageUrl||j.imageData;
+  modal.innerHTML=`<div style="font-size:16px;font-weight:800;margin-bottom:8px">👁 ${esc(j.title||'Jobb')}</div>
+    ${j.desc?`<div style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:10px">${esc(j.desc)}</div>`:''}
+    ${imgSrc&&imgSrc!=='[img]'?`<img src="${esc(imgSrc)}" style="width:100%;max-height:180px;object-fit:contain;border-radius:10px;margin-bottom:10px">`:''}
+    ${j.items?.length?`<div style="margin-bottom:10px">${j.items.map((it,idx)=>{var s=it.status||'open';
+      var ico=s==='done'?'✅':it.assignedTo?'👤':'🔓';
+      var lbl=s==='done'?'Fullført':it.assignedTo?(it.assignedName||'Tildelt'):'Åpent';
+      return`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--s2)">
+      <span style="font-size:14px">${ico}</span>
+      <div style="flex:1"><div style="font-size:13px;font-weight:600;${s==='done'?'text-decoration:line-through;color:var(--t3)':idx===inv.idx?'color:var(--pr)':''}">${esc(it.text||'Punkt '+(idx+1))}</div>
+      <div style="font-size:11px;color:var(--t3)">${lbl}${idx===inv.idx?' ← dette punktet':''}</div></div></div>`;}).join('')}</div>`:''}
+    <button class="btn bs" style="min-height:44px" id="_inv-back">← Tilbake til invitasjonen</button>`;
+  bg.querySelector('#_inv-back').onclick=()=>{document.getElementById('invite-modal')?.remove();A._showingInvite=null;A._pendingInvites.unshift(inv);showNextInvite();};}
 async function respondInvite(accepted){var inv=A._showingInvite;if(!inv){document.getElementById('invite-modal')?.remove();return;}
   var invId=inv.jid+'_'+inv.idx;
   document.getElementById('invite-modal')?.remove();A._showingInvite=null;
@@ -1466,9 +1528,13 @@ function vCreate(){
       <div style="display:flex;gap:8px"><input type="date" class="fi" style="flex:1" value="${A.nb.jobDate||''}" oninput="A.nb.jobDate=this.value">
       <input type="time" class="fi" style="width:110px" value="${A.nb.jobTime||''}" oninput="A.nb.jobTime=this.value"></div>
       <div style="font-size:11px;color:var(--t3);margin-top:4px">Tidspunkt er valgfritt. Dato hjelper folk å planlegge.</div></div>
+    ${(()=>{var _hasAsgn=(A.nb.items||[]).some(it=>it.assignedTo);
+      if(_hasAsgn&&A.nb.vis==='direct'){A.nb.vis=(A.nb.type||'help')==='help'?'friends':'public';A.nb.targetIds=[];}
+      return'';})()}
     <div class="fld"><div class="slbl">HVEM SER DETTE?</div><div class="ttypes" style="grid-template-columns:1fr 1fr">
       ${(A.nb.vis==='group'&&A.nb.groupId?[['group','🏘️',esc(A.nb.groupName||'Gruppe'),'Gruppepost']]
-        :[['direct','👤','Direkte','Send til én bestemt person'],['friends','👥','Mine venner','Alle vennene dine ser dette'],['public','🌐','Offentlig','Alle i ditt område ser dette']]).map(([v,i,n,d])=>
+        :(()=>{var _ha=(A.nb.items||[]).some(it=>it.assignedTo);var _opts=[['friends','👥','Mine venner','Alle vennene dine ser dette'],['public','🌐','Offentlig','Alle i ditt område ser dette']];
+          if(!_ha)_opts.unshift(['direct','👤','Direkte','Send til én bestemt person']);return _opts;})()).map(([v,i,n,d])=>
         `<div class="ttype${(A.nb.vis||((A.nb.type||'help')==='help'?'friends':'public'))===v?' act':''}" onclick="A.nb.vis='${v}';render()"><div class="ttype-i">${i}</div><div class="ttype-n">${n}</div><div class="ttype-d">${d}</div></div>`).join('')}
     </div></div>
     ${(A.nb.vis||'')==='direct'?`<div class="fld"><label class="fl">Velg person</label>${A.contacts.length?A.contacts.map(c=>{const sel=(A.nb.targetIds||[]).includes(c.id);
@@ -1492,6 +1558,7 @@ window.removeCreateImg=()=>{if(!A.nb)return;var hasImgPts=(A.nb.items||[]).some(
 window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if(!t){notify('⚠️','Skriv en tittel');return;}if(!A.nb.desc?.trim()){notify('⚠️','Skriv en beskrivelse');return;}
   if(A.nb.vis==='group'&&!A.nb.groupId){notify('⚠️','Velg en gruppe');return;}
   if(A.nb.vis==='direct'&&!(A.nb.targetIds||[]).length){notify('⚠️','Velg minst én person');return;}
+  if(A.nb.vis==='direct'&&(A.nb.items||[]).some(it=>it.assignedTo)){A.nb.vis=(A.nb.type||'help')==='help'?'friends':'public';A.nb.targetIds=[];}
   const vis=A.nb.vis||((A.nb.type||'help')==='help'?'friends':'public');
   if(D())console.log('[→ POST]',{type:A.nb.type,vis,title:t,hasImage:!!A.nb.imageData,items:(A.nb.items||[]).length,groupId:A.nb.groupId});
   const defExp=['public','friends'].includes(vis)?30:0;
@@ -1608,7 +1675,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
     ${it.audioUrl?`<button style="width:32px;height:32px;border-radius:16px;background:var(--pr);color:#fff;font-size:12px;flex-shrink:0;display:flex;align-items:center;justify-content:center" onclick="playBullet('${escA(j.id)}',${idx})">${_playingId===j.id+'_'+idx?'⏸':'▶'}</button>`:''}
     <div style="flex:1"><div style="font-size:14px;font-weight:600;${ps==='done'?'text-decoration:line-through;color:var(--t3)':''}">${esc(it.text||'Punkt '+(idx+1))}</div>
     ${it.assignedTo?`<div style="font-size:11px;color:${it.assignedTo===A.myId?'var(--g2)':'var(--t3)'};margin-top:2px">${it.assignedTo===A.myId?'✅ Din oppgave':'👤 '+esc(it.assignedName||'')}${it.assignedStatus==='pending'?' (venter svar)':it.assignedStatus==='declined'?' (takket nei — åpent)':''}</div>`
-    :`<div style="font-size:11px;color:var(--t3);margin-top:2px">🔓 Åpent for alle</div>`}
+    :`<div style="display:flex;align-items:center;gap:6px;margin-top:2px"><span style="font-size:11px;color:var(--t3)">🔓 Åpent</span>${isO&&(ps==='open')?`<button style="font-size:11px;color:var(--pr);font-weight:600;background:none;border:none;cursor:pointer;padding:2px 6px" onclick="event.stopPropagation();ownerAssignPoint('${escA(j.id)}',${idx})">👤 Tildel</button>`:''}</div>`}
     ${it.audioUrl?`<div style="font-size:11px;color:var(--t3)">Trykk ▶ for å høre (${esc(it.duration)}s)</div>`:''}</div></div>`;}).join('')}</div>`:''}${imgSrc&&imgSrc!=='[img]'?`<img src="${esc(imgSrc)}" style="width:100%;max-height:250px;object-fit:contain;background:var(--s2);display:block;border-radius:12px;margin:0 0 12px 0;cursor:pointer" onclick="showImg('${escA(imgSrc)}')">`:''}
   <div class="dv"></div>
   ${[['Lagt ut av',esc(j.creatorName)+(pr?' · ⭐'+pr:'')],j.reward?['Tilbud',esc(j.reward)]:null,j.by||j.fylke||j.location?['Sted','📍 '+esc([j.by,FYLKER.find(f=>f.id===j.fylke)?.name,j.location].filter(Boolean).join(', '))]:null,j.groupName?['Gruppe','🏘️ '+esc(j.groupName)]:null,
@@ -1875,8 +1942,10 @@ function vMine(){
     const tIco=j.type==='help'?'🤝':j.type==='service'?'💼':'📋';
     const visIco=j.visibility==='public'?'🌐 Offentlig':j.visibility==='direct'?'📩 Direkte':j.groupName?'🏘️ '+esc(j.groupName):'👥 Venner';
     const expDays=j.expiresAt&&j.expiresAt>0?Math.max(0,Math.ceil((j.expiresAt-now())/864e5)):0;const _ju=A._unreadJobs[j.id]||0;
+    var _imgSrc=j.imageUrl||null;
     return`<div class="cd cdt" style="${_ju?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">
-    <div style="display:flex;align-items:center;font-size:14px;font-weight:700;line-height:1.4;margin-bottom:4px">${esc(j.title||'—')}${itemBadge(_ju)}</div>
+    <div style="display:flex;align-items:start;gap:10px">
+    <div style="flex:1"><div style="display:flex;align-items:center;font-size:14px;font-weight:700;line-height:1.4;margin-bottom:4px">${esc(j.title||'—')}${itemBadge(_ju)}</div>
     <div style="font-size:12px;color:var(--t3);margin-bottom:6px">${tIco} ${({help:'Jobb',service:'Tilbyr'})[j.type]||esc(j.type||'')} · ${isO?'Du posted':'Du hjelper '+esc(j.creatorName||'?')} · ${ago(j.ts)}</div>
     <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px"><span class="badge ${cls}">${lbl}</span><span class="badge bgr">${visIco}</span></div>
     ${j.jobDate?`<div style="font-size:12px;color:var(--pr);font-weight:600;margin-bottom:4px">${fmtDate(j.jobDate,j.jobTime)}</div>`:''}
@@ -1884,7 +1953,8 @@ function vMine(){
     ${j.status==='accepting'&&j.interests?.length?`<div style="font-size:12px;color:var(--pr);font-weight:600;margin-bottom:4px">⚡ ${j.interests.length} interesserte</div>`:''}
     ${j.helperName&&['active','pending_review'].includes(j.status)?`<div style="font-size:12px;color:var(--t2);margin-bottom:4px">🤝 Hjelper: ${esc(j.helperName)}</div>`:''}
     ${expDays>0&&expDays<=30&&!sD?`<div style="font-size:11px;color:var(--t3)">Utløper om ${expDays} ${expDays===1?'dag':'dager'}</div>`:''}
-    ${sD?`<button class="btn bs bsm" style="margin-top:6px;padding:6px;font-size:11px" onclick="event.stopPropagation();removeTerminalJob('${escA(j.id)}')">🗑 Fjern</button>`:''}</div>`;};
+    ${sD?`<button class="btn bs bsm" style="margin-top:6px;padding:6px;font-size:11px" onclick="event.stopPropagation();removeTerminalJob('${escA(j.id)}')">🗑 Fjern</button>`:''}</div>${_imgSrc?`<img src="${esc(_imgSrc)}" style="width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0">`:''}
+    </div></div>`;};
   const tabS=(k,n,c,l)=>`<div class="stat" style="cursor:pointer;${mf===k?'border-color:var(--pr);border-width:2px':'border-color:var(--s3)'}" onclick="A._mineFilter='${k}';render()"><div class="stn" style="color:${c}">${n}</div><div class="stl">${l}</div></div>`;
   return`<div class="scr"><div style="font-size:22px;font-weight:800;margin-bottom:14px">Aktiviteter</div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">${tabS('active',nActive,'var(--pr)','Aktive')}${tabS('done',nDone,'var(--g2)','Fullført')}</div>
@@ -1950,6 +2020,7 @@ window.jdCS=(jid,oId)=>{const inp=$('jd-ci');if(!inp?.value.trim())return;const 
 function vDM(){const pid=A.params.peerId;const nm=dn(pid,A.peers.get(pid)?.name);const msgs=A.dms[pid]||[];
   return`<div class="scr" style="padding-bottom:10px"><div class="tbar"><button class="bk" onclick="go('chatHub')">Tilbake</button><div class="pgt">${esc(nm)}</div></div>
   <div class="ibox">Ende-til-ende kryptert.</div>
+  <div style="font-size:11px;color:var(--t3);text-align:center;padding:0 0 8px">Direktemeldinger leveres når begge er online</div>
   <div class="chwp"><div class="chms" id="ch-m">${!msgs.length?'<div class="msg ms">Ingen meldinger ennå. Skriv noe for å starte samtalen.</div>':''}
   ${msgs.map(m=>`<div class="msg ${m.from===A.myId?'mm':'mo'}">${m.imageUrl?`<img src="${esc(m.imageUrl)}" style="max-width:220px;max-height:300px;border-radius:12px;display:block;margin-bottom:4px;cursor:pointer;object-fit:contain" onclick="event.stopPropagation();showImg('${escA(m.imageUrl)}')">`:m.audioUrl?`<button style="display:flex;align-items:center;gap:8px;background:none;color:inherit;font-size:13px" onclick="playChatAudio('${escA(m.audioUrl)}')">▶ Lydmelding (${esc(m.duration||'?')}s)</button>`:esc(m.text)}<div class="mt2">${ago(m.ts)}${m.from===A.myId?' '+(m._status==='delivered'?'●':'○'):''}</div></div>`).join('')}
   </div>${window._pendingAudio?`<div style="padding:8px 12px;background:var(--gb);border:1px solid var(--gbb);border-radius:10px;margin-bottom:8px;display:flex;align-items:center;gap:8px">
@@ -2077,9 +2148,9 @@ function vRep(){const u=A.params.uid;const un=A.params.name||u?.substr(0,12);con
   <div class="ps"><div class="psn">${isMe?countActivePosts():'—'}</div><div class="psl">Innlegg</div></div>
   <div class="ps"><div class="psn">${allR.length}</div><div class="psl">Vurderinger</div></div></div></div>
   ${!isMe?`<button class="btn bp" style="margin-bottom:8px" onclick="go('dm',{peerId:'${escA(u)}'})">💬 Send melding</button>`:''}
-  ${gR.length?`<span class="slbl">⭐ Vurderinger (${gR.length})</span>${gR.map(r=>`<div class="cd" style="margin-bottom:6px"><div style="color:var(--yw);margin-bottom:4px">${starStr(r.score)}</div>
+  ${gR.length?`<span class="slbl">⭐ Vurderinger (${gR.length})</span><div style="max-height:300px;overflow-y:auto;padding-right:2px">${gR.slice().sort((a,b)=>(b.ts||0)-(a.ts||0)).map(r=>`<div class="cd" style="margin-bottom:6px"><div style="color:var(--yw);margin-bottom:4px">${starStr(r.score)}</div>
   ${r.comment?`<div style="font-size:13px;line-height:1.5;margin-bottom:4px">${esc(r.comment)}</div>`:''}
-  <div style="font-size:11px;color:var(--t3)">Fra ${esc(r.raterName||'?')}</div></div>`).join('')}`:''}
+  <div style="font-size:11px;color:var(--t3)">Fra ${esc(r.raterName||'?')}</div></div>`).join('')}</div>`:''}
   ${!allR.length?'<div class="emp"><div class="emp-i">👤</div><div class="emp-t">Ingen vurderinger ennå</div></div>':''}
   ${isFr&&!isMe?`<div class="dv" style="margin:20px 0"></div>
     <button class="btn bs" style="margin-bottom:8px" onclick="showConfirm('Fjern venn?','${escA(un)} fjernes fra vennelisten din.','Ja, fjern',()=>{A._removedContacts.add('${escA(u)}');A.contacts=A.contacts.filter(c=>c.id!=='${escA(u)}');send('${escA(u)}',{t:'UF'});if(D())console.log('[removeContact]','${escA(u)}');persist();notify('👋','Fjernet');go('contacts');})">🗑️ Fjern venn</button>
@@ -2116,15 +2187,19 @@ function vSettings(){
   <button class="btn bp" onclick="saveS()">Lagre endringer</button>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">📱 LAGRING</div>
-  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px">Du har ${A.openJobs.size+countActivePosts()} innlegg og ${countActiveChats()} samtaler lagret.</div>
+  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:6px">Du bruker ${A.openJobs.size+countActivePosts()} innlegg og ${countActiveChats()} samtaler.</div>
+  <div style="font-size:11px;color:var(--t3);line-height:1.5;margin-bottom:12px">Rydd opp fjerner avsluttede innlegg eldre enn 30 dager og samtaler eldre enn 60 dager. Aktive jobber og venner beholdes.</div>
   <button class="btn bs" onclick="showConfirm('Rydd opp?','Sletter innlegg eldre enn 30 dager og samtaler eldre enn 60 dager. Frigjør plass.','Rydd opp',()=>{var n=now();var d30=n-30*864e5,d60=n-60*864e5;A.openJobs.forEach((j,id)=>{if(j.ts<d30)A.openJobs.delete(id);});A.myJobs.filter(j=>j.ts<d30&&!['open','accepting','active','pending_review'].includes(j.status)&&j.creatorId===A.myId).forEach(j=>fsDeletePost(j.id));A.myJobs=A.myJobs.filter(j=>j.ts>d30||['open','accepting','active','pending_review'].includes(j.status));Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)&&(!A.jobChats[k].length||A.jobChats[k][A.jobChats[k].length-1].ts<d60))delete A.jobChats[k];});Object.keys(A.dms).forEach(k=>{if(!A.dms[k].length||A.dms[k][A.dms[k].length-1].ts<d60)delete A.dms[k];});persist();notify('✅','Ryddet opp!');render();})">🧹 Rydd opp</button>
-  <div style="font-size:11px;color:var(--t3);margin-top:6px">Sletter innlegg eldre enn 30 dager og samtaler eldre enn 60 dager.</div>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">${t('lang').toUpperCase()}</div>
   <div style="display:flex;gap:8px;margin-bottom:16px">${[['no','Norsk'],['en','English']].map(([v,l])=>
     `<button class="btn ${(ls('oLang')||'no')===v?'bp':'bs'}" style="flex:1" onclick="ss('oLang','${v}');render()">${l}</button>`).join('')}</div>
   <div class="dv" style="margin:24px 0"></div>
   <button class="btn bp" onclick="shareApp()">📤 ${t('shareApp')}</button>
+  <div class="dv" style="margin:24px 0"></div>
+  <div class="slbl">📲 LEGG TIL PÅ HJEMSKJERMEN</div>
+  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px">Åpne appen raskere uten nettleser.</div>
+  <button class="btn bs" onclick="doInstall()">📲 Legg til</button>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">STØTT UTVIKLEREN</div>
   <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px">OptoU er gratis og reklamefritt. Hvis du liker appen, kan du støtte utviklingen.</div>
@@ -2135,6 +2210,7 @@ function vSettings(){
   <div class="dv" style="margin:24px 0"></div>
   <details><summary style="font-size:11px;letter-spacing:1.5px;color:var(--t3);text-transform:uppercase;font-weight:700;cursor:pointer;margin-bottom:12px">⚙️ AVANSERT</summary>
   <div class="slbl">Din kode</div><div class="idd">${A.myId}</div>
+  <div style="font-size:12px;color:var(--t3);margin-bottom:8px">Din unike kode. Del den med venner så de kan legge deg til.</div>
   <button class="btn bs bsm" style="margin-bottom:8px" onclick="copyId()">📋 Kopier koden din</button>
   <div style="display:flex;gap:8px;margin-bottom:16px"><input class="fi" id="add-id" placeholder="Lim inn kode (oXXX eller gXXX)" style="flex:1;padding:10px;font-size:13px">
   <button class="btn bp bsm" style="width:auto;padding:10px 14px" onclick="connectById()">Koble til</button></div>
@@ -2143,7 +2219,7 @@ function vSettings(){
   <div style="font-size:12px;color:${A._useFallback?'var(--yw)':'var(--g2)'};margin-bottom:8px;font-weight:600">Tilkoblet via: ${A._useFallback?'PeerJS Cloud (fallback)':'Render (primær)'}</div>
   <div style="font-size:11px;color:var(--t3);line-height:1.5">Primær: ${esc(PEER_CONFIG.host)}<br>Fallback: ${esc(PEER_FALLBACK.host)}<br>Bytter automatisk ved feil.</div></details>
   <div class="dv" style="margin:24px 0"></div><div class="slbl" style="color:var(--rd)">FARLIG SONE</div>
-  <div class="wbox">Nullstill sletter din identitet og alle data permanent.</div>
+  <div class="wbox">⚠️ Slett alt og start på nytt. Du mister alle jobber, venner, meldinger og vurderinger permanent. Du får en helt ny profil.</div>
   <button class="btn br" onclick="showConfirm('Nullstill alt?','SISTE SJANSE: Din identitet og alle data slettes permanent.','Ja, slett alt',()=>{localStorage.clear();indexedDB.deleteDatabase('optou');location.reload();})">⚠️ Nullstill alt</button></div>`;}
 window.updateAvatar=async inp=>{if(!inp.files[0])return;try{const d=await compressAvatar(inp.files[0]);
   if(hasFB()){const url=await fbUpload(d,'profiles/'+A.myId+'.webp');if(url){ss('oAvatar',url);notify('✅','Bilde oppdatert!');render();return;}}
@@ -2243,6 +2319,7 @@ function vGroups(){
       ${g.imageUrl?`<img src="${esc(g.imageUrl)}" style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:2px solid ${_gu?'var(--pbb)':'var(--s3)'};flex-shrink:0">`
       :`<div style="width:48px;height:48px;border-radius:50%;background:#F5F3FF;border:2px solid #DDD6FE;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">${g.private?'🔒':'🔓'}</div>`}
       <div style="flex:1"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:15px;font-weight:700">${esc(g.name||g.id)}</span><span style="font-size:12px">${g.private?'🔒':'🌐'}</span>${itemBadge(_gu)}</div>
+      ${g.desc?`<div style="font-size:12px;color:var(--t3);line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:16px;margin:2px 0">${esc(g.desc)}</div>`:''}
       <div style="font-size:12px;color:var(--t3)">${mc} medlemmer · ${gp} innlegg</div></div></div></div>`;};
     const myGids=new Set(A.groups.map(g=>g.id));
     const explore=(A._publicGroups||[]).filter(g=>!myGids.has(g.id));
