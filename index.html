@@ -165,6 +165,7 @@ const DEFAULT_GROUPS=[
 ];
 const ls=k=>localStorage.getItem(k),ss=(k,v)=>localStorage.setItem(k,typeof v==='string'?v:JSON.stringify(v)),$=id=>document.getElementById(id),uid=()=>'m'+Date.now().toString(36)+Math.random().toString(36).substr(2,5),now=()=>Date.now(),esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const ab64=b=>btoa(String.fromCharCode(...new Uint8Array(b))),b64ab=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0)).buffer;
+async function hashPass(s){const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s.trim()));return[...new Uint8Array(h)].map(b=>b.toString(16).padStart(2,'0')).join('');}
 const escA=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\\/g,'&#92;').replace(/\n/g,'&#10;').replace(/\r/g,'&#13;');
 const ago=ts=>{if(!ts)return'';const s=Math.floor((now()-ts)/1000);if(s<60)return'nå';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'t';return Math.floor(s/86400)+'d';};
 const starStr=(n,mx=5)=>{const v=Math.max(0,Math.min(n||0,mx));return'★'.repeat(v)+'☆'.repeat(mx-v);};
@@ -198,8 +199,8 @@ const A={myId:'',myName:'',myBio:'',myCity:'',myFylke:'',myBy:'',pubB64:'',privK
   peer:null,ready:false,conns:new Map(),peers:new Map(),seen:new Set(),openJobs:new Map(),myJobs:[],jobChats:{},dms:{},
   contacts:[],blocked:new Set(),ratings:{},activity:[],offlineQ:[],relayQ:[],completedCount:0,
   screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,unreadActivity:0,unreadGroups:0,unreadFeed:0,_seenMids:new Set(),_seenAcks:new Set(),groups:[],
-  feedFilter:{type:'',locs:[]},tempConns:new Map(),_publicGroups:[],_contactQ:'',_editGroup:false,_pendingGroupImg:null,
-  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{}};
+  feedFilter:{type:'',fylke:'',by:'',allNorway:false},tempConns:new Map(),_publicGroups:[],_contactQ:'',_editGroup:false,_pendingGroupImg:null,
+  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{},_groupRequests:{},_groupRequestsTs:{},_myGroupRequests:{}};
 
 async function loadState(){
   if(D())console.log('[-> loadState]');
@@ -223,6 +224,7 @@ async function loadState(){
   A.rated=new Set((await dbGet('config','rated'))||[]);
   A._removedContacts=new Set((await dbGet('config','removedContacts'))||[]);
   A._deadJobs=new Set((await dbGet('config','deadJobs'))||[]);
+  A._myGroupRequests=(await dbGet('config','myGroupRequests'))||{};
   const oj=(await dbGet('config','openJobs'))||[];
   A.openJobs=new Map(oj.filter(([,j])=>!j.expiresAt||j.expiresAt===0||j.expiresAt>now()));
   if(D())console.log('[<- loadState]',{jobs:A.myJobs.length,contacts:A.contacts.length,openJobs:A.openJobs.size,groups:A.groups.length,offlineQ:A.offlineQ.length,relayQ:A.relayQ.length});
@@ -264,7 +266,8 @@ async function persist(){
     dbPut('config','seenMids',[...A._seenMids]),dbPut('config','seenAcks',[...A._seenAcks].slice(-300)),dbPut('config','groups',A.groups),
     dbPut('config','tempConns',[...A.tempConns.entries()]),
     dbPut('config','removedContacts',[...A._removedContacts]),
-    dbPut('config','deadJobs',[...A._deadJobs])
+    dbPut('config','deadJobs',[...A._deadJobs]),
+    dbPut('config','myGroupRequests',A._myGroupRequests)
   ]);
   checkRules();
 }
@@ -648,6 +651,21 @@ function dropMissingGroup(gid,reason){if(D())console.log('[dropMissingGroup]',{g
   if(D()&&_rmJobs)console.log('[dropMissingGroup] removed myJobs',{gid,count:_rmJobs});
   persist();sR();}
 async function fsWriteGroup(gid,data){if(D())console.log('[-> fsWriteGroup]',{gid});if(!hasFS())return false;try{await fbDb.collection('groups').doc(gid).set(data,{merge:true});if(D())console.log('[<- fsWriteGroup] success',gid);return true;}catch(e){console.warn('[FS] write',e);return false;}}
+async function fsWriteGroupRequest(gid,req){if(D())console.log('[-> fsWriteGroupRequest]',{gid,peer:req.peerId});if(!hasFS())return false;try{await fbDb.collection('groups').doc(gid).collection('requests').doc(req.peerId).set(req,{merge:true});if(D())console.log('[<- fsWriteGroupRequest] success');return true;}catch(e){console.warn('[FS] groupRequest write',e);return false;}}
+async function fsCheckMyGroupRequests(){if(!hasFS()||!A.myId)return;var gids=Object.keys(A._myGroupRequests);if(!gids.length)return;
+  if(D())console.log('[fsCheckMyGroupRequests]',{pending:gids.length});
+  for(var gid of gids){try{var doc=await fbDb.collection('groups').doc(gid).collection('requests').doc(A.myId).get();
+    if(!doc.exists){delete A._myGroupRequests[gid];persist();continue;}
+    var st=doc.data().status;if(st==='pending')continue;
+    var gname=A._myGroupRequests[gid]?.name||'gruppen';
+    if(st==='approved'){var data=await fsReadGroup(gid);
+      if(data&&!A.groups.find(g=>g.id===gid)){A.groups.push({id:gid,name:data.name||gname,desc:data.desc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
+        private:data.private||false,_members:data.members||[],imageUrl:data.imageUrl||null});bcast({t:'HI',...myPres()});}
+      delete A._myGroupRequests[gid];persist();notify('✅','Du ble godkjent i «'+esc(data?.name||gname)+'»!');sR();}
+    else if(st==='declined'){delete A._myGroupRequests[gid];persist();notify('ℹ️','Forespørselen til «'+esc(gname)+'» ble avslått');sR();}
+  }catch(e){console.warn('[fsCheckMyGroupRequests]',gid,e);}}}
+async function fsLoadGroupRequests(gid){if(!hasFS())return[];try{const snap=await fbDb.collection('groups').doc(gid).collection('requests').where('status','==','pending').limit(20).get();
+  return snap.docs.map(d=>({id:d.id,...d.data()}));}catch(e){console.warn('[FS] loadGroupRequests',e);return[];}}
 async function fsReadGroup(gid){if(!hasFS())return null;try{const doc=await fbDb.collection('groups').doc(gid).get();return doc.exists?doc.data():null;}catch(e){console.warn('[FS] read',e);return null;}}
 async function fsJoinGroup(gid,mid){if(!hasFS())return{ok:false};try{var doc=await fbDb.collection('groups').doc(gid).get();
   if(!doc.exists){if(D())console.log('[fsJoinGroup] doc missing',gid);return{ok:false,missing:true};}
@@ -1261,13 +1279,11 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
       if(A.groups.find(g=>g.id===m.gid)){notify('ℹ️','Du er allerede med i denne gruppen');return;}
       var data=await fsReadGroup(m.gid);
       if(!data){if(D())console.log('[GI] FS doc missing',m.gid);notify('⚠️','Gruppen finnes ikke lenger');return;}
-      A.groups.push({id:m.gid,name:data.name||m.gname,desc:data.desc||m.gdesc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
-        private:data.private!=null?data.private:(m.gprivate||false),_members:data.members||[],imageUrl:data.imageUrl||null});
-      persist();bcast({t:'HI',...myPres()});
-      var res=await fsJoinGroup(m.gid,A.myId);
-      if(res.missing){dropMissingGroup(m.gid,'GI accept — fsJoin missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
-      if(D())console.log('[GI] joined',{gid:m.gid,name:data.name,creatorId:data.creatorId});
-      notify('✅','Ble med i '+(data.name||m.gname||'gruppen')+'!');go('groupDetail',{gid:m.gid});});break;}
+      const _giDone=()=>go('groupDetail',{gid:m.gid});
+      if(data.passHash||data.hasPasscode){showPasscodePrompt('🔒 '+esc(data.name||m.gname),async v=>{if(!v.trim()){notify('⚠️','Skriv passord');return;}
+        var h=await hashPass(v);if(h!==data.passHash){notify('⚠️','Feil passord');return;}
+        doPrivateJoin(m.gid,data,_giDone);});return;}
+      doPrivateJoin(m.gid,data,_giDone);});break;}
   // GM handler removed — group metadata comes from Firestore, not P2P
   case 'UF':{if(D())console.log('[UF] received unfriend from',from);
     A._removedContacts.add(from);A.contacts=A.contacts.filter(c=>c.id!==from);persist();sR();break;}
@@ -1287,6 +1303,26 @@ window.showConfirm=(title,text,yesLabel,onYes)=>{if(D())console.log('[showConfir
   bg.querySelector('#_mc').onclick=()=>bg.remove();
   bg.querySelector('#_my').onclick=()=>{bg.remove();onYes();};
   bg.onclick=e=>{if(e.target===bg)bg.remove();};};
+window.showPasscodePrompt=(title,onSubmit)=>{const bg=document.createElement('div');bg.className='modal-bg';
+  bg.innerHTML=`<div class="modal"><div style="font-size:16px;font-weight:800;margin-bottom:8px">${esc(title)}</div>
+    <div style="font-size:14px;color:var(--t2);margin-bottom:12px">Skriv passord for å bli med.</div>
+    <input class="fi" type="password" id="_pp_in" placeholder="Passord" maxlength="64" autocomplete="off" style="margin-bottom:16px">
+    <div class="brow"><button class="btn bs" style="flex:1" id="_pp_no">Avbryt</button>
+    <button class="btn bp" style="flex:1" id="_pp_yes">Bli med</button></div></div>`;
+  document.body.appendChild(bg);
+  bg.querySelector('#_pp_no').onclick=()=>bg.remove();
+  bg.querySelector('#_pp_yes').onclick=()=>{const v=bg.querySelector('#_pp_in')?.value||'';bg.remove();onSubmit(v);};
+  bg.onclick=e=>{if(e.target===bg)bg.remove();};
+  setTimeout(()=>bg.querySelector('#_pp_in')?.focus(),100);};
+async function doPrivateJoin(id,data,onDone){
+  var res=await fsJoinGroup(id,A.myId);
+  if(res.missing){notify('⚠️','Gruppen finnes ikke lenger');return;}
+  if(!res.ok){notify('⚠️','Kunne ikke bli med i gruppen akkurat nå');return;}
+  if(!A.groups.find(g=>g.id===id))A.groups.push({id,name:data.name||'Gruppe...',desc:data.desc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
+    private:data.private||false,_members:data.members||[],imageUrl:data.imageUrl||null,hasPasscode:data.hasPasscode||!!data.passHash});
+  persist();bcast({t:'HI',...myPres()});
+  if(D())console.log('[doPrivateJoin] joined',{id,name:data.name});
+  notify('✅','Ble med i '+(data.name||'gruppen')+'!');if(onDone)onDone();else render();}
 function _setB(id,n){var el=$(id);if(!el)return;el.style.display=n>0?'flex':'none';el.textContent=n>99?'99+':n;}
 function updateB(){_setB('bdg-f',A.unreadFeed);_setB('bdg-g',A.unreadGroups);_setB('bdg-m',A.unreadActivity);_setB('bdg-c',A.unreadChat);}
 function itemBadge(n){if(!n)return'';return`<span style="display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:9px;background:var(--rd);color:#fff;font-size:10px;font-weight:800;padding:0 5px;margin-left:6px;flex-shrink:0">${n>99?'99+':n}</span>`;}
@@ -1399,7 +1435,7 @@ window.finishSetup=async()=>{
     if(!A.groups.find(g=>g.id===id))A.groups.push({id,name:wgn.trim(),desc:'Jobbgruppe',creatorId:A.myId,createdTs:now(),isGroup:true,private:true});}
   // Write groups + user to Firestore (best-effort)
   A.groups.forEach(g=>{fsWriteGroup(g.id,{name:g.name,nameLower:(g.name||'').toLowerCase(),desc:g.desc||'',private:g.private,creatorId:g.creatorId||A.myId,createdAt:Date.now(),members:[A.myId]});});
-  fsRegisterUser();persist();if(!A.peer||A.peer.destroyed)initPeer();$('nav').style.display='block';A.nb={};go('feed');};
+  fsRegisterUser();persist();if(!A.peer||A.peer.destroyed)initPeer();$('nav').style.display='block';A.nb={};go('feed');setTimeout(showInstallPopup,500);};
 
 // ═══ FEED ═══
 function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
@@ -1407,7 +1443,7 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
   let jobs=[...A.openJobs.values()].filter(j=>(!j.expiresAt||j.expiresAt===0||j.expiresAt>now())&&j.visibility!=='direct'&&!['cancelled','done','never_done'].includes(j.status)&&(cIds.has(j.creatorId)||j.isFromContact||j.isPublic||(j.groupId&&gids.has(j.groupId))));
   const ff=A.feedFilter;
   if(ff.type)jobs=jobs.filter(j=>j.type===ff.type);
-  if(ff.locs?.length)jobs=jobs.filter(j=>ff.locs.includes(j.by)||ff.locs.includes(j.fylke));
+  if(!ff.allNorway){if(ff.by)jobs=jobs.filter(j=>j.by===ff.by);else if(ff.fylke)jobs=jobs.filter(j=>j.fylke===ff.fylke);else if(A.myFylke)jobs=jobs.filter(j=>j.fylke===A.myFylke);}
   // Sort: private group posts first, then open group, then rest, within each by time
   const gPriv=new Set(A.groups.filter(g=>g.private).map(g=>g.id));
   const gPub=new Set(A.groups.filter(g=>!g.private).map(g=>g.id));
@@ -1430,9 +1466,14 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
       <div style="padding:16px 12px;border-radius:14px;text-align:center;cursor:pointer;border:2px solid ${ff.type==='help'?'var(--pr)':'var(--s3)'};background:${ff.type==='help'?'var(--pb)':'var(--sf)'}" onclick="A.feedFilter.type=A.feedFilter.type==='help'?'':'help';render()"><div style="font-size:24px;margin-bottom:4px">🤝</div><div style="font-size:15px;font-weight:700;color:${ff.type==='help'?'var(--pr)':'var(--tx)'}">Jobb</div></div>
       <div style="padding:16px 12px;border-radius:14px;text-align:center;cursor:pointer;border:2px solid ${ff.type==='service'?'var(--pr)':'var(--s3)'};background:${ff.type==='service'?'var(--pb)':'var(--sf)'}" onclick="A.feedFilter.type=A.feedFilter.type==='service'?'':'service';render()"><div style="font-size:24px;margin-bottom:4px">💼</div><div style="font-size:15px;font-weight:700;color:${ff.type==='service'?'var(--pr)':'var(--tx)'}">Tilbyr</div></div>
     </div>
-    ${A.myFylke?`<div class="flt" style="margin-top:0"><div class="fc${!ff.locs?.length?' act':''}" style="padding:8px 16px;font-size:13px" onclick="A.feedFilter.locs=[];render()">🌐 Alle steder</div>
-      ${(FYLKER.find(f=>f.id===A.myFylke)?.kommuner||[]).map(k=>
-        `<div class="fc${(ff.locs||[]).includes(k)?' act':''}" style="padding:8px 16px;font-size:13px" onclick="var l=A.feedFilter.locs||[];var i=l.indexOf('${escA(k)}');if(i>=0)l.splice(i,1);else l.push('${escA(k)}');A.feedFilter.locs=l;render()">📍 ${esc(k)}</div>`).join('')}</div>`:''}
+    ${(()=>{const curF=ff.fylke||(!ff.allNorway&&A.myFylke?A.myFylke:'');const komm=curF?FYLKER.find(f=>f.id===curF)?.kommuner||[]:[];
+      return`<div style="font-size:12px;color:var(--t3);margin-bottom:8px">${ff.allNorway?'Viser jobber fra hele Norge':curF?'Viser jobber i '+(FYLKER.find(f=>f.id===curF)?.name||'valgt fylke')+(ff.by?' · '+esc(ff.by):''):'Viser alle jobber (ingen fylke valgt)'}</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+      <select class="fi" style="flex:1;padding:8px;font-size:13px" onchange="A.feedFilter.fylke=this.value;A.feedFilter.by='';A.feedFilter.allNorway=false;render()">
+        <option value="">Alle fylker</option>${FYLKER.map(f=>'<option value="'+f.id+'"'+(curF===f.id?' selected':'')+'>'+esc(f.name)+'</option>').join('')}</select>
+      <select class="fi" style="flex:1;padding:8px;font-size:13px" onchange="A.feedFilter.by=this.value;A.feedFilter.allNorway=false;render()"${!komm.length?' disabled':''}>
+        <option value="">Alle kommuner</option>${komm.map(k=>'<option value="'+escA(k)+'"'+(ff.by===k?' selected':'')+'>'+esc(k)+'</option>').join('')}</select></div>
+      <button class="btn bs bsm" style="margin-bottom:14px${ff.allNorway?';background:var(--pr);color:#fff;border-color:var(--pr)':''}" onclick="A.feedFilter.allNorway=!A.feedFilter.allNorway;if(A.feedFilter.allNorway){A.feedFilter.fylke='';A.feedFilter.by='';}render()">🌐 Vis alt i hele Norge</button>`;})()}
     ${ic?`<div class="cd cdt" onclick="go('mine')" style="background:var(--yb);border-color:#FDE68A"><div style="display:flex;justify-content:space-between;align-items:center;font-size:14px;font-weight:700;color:#92400E">⚡ ${ic} vil hjelpe!<span>→</span></div></div>`:''}
     ${(()=>{if(!myAct.length)return'';
       const mSm={open:['Åpent','bg1'],accepting:['Noen vil hjelpe!','by1'],active:['Pågår','bb1']};
@@ -1469,7 +1510,37 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
       ${imgSrc&&imgSrc!=='[img]'?`<img style="width:100%;max-height:120px;object-fit:contain;background:var(--s2);display:block;border-radius:8px;margin:0 0 8px 0" src="${esc(imgSrc)}" alt="">`:''}
       ${j.jobDate?`<div style="font-size:12px;color:var(--pr);font-weight:600;margin-bottom:4px">${fmtDate(j.jobDate,j.jobTime)}</div>`:''}
       ${j.reward?`<div style="font-size:13px;color:var(--g2);font-weight:700;margin-bottom:6px">🎁 ${esc(j.reward)}</div>`:''}
-      <div style="font-size:11px;color:var(--t3);padding-top:8px;border-top:1px solid var(--s2)">${esc([j.by,fNm].filter(Boolean).join(', ')||j.location||'')}</div></div>`;}).join('')}</div>`;}
+      <div style="font-size:11px;color:var(--t3);padding-top:8px;border-top:1px solid var(--s2)">${esc([j.by,fNm].filter(Boolean).join(', ')||j.location||'')}</div></div>`;}).join('')}
+    ${(()=>{const _ev=[];const _n=now();const _7d=_n-7*864e5;const _30d=_n-30*864e5;
+      const _cids=new Set(A.contacts.map(c=>c.id));_cids.add(A.myId);
+      const _gids=new Set(A.groups.map(g=>g.id));
+      const _cname=id=>{if(id===A.myId)return A.myName||'Du';const c=A.contacts.find(x=>x.id===id);return c?(c.alias||c.name):null;};
+      const _gname=gid=>{const g=A.groups.find(x=>x.id===gid);return g?g.name:null;};
+      _cids.forEach(uid=>{(A.ratings[uid]||[]).filter(r=>!r.nd&&r.ts>_7d).forEach(r=>{
+        const nm=_cname(uid);if(!nm)return;
+        const jt=(()=>{const mj=A.myJobs.find(j=>j.id===r.jobId);if(mj)return mj.title;const oj=A.openJobs.get(r.jobId);return oj?.title||null;})();
+        _ev.push({ts:r.ts,ico:'⭐',txt:esc(nm)+' fikk '+r.score+' stjerner',sub:jt?esc(jt):'',key:'r'+uid+r.ts});});});
+      const _seen=new Set();
+      [...A.openJobs.values()].filter(j=>j.groupId&&_gids.has(j.groupId)&&j.status==='active'&&j.ts>_30d).forEach(j=>{
+        if(_seen.has(j.id))return;_seen.add(j.id);const gn=_gname(j.groupId);if(!gn)return;
+        _ev.push({ts:j.ts,ico:'🔄',txt:'Pågår i «'+esc(gn)+'»',sub:esc(j.title||''),key:'a'+j.id});});
+      A.myJobs.filter(j=>j.groupId&&_gids.has(j.groupId)&&j.status==='active'&&j.ts>_30d).forEach(j=>{
+        if(_seen.has(j.id))return;_seen.add(j.id);const gn=_gname(j.groupId);if(!gn)return;
+        _ev.push({ts:j.ts,ico:'🔄',txt:'Pågår i «'+esc(gn)+'»',sub:esc(j.title||''),key:'a'+j.id});});
+      A.myJobs.filter(j=>j.groupId&&_gids.has(j.groupId)&&j.status==='done'&&j.ts>_30d).forEach(j=>{
+        if(_seen.has(j.id))return;_seen.add(j.id);const gn=_gname(j.groupId);if(!gn)return;
+        _ev.push({ts:j.ts,ico:'✅',txt:'Fullført i «'+esc(gn)+'»',sub:esc(j.title||''),key:'d'+j.id});});
+      [...A.openJobs.values()].filter(j=>j.groupId&&_gids.has(j.groupId)&&j.status==='done'&&j.ts>_30d).forEach(j=>{
+        if(_seen.has(j.id))return;_seen.add(j.id);const gn=_gname(j.groupId);if(!gn)return;
+        _ev.push({ts:j.ts,ico:'✅',txt:'Fullført i «'+esc(gn)+'»',sub:esc(j.title||''),key:'d'+j.id});});
+      if(!_ev.length)return'';
+      _ev.sort((a,b)=>b.ts-a.ts);const top=_ev.slice(0,6);
+      return`<div class="slbl" style="margin-top:16px">⚡ SKJER NÅ</div>${top.map(e=>
+        `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--s2)">
+        <span style="font-size:18px;flex-shrink:0">${e.ico}</span>
+        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;line-height:1.3">${e.txt}</div>
+        ${e.sub?`<div style="font-size:11px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.sub}</div>`:''}</div>
+        <span style="font-size:10px;color:var(--t3);flex-shrink:0">${ago(e.ts)}</span></div>`).join('')}`;})()}</div>`;}
 
 window.addF=(id,name)=>{if(D())console.log('[addF]',{id,name});if(A._removedContacts.has(id)){A._removedContacts.delete(id);if(D())console.log('[addF] cleared removedContacts',{id});}if(!A.contacts.find(c=>c.id===id))A.contacts.push({id,name,alias:name});persist();tryC(id);notify('👋','Lagt til!');render();};
 
@@ -2123,13 +2194,8 @@ window.connectById=async()=>{const inp=$('add-id');if(!inp)return;const id=inp.v
     if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
     var data=await fsReadGroup(id);
     if(!data){if(D())console.log('[connectById] group doc missing',id);notify('⚠️','Gruppen finnes ikke');return;}
-    A.groups.push({id,name:data.name||'Gruppe...',desc:data.desc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
-      private:data.private||false,_members:data.members||[],imageUrl:data.imageUrl||null});
-    persist();bcast({t:'HI',...myPres()});inp.value='';
-    var res=await fsJoinGroup(id,A.myId);
-    if(res.missing){dropMissingGroup(id,'connectById — fsJoin missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
-    if(D())console.log('[connectById] group joined',{id,name:data.name});
-    notify('✅','Ble med i '+(data.name||'gruppen')+'!');render();return;}
+    if(!data.private){inp.value='';requestGroupJoin(id,data.name||id);return;}
+    inp.value='';notify('🔒','Denne gruppen er privat. Du må bli invitert for å bli med.');return;}
   if(!id||!id.startsWith('o')||id.length<8){notify('⚠️','Ugyldig ID');return;}if(id===A.myId)return;tryC(id);
   if(!A.contacts.find(c=>c.id===id))A.contacts.push({id,name:id.substr(0,12),alias:id.substr(0,12)});
   persist();notify('✅','Koblet til!');inp.value='';render();};
@@ -2203,7 +2269,8 @@ function vSettings(){
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">STØTT UTVIKLEREN</div>
   <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px">OptoU er gratis og reklamefritt. Hvis du liker appen, kan du støtte utviklingen.</div>
-  <button class="btn bs" onclick="window.location.href='https://qr.vipps.no/vp/0sYbxfEnM'">💚 Vipps: 45390</button>
+  <button class="btn" style="width:100%;background:var(--pr);color:#fff;border:none;border-radius:16px;padding:14px;font-size:15px;font-weight:700;box-shadow:0 4px 16px rgba(255,107,53,.18);margin-bottom:8px;cursor:pointer" onclick="window.location.href='https://qr.vipps.no/vp/0sYbxfEnM'">💚 Støtt med Vipps</button>
+  <div style="font-size:11px;color:var(--t3);text-align:center">Vipps-nummer: 45390</div>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">ℹ️ OM OPTOU</div>
   <div style="font-size:13px;color:var(--t2);line-height:1.7;margin-bottom:12px">OptoU v${V} — Få ting gjort sammen.<br>Én HTML-fil. Ingen server. Ingen eier dataene dine.<br>${A.conns.size} tilkoblinger · ${A.peers.size} i nettverket</div>
@@ -2240,9 +2307,14 @@ window.saveGroupEdit=async gid=>{if(D())console.log('[saveGroupEdit]',{gid});
   var g=A.groups.find(x=>x.id===gid);if(!g||g.creatorId!==A.myId)return;
   var desc=$('gedit-desc')?.value?.trim()||'';g.desc=desc;
   if(A._pendingGroupImg){var url=await fbUpload(A._pendingGroupImg,'groups/'+gid+'.webp');if(url)g.imageUrl=url;A._pendingGroupImg=null;}
-  fsWriteGroup(gid,{desc:g.desc,imageUrl:g.imageUrl||null,updatedAt:Date.now()});
+  var rawPass=g.private?($('gedit-pass')?.value?.trim()||''):'';
+  var fsPatch={desc:g.desc,imageUrl:g.imageUrl||null,updatedAt:Date.now()};
+  if(rawPass){var ph=await hashPass(rawPass);fsPatch.passHash=ph;fsPatch.hasPasscode=true;g.hasPasscode=true;}
+  if(!g.private){var pol=$('gedit-invpol')?.value||'members';fsPatch.invitePolicy=pol;g.invitePolicy=pol;}
+  fsWriteGroup(gid,fsPatch);
   A._editGroup=false;persist();notify('✅','Gruppe oppdatert!');render();};
 window.inviteToGroup=(gid,gname,pid)=>{if(D())console.log('[inviteToGroup]',{gid,gname,pid});const g=A.groups.find(x=>x.id===gid);
+  if(g&&!g.private&&g.invitePolicy==='admin'&&g.creatorId!==A.myId){notify('🔒','Kun admin kan invitere i denne gruppen');return;}
   send(pid,{t:'GI',gid,gname,gdesc:g?.desc||'',gprivate:g?.private||false,fromName:A.myName});
   notify('✅','Invitasjon sendt!');};
 window.joinKnownGroup=async id=>{if(D())console.log('[joinKnownGroup]',{id});if(!/^g[a-zA-Z0-9]{1,20}$/.test(id))return;
@@ -2251,25 +2323,37 @@ window.joinKnownGroup=async id=>{if(D())console.log('[joinKnownGroup]',{id});if(
   var data=await fsReadGroup(id);
   if(!data){if(D())console.log('[joinKnownGroup] FS doc missing, cleaning up',id);
     dropMissingGroup(id,'joinKnownGroup — doc missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
-  A.groups.push({id,name:data.name||'Gruppe...',desc:data.desc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
-    private:data.private||false,_members:data.members||[],imageUrl:data.imageUrl||null});
-  persist();bcast({t:'HI',...myPres()});
-  var res=await fsJoinGroup(id,A.myId);
-  if(res.missing){if(D())console.log('[joinKnownGroup] fsJoin missing',id);dropMissingGroup(id,'joinKnownGroup — fsJoin missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
-  if(D())console.log('[joinKnownGroup] joined',{id,name:data.name,creatorId:data.creatorId,members:data.members?.length});
-  notify('✅','Ble med i '+(data.name||'gruppen')+'!');go('groupDetail',{gid:id});};
+  if(!data.private){requestGroupJoin(id,data.name||id);return;}
+  notify('🔒','Denne gruppen er privat. Du må bli invitert for å bli med.');};
+window.requestGroupJoin=(gid,gname)=>{if(A.groups.find(g=>g.id===gid)){notify('⚠️','Allerede medlem');return;}
+  if(A._myGroupRequests[gid]){notify('ℹ️','Du har allerede sendt forespørsel til denne gruppen');return;}
+  showConfirm('🏘️ Medlemsforespørsel','Send medlemsforespørsel til «'+(gname||'gruppen')+'»?','Send',async()=>{
+    var data=await fsReadGroup(gid);
+    if(!data){notify('⚠️','Gruppen finnes ikke lenger');return;}
+    if(data.private){notify('⚠️','Denne gruppen er privat');return;}
+    var ok=await fsWriteGroupRequest(gid,{peerId:A.myId,name:A.myName,avatar:ls('oAvatar')||'',bio:A.myBio||'',fylke:A.myFylke||'',by:A.myBy||'',ts:Date.now(),status:'pending'});
+    if(ok){A._myGroupRequests[gid]={name:gname||'',ts:Date.now()};persist();notify('✅','Forespørsel sendt!');}
+    else notify('⚠️','Kunne ikke sende forespørsel');});};
+window.approveGroupRequest=async(gid,peerId,name)=>{if(D())console.log('[approveGroupRequest]',{gid,peerId});
+  const g=A.groups.find(x=>x.id===gid);if(!g){notify('⚠️','Gruppe ikke funnet');return;}
+  var res=await fsJoinGroup(gid,peerId);
+  if(res.missing){notify('⚠️','Gruppen finnes ikke lenger');return;}
+  if(!res.ok){notify('⚠️','Kunne ikke legge til medlem');return;}
+  await fsWriteGroupRequest(gid,{peerId,status:'approved',resolvedAt:Date.now()});
+  if(g._members&&!g._members.includes(peerId))g._members.push(peerId);
+  A._groupRequests[gid]=(A._groupRequests[gid]||[]).filter(r=>r.peerId!==peerId);
+  persist();notify('✅',(name||'Bruker')+' ble med i gruppen!');render();};
+window.denyGroupRequest=async(gid,peerId,name)=>{if(D())console.log('[denyGroupRequest]',{gid,peerId});
+  await fsWriteGroupRequest(gid,{peerId,status:'declined',resolvedAt:Date.now()});
+  A._groupRequests[gid]=(A._groupRequests[gid]||[]).filter(r=>r.peerId!==peerId);
+  notify('ℹ️',(name||'Forespørsel')+' ble avvist');render();};
 window.joinGroup=async()=>{const inp=$('add-gid');if(!inp)return;const id=inp.value.trim();if(D())console.log('[joinGroup]',{id});
   if(!id||!/^g[a-zA-Z0-9]{1,20}$/.test(id)){notify('⚠️','Ugyldig gruppe-ID (starter med g)');return;}
   if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
   var data=await fsReadGroup(id);
   if(!data){if(D())console.log('[joinGroup] FS doc missing',id);notify('⚠️','Gruppen finnes ikke');return;}
-  A.groups.push({id,name:data.name||'Gruppe...',desc:data.desc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
-    private:data.private||false,_members:data.members||[],imageUrl:data.imageUrl||null});
-  persist();bcast({t:'HI',...myPres()});inp.value='';
-  var res=await fsJoinGroup(id,A.myId);
-  if(res.missing){dropMissingGroup(id,'joinGroup — fsJoin missing');notify('⚠️','Gruppen finnes ikke lenger');return;}
-  if(D())console.log('[joinGroup] joined',{id,name:data.name,creatorId:data.creatorId});
-  notify('✅','Ble med i '+(data.name||'gruppen')+'!');render();};
+  if(!data.private){inp.value='';requestGroupJoin(id,data.name||id);return;}
+  inp.value='';notify('🔒','Denne gruppen er privat. Du må bli invitert for å bli med.');};
 window.searchGroups=async q=>{const el=$('grp-search-results');if(!el)return;q=(q||'').trim().toLowerCase();
   if(q.length<2){el.innerHTML='';return;}if(!hasFS()){el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:8px">Firestore ikke tilgjengelig.</div>';return;}
   try{const snap=await fbDb.collection('groups').where('nameLower','>=',q).where('nameLower','<=',q+'\uf8ff').where('private','==',false).limit(10).get();
@@ -2280,7 +2364,7 @@ window.searchGroups=async q=>{const el=$('grp-search-results');if(!el)return;q=(
       <div class="av" style="background:#F5F3FF;color:#7C3AED;border-color:#DDD6FE;width:32px;height:32px;font-size:12px">🔓</div>
       <div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(g.name||gid)}</div>
       <div style="font-size:11px;color:var(--t3)">${g.members?g.members.length:''} medlemmer</div></div>
-      ${already?'<span class="badge bg1" style="font-size:11px">Medlem</span>':`<button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="joinKnownGroup('${escA(gid)}')">Bli med</button>`}</div>`;}).join('');
+      ${already?'<span class="badge bg1" style="font-size:11px">Medlem</span>':`<button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="requestGroupJoin('${escA(gid)}','${escA(g.name||gid)}')">Bli med</button>`}</div>`;}).join('');
   }catch(e){console.warn('[searchGroups]',e);el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:8px">Søk feilet.</div>';}};
 window.deleteGroup=(gid)=>{if(D())console.log('[deleteGroup]',gid);
   A.groups=A.groups.filter(x=>x.id!==gid);
@@ -2295,30 +2379,35 @@ window.doCreateGroup=async()=>{if(D())console.log('[-> doCreateGroup]');const n=
   else{const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(n));id='g'+ab64(h).replace(/[^a-zA-Z0-9]/g,'').substr(0,14);}
   const desc=$('gd')?.value?.trim()||'';
   const fylke=A.nb._gFylke||A.myFylke||'';
+  const rawPass=priv?($('gpass')?.value?.trim()||''):'';
+  const ph=rawPass?await hashPass(rawPass):null;
   let imageUrl=null;
   if(A.nb._gImg&&hasFB()){try{imageUrl=await fbUpload(A.nb._gImg,'groups/'+id+'.webp');}catch(e){if(D())console.log('[doCreateGroup] img upload err',e.message);}}
-  A.groups.push({id,name:n,desc,creatorId:A.myId,createdTs:now(),isGroup:true,private:priv,imageUrl,fylke});
+  A.groups.push({id,name:n,desc,creatorId:A.myId,createdTs:now(),isGroup:true,private:priv,imageUrl,fylke,hasPasscode:!!ph,invitePolicy:'members'});
   persist();bcast({t:'HI',...myPres()});
   // GRP gossip removed — public group discovery via Firestore (fsLoadPublicGroups) only
-  fsWriteGroup(id,{name:n,nameLower:n.toLowerCase(),desc,private:priv,fylke,imageUrl:imageUrl||null,creatorId:A.myId,createdAt:Date.now(),members:[A.myId]});
+  const fsData={name:n,nameLower:n.toLowerCase(),desc,private:priv,fylke,imageUrl:imageUrl||null,creatorId:A.myId,createdAt:Date.now(),members:[A.myId],hasPasscode:!!ph,invitePolicy:'members'};
+  if(ph)fsData.passHash=ph;
+  fsWriteGroup(id,fsData);
   A.nb={};
   if(priv){go('groupCreated',{gid:id});}else{notify('✅','Gruppe opprettet!');go('groupDetail',{gid:id});}};
 function vGroups(){
   return`<div class="scr"><div class="hdr"><div style="font-size:22px;font-weight:800">Grupper</div><button class="btn bs bsm" style="width:auto" onclick="go('createGroup')">+ Ny</button></div>
   <div class="fld"><input class="fi" id="grp-search" placeholder="Søk etter grupper..." oninput="searchGroups(this.value)" autocomplete="off"></div>
   <div id="grp-search-results"></div>
-  <details style="margin-bottom:16px"><summary style="font-size:12px;color:var(--t3);cursor:pointer">Har noen delt en gruppekode med deg?</summary>
-  <div style="font-size:12px;color:var(--t3);margin:8px 0">Lim inn koden her for å bli med i en privat gruppe.</div>
+  <details style="margin-bottom:16px"><summary style="font-size:12px;color:var(--t3);cursor:pointer">Har du en gruppekode?</summary>
+  <div style="font-size:12px;color:var(--t3);margin:8px 0">Lim inn koden for å sende forespørsel. Private grupper krever invitasjon.</div>
   <div style="display:flex;gap:8px"><input class="fi" id="add-gid" placeholder="Lim inn gruppekode" style="flex:1;padding:10px;font-size:13px">
   <button class="btn bp bsm" style="width:auto;padding:10px 16px" onclick="joinGroup()">Bli med</button></div></details>
   ${!A.groups.length?'<div class="emp"><div class="emp-i">🏘️</div><div class="emp-t">Du har ingen grupper ennå.<br>Opprett en gruppe for familie eller jobb, eller bli med via kode.</div></div>':''}
   ${(()=>{const priv=A.groups.filter(g=>g.private);const pub=A.groups.filter(g=>!g.private);
-    const gc=g=>{const mc=(g._members||[]).length||countGM(g.id)+1;const gp=[...A.openJobs.values()].filter(j=>j.groupId===g.id).length+A.myJobs.filter(j=>j.groupId===g.id&&j.status==='open').length;const _gu=A._unreadGroupPosts[g.id]||0;
+    if(hasFS())A.groups.forEach(g=>{if(g.creatorId===A.myId&&(!A._groupRequestsTs[g.id]||now()-A._groupRequestsTs[g.id]>30000)){A._groupRequestsTs[g.id]=now();fsLoadGroupRequests(g.id).then(reqs=>{A._groupRequests[g.id]=reqs;sR();});}});
+    const gc=g=>{const mc=(g._members||[]).length||countGM(g.id)+1;const _rc=g.creatorId===A.myId?(A._groupRequests[g.id]||[]).length:0;const gp=[...A.openJobs.values()].filter(j=>j.groupId===g.id).length+A.myJobs.filter(j=>j.groupId===g.id&&j.status==='open').length;const _gu=A._unreadGroupPosts[g.id]||0;
       return`<div class="cd cdt" style="${_gu?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('groupDetail',{gid:'${escA(g.id)}'})">
       <div style="display:flex;align-items:center;gap:12px">
       ${g.imageUrl?`<img src="${esc(g.imageUrl)}" style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:2px solid ${_gu?'var(--pbb)':'var(--s3)'};flex-shrink:0">`
       :`<div style="width:48px;height:48px;border-radius:50%;background:#F5F3FF;border:2px solid #DDD6FE;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">${g.private?'🔒':'🔓'}</div>`}
-      <div style="flex:1"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:15px;font-weight:700">${esc(g.name||g.id)}</span><span style="font-size:12px">${g.private?'🔒':'🌐'}</span>${itemBadge(_gu)}</div>
+      <div style="flex:1"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:15px;font-weight:700">${esc(g.name||g.id)}</span><span style="font-size:12px">${g.private?'🔒':'🌐'}</span>${itemBadge(_gu)}${_rc?`<span style="display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:9px;background:var(--pr);color:#fff;font-size:10px;font-weight:800;padding:0 5px;flex-shrink:0">📬 ${_rc}</span>`:''}</div>
       ${g.desc?`<div style="font-size:12px;color:var(--t3);line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:16px;margin:2px 0">${esc(g.desc)}</div>`:''}
       <div style="font-size:12px;color:var(--t3)">${mc} medlemmer · ${gp} innlegg</div></div></div></div>`;};
     const myGids=new Set(A.groups.map(g=>g.id));
@@ -2331,7 +2420,7 @@ function vGroups(){
         :`<div style="width:36px;height:36px;border-radius:50%;background:#F5F3FF;border:1px solid #DDD6FE;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">🌐</div>`}
         <div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(eg.name)}</div>
         <div style="font-size:11px;color:var(--t3)">${eg.members?.length||'?'} medlemmer${eg.fylke?' · '+esc(FYLKER.find(f=>f.id===eg.fylke)?.name||''):''}</div></div>
-        <button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="joinKnownGroup('${escA(eg.id)}')">Bli med</button></div>`).join('')}`:'');})()}</div>`;}
+        <button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="requestGroupJoin('${escA(eg.id)}','${escA(eg.name)}')">Bli med</button></div>`).join('')}`:'');})()}</div>`;}
 function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===gid);
   if(!g)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groups')">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Gruppe ikke funnet.</div></div></div>`;
   const isAdmin=!!(g.creatorId&&g.creatorId===A.myId);
@@ -2343,13 +2432,24 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
   if(!g.creatorId&&hasFS())fsReadGroup(gid).then(data=>{if(data&&data.creatorId){
     g.creatorId=data.creatorId;if(data.members)g._members=data.members;if(data.imageUrl)g.imageUrl=data.imageUrl;if(data.name&&g.name==='Gruppe...')g.name=data.name;
     if(D())console.log('[vGroupDetail] hydrated missing creatorId',{gid,creatorId:data.creatorId});persist();sR();}});
+  // Background hydration: load pending requests for admin
+  if(isAdmin&&hasFS()&&(!A._groupRequestsTs[gid]||now()-A._groupRequestsTs[gid]>30000)){A._groupRequestsTs[gid]=now();fsLoadGroupRequests(gid).then(reqs=>{A._groupRequests[gid]=reqs;sR();});}
+  const gReqs=isAdmin?(A._groupRequests[gid]||[]):[];
   // Combine posts from myJobs + openJobs, dedup, filter
   const seen=new Set();const allP=[];
   const _gterm=['cancelled','never_done','declined','done'];
   A.myJobs.filter(j=>j.groupId===gid&&!_gterm.includes(j.status)).forEach(j=>{if(!seen.has(j.id)){seen.add(j.id);allP.push(j);}});
   [...A.openJobs.values()].filter(j=>j.groupId===gid&&(!j.expiresAt||j.expiresAt===0||j.expiresAt>now())&&!_gterm.includes(j.status)).forEach(j=>{if(!seen.has(j.id)){seen.add(j.id);allP.push(j);}});
   allP.sort((a,b)=>b.ts-a.ts);
-  if(D())console.log('[vGroupDetail]',{gid,posts:allP.length});
+  const activeP=allP.filter(j=>j.status==='active');
+  const openP=allP.filter(j=>j.status!=='active');
+  const _gs=new Set();const _allGJ=[];
+  A.myJobs.filter(j=>j.groupId===gid).forEach(j=>{if(!_gs.has(j.id)){_gs.add(j.id);_allGJ.push(j);}});
+  [...A.openJobs.values()].filter(j=>j.groupId===gid).forEach(j=>{if(!_gs.has(j.id)){_gs.add(j.id);_allGJ.push(j);}});
+  const _sDone=_allGJ.filter(j=>j.status==='done').length;
+  const _sActive=_allGJ.filter(j=>j.status==='active').length;
+  const _sOpen=_allGJ.filter(j=>j.status==='open').length;
+  if(D())console.log('[vGroupDetail]',{gid,posts:allP.length,done:_sDone,active:_sActive,open:_sOpen});
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groups')">Tilbake</button><div class="pgt">${esc(g.name||g.id)}</div></div>
   <div class="cd" style="margin-bottom:12px"><span class="badge ${g.private?'bgr':'bg1'}" style="margin-bottom:8px">${g.private?'🔒 Privat':'🔓 Åpen'}</span>
   ${g.desc?`<div style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:8px">${esc(g.desc)}</div>`:''}
@@ -2361,23 +2461,43 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
     <div class="fld"><label class="fl">Gruppebilde</label>
     ${A._pendingGroupImg?`<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><img src="${esc(A._pendingGroupImg)}" style="width:48px;height:48px;border-radius:24px;object-fit:cover"><span style="font-size:12px;color:var(--g2)">✓ Nytt bilde valgt</span></div>`
     :`<label class="btn bs bsm" style="cursor:pointer;display:inline-block">📷 Velg nytt bilde<input type="file" accept="image/*" style="display:none" onchange="handleGroupEditImg(this)"></label>`}</div>
+    ${g.private?`<div class="fld"><label class="fl">Nytt passord (blankt = behold)</label><input class="fi" id="gedit-pass" type="password" placeholder="Skriv nytt passord" maxlength="64" autocomplete="new-password">
+      <div style="font-size:11px;color:var(--t3);margin-top:4px">${g.hasPasscode?'Gruppen har passord. Blankt felt beholder det.':'Ingen passord satt ennå.'}</div></div>`:''}
+    ${!g.private?`<div class="fld"><label class="fl">Hvem kan invitere?</label><select class="fi" id="gedit-invpol">
+      <option value="members"${(g.invitePolicy||'members')==='members'?' selected':''}>Alle medlemmer</option>
+      <option value="admin"${g.invitePolicy==='admin'?' selected':''}>Bare admin</option></select></div>`:''}
     <button class="btn bp" onclick="saveGroupEdit('${escA(g.id)}')">Lagre endringer</button></div>`:''}
-  ${g.private?`<details style="margin-bottom:8px"><summary style="font-size:12px;color:var(--t3);cursor:pointer">📋 Gruppekode — del med andre</summary>
-    <div style="font-size:13px;color:var(--t2);margin:8px 0">Del denne koden med folk du vil ha med i gruppen.</div>
+  ${g.private?`<details style="margin-bottom:8px"><summary style="font-size:12px;color:var(--t3);cursor:pointer">📋 Intern gruppekode</summary>
+    <div style="font-size:13px;color:var(--t2);margin:8px 0">Nye medlemmer må inviteres direkte. Koden alene gir ikke tilgang.</div>
     <div class="idd">${g.id}</div>
     <button class="btn bs bsm" style="margin-top:6px" onclick="copyGid('${escA(g.id)}')">📋 Kopier kode</button></details>`:''}
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
     <button class="btn bs bsm" style="flex:1" onclick="go('groupMembers',{gid:'${escA(g.id)}'})">👥 Medlemmer (${totalMembers})</button>
     <button class="btn bs bsm" style="flex:1" onclick="copyGid('${escA(g.id)}')">📋 Kopier ${g.private?'kode':'ID'}</button>
     ${isAdmin?`<button class="btn br bsm" onclick="showConfirm('Slett gruppen?','Du er admin. Gruppen og alle innlegg slettes for alle.','Ja, slett',()=>{deleteGroup('${escA(g.id)}');})">🗑️ Slett</button>`
-      :`<button class="btn br bsm" onclick="showConfirm('Forlate gruppen?','Du kan bli med igjen senere med gruppekoden.','Ja, forlat',()=>{A.groups=A.groups.filter(x=>x.id!=='${escA(g.id)}');persist();bcast({t:'HI',...myPres()});fsLeaveGroup('${escA(g.id)}',A.myId);go('groups');})">Forlat</button>`}
+      :`<button class="btn br bsm" onclick="showConfirm('Forlate gruppen?','${g.private?'Du må bli invitert igjen for å komme tilbake.':'Du kan sende ny forespørsel senere.'}','Ja, forlat',()=>{A.groups=A.groups.filter(x=>x.id!=='${escA(g.id)}');persist();bcast({t:'HI',...myPres()});fsLeaveGroup('${escA(g.id)}',A.myId);go('groups');})">Forlat</button>`}
+  </div>
+  <div class="cd" style="margin-bottom:12px;padding:12px"><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center">
+    <div><div style="font-size:24px;font-weight:800;color:var(--g2)">✅ ${_sDone}</div><div style="font-size:11px;color:var(--t3);font-weight:600">Fullført</div></div>
+    <div><div style="font-size:24px;font-weight:800;color:var(--pr)">🔄 ${_sActive}</div><div style="font-size:11px;color:var(--t3);font-weight:600">Pågår</div></div>
+    <div><div style="font-size:24px;font-weight:800;color:var(--bl)">📋 ${_sOpen}</div><div style="font-size:11px;color:var(--t3);font-weight:600">Åpne</div></div>
   </div></div>
-  ${onlineMembers.length?`<span class="slbl">ONLINE NÅ (${onlineMembers.filter(p=>p.online).length})</span>
-  <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:12px;-webkit-overflow-scrolling:touch">${onlineMembers.filter(p=>p.online).map(p=>
-    `<div style="text-align:center;flex-shrink:0;width:60px;cursor:pointer" onclick="go('repProfile',{uid:'${escA(p.id)}',name:'${escA(p.name)}'})">
-    ${avHtml(p.id,p.name,40)}<div style="font-size:10px;font-weight:600;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name||'?')}</div>
-    ${!A.contacts.find(c=>c.id===p.id)?'<div style="font-size:9px;color:var(--pr);font-weight:700">+ Legg til</div>':''}</div>`).join('')}</div>`:''}
-  ${(()=>{const memberIds=new Set(onlineMembers.map(p=>p.id));memberIds.add(A.myId);
+  ${gReqs.length?`<div class="slbl">📬 MEDLEMSFORESPØRSLER (${gReqs.length})</div>${gReqs.map(r=>{
+    const rLoc=[r.by,r.fylke?FYLKER.find(f=>f.id===r.fylke)?.name:''].filter(Boolean).join(', ');
+    return`<div class="cd" style="margin-bottom:8px;padding:10px 14px">
+    <div style="display:flex;align-items:center;gap:10px">
+    ${r.avatar?`<img src="${esc(r.avatar)}" style="width:40px;height:40px;border-radius:20px;object-fit:cover;border:2px solid var(--s3);flex-shrink:0">`
+    :`<div style="width:40px;height:40px;border-radius:20px;background:var(--pb);border:2px solid var(--pbb);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">${esc((r.name||'?')[0])}</div>`}
+    <div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(r.name||r.peerId)}</div>
+    ${rLoc?`<div style="font-size:11px;color:var(--t3)">📍 ${esc(rLoc)}</div>`:''}
+    ${r.bio?`<div style="font-size:12px;color:var(--t2);line-height:1.4;margin-top:2px">${esc(r.bio)}</div>`:''}</div></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+    <button class="btn bp bsm" style="flex:1" onclick="approveGroupRequest('${escA(g.id)}','${escA(r.peerId)}','${escA(r.name||'')}')">✅ Godkjenn</button>
+    <button class="btn br bsm" style="flex:1" onclick="denyGroupRequest('${escA(g.id)}','${escA(r.peerId)}','${escA(r.name||'')}')">✕ Avvis</button></div></div>`;}).join('')}`:''}
+  ${(()=>{const canInvite=isAdmin||!(!g.private&&g.invitePolicy==='admin');
+    if(!canInvite)return'<div style="font-size:12px;color:var(--t3);margin-bottom:12px">Kun admin kan invitere nye medlemmer i denne gruppen.</div>';
+    const memberIds=new Set(onlineMembers.map(p=>p.id));memberIds.add(A.myId);
     const invitable=A.contacts.filter(c=>{const p=A.peers.get(c.id);return!memberIds.has(c.id)&&(!p||!p.gids?.includes(gid));});
     return invitable.length?`<details style="margin-bottom:12px"><summary class="slbl" style="cursor:pointer">📤 INVITER VENNER (${invitable.length})</summary>
     ${invitable.map(c=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--s2)">
@@ -2386,8 +2506,13 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
       <button class="btn bp bsm" style="width:auto;padding:6px 12px;font-size:11px" onclick="inviteToGroup('${escA(g.id)}','${escA(g.name)}','${escA(c.id)}')">Inviter</button></div>`).join('')}
     <div class="fld" style="margin-top:8px"><input class="fi" id="grp-inv-search" placeholder="Søk etter folk..." oninput="searchGroupInvite(this.value,'${escA(g.id)}','${escA(g.name)}')" autocomplete="off"></div>
     <div id="grp-inv-results"></div></details>`:'';})()}
-  <span class="slbl">INNLEGG (${allP.length})</span>
-  ${allP.length?allP.map(j=>{const pr2=avgR(j.creatorId);const typeMap={help:['🤝','bg1'],service:['💼','bp1']};
+  ${onlineMembers.length?`<span class="slbl">ONLINE NÅ (${onlineMembers.filter(p=>p.online).length})</span>
+  <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:12px;-webkit-overflow-scrolling:touch">${onlineMembers.filter(p=>p.online).map(p=>
+    `<div style="text-align:center;flex-shrink:0;width:60px;cursor:pointer" onclick="go('repProfile',{uid:'${escA(p.id)}',name:'${escA(p.name)}'})">
+    ${avHtml(p.id,p.name,40)}<div style="font-size:10px;font-weight:600;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name||'?')}</div>
+    ${!A.contacts.find(c=>c.id===p.id)?'<div style="font-size:9px;color:var(--pr);font-weight:700">+ Legg til</div>':''}</div>`).join('')}</div>`:''}
+  <span class="slbl">📋 INNLEGG (${openP.length})</span>
+  ${openP.length?openP.map(j=>{const pr2=avgR(j.creatorId);const typeMap={help:['🤝','bg1'],service:['💼','bp1']};
     const[ico,cls]=typeMap[j.type]||['📋','bg1'];const imgSrc=j.imageUrl||j.imageData;
     return`<div class="cd cdt" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">${avHtml(j.creatorId,j.creatorName,28)}
@@ -2402,13 +2527,35 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
     ${imgSrc&&imgSrc!=='[img]'?`<img style="width:100%;max-height:120px;object-fit:contain;background:var(--s2);display:block;border-radius:8px;margin:0 0 8px 0" src="${esc(imgSrc)}" alt="">`:''}
     ${j.jobDate?`<div style="font-size:12px;color:var(--pr);font-weight:600;margin-bottom:4px">${fmtDate(j.jobDate,j.jobTime)}</div>`:''}
     ${j.reward?`<div style="font-size:13px;color:var(--g2);font-weight:700;margin-bottom:6px">🎁 ${esc(j.reward)}</div>`:''}</div>`;}).join('')
-    +`<div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn bp bsm" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'help'};go('create')">🤝 Jobb</button>
-      <button class="btn bs bsm" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'service'};go('create')">💼 Tilby noe</button></div>`
-    :`<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Ingen innlegg i gruppen ennå.<br>Vær den første til å dele noe!</div></div>
-    <div style="display:flex;gap:10px;margin-top:16px">
-      <button class="btn bp" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'help'};go('create')">🤝 Jobb</button>
-      <button class="btn bs" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'service'};go('create')">💼 Tilby noe</button></div>`}</div>`;}
+    :`<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Ingen innlegg i gruppen ennå.<br>Trykk nedenfor for å dele noe!</div></div>`}
+  ${activeP.length?`<span class="slbl" style="margin-top:16px;display:block">🔄 PÅGÅR NÅ (${activeP.length})</span>${activeP.map(j=>{
+    const _inv=new Set();if(j.creatorId)_inv.add(j.creatorId);if(j.helperId)_inv.add(j.helperId);
+    (j.items||[]).forEach(it=>{if(it.assignedTo)_inv.add(it.assignedTo);});
+    const _myInv=_inv.has(A.myId);const _ic=_inv.size;
+    const _hasIt=j.items?.length>0;const _doneIt=_hasIt?j.items.filter(it=>it.status==='done').length:0;
+    const _pct=_hasIt?Math.round(_doneIt/j.items.length*100):0;
+    return`<div style="border-left:4px solid var(--pr);background:var(--sf);border-radius:12px;padding:12px 14px;margin-bottom:8px${_myInv?';cursor:pointer':''}"${_myInv?` onclick="go('jobDetail',{jobId:'${escA(j.id)}'})"`:''}>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="font-size:14px;font-weight:700;flex:1;line-height:1.3">${esc(j.title||'—')}</span>
+      <span style="font-size:11px;color:var(--t3)">${ago(j.ts)}</span></div>
+    <div style="font-size:12px;color:var(--t3);margin-bottom:6px">👥 ${_ic} involvert${_myInv?' · <span style="color:var(--pr);font-weight:600">Du er med</span>':''}</div>
+    ${_hasIt?`<div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:6px;background:var(--s2);border-radius:3px;overflow:hidden"><div style="height:100%;background:var(--pr);border-radius:3px;width:${_pct}%"></div></div>
+      <span style="font-size:11px;color:var(--t3);font-weight:600;flex-shrink:0">${_doneIt}/${j.items.length}</span></div>`
+      :'<div style="font-size:11px;color:var(--pr);font-weight:600">Pågår</div>'}</div>`;}).join('')}`:''}
+  ${(()=>{const doneP=_allGJ.filter(j=>j.status==='done').sort((a,b)=>b.ts-a.ts).slice(0,5);
+    if(!doneP.length)return'';
+    return`<span class="slbl" style="margin-top:16px;display:block">✅ NYLIG FULLFØRT (${doneP.length})</span>${doneP.map(j=>{
+      const _di=new Set();if(j.creatorId)_di.add(j.creatorId);if(j.helperId)_di.add(j.helperId);
+      (j.items||[]).forEach(it=>{if(it.assignedTo)_di.add(it.assignedTo);});
+      const _dic=_di.size;const _hasIt=j.items?.length>0;
+      return`<div style="border-left:4px solid var(--g2);background:var(--gb);border-radius:12px;padding:10px 14px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <span style="font-size:13px;font-weight:700;flex:1;line-height:1.3">${esc(j.title||'—')}</span>
+        <span style="font-size:11px;color:var(--t3)">${ago(j.ts)}</span></div>
+      <div style="font-size:11px;color:var(--t3)">👥 ${_dic} involvert${_hasIt?' · '+j.items.length+' punkter':''}</div></div>`;}).join('')}`;})()}
+  <div style="display:flex;gap:8px;margin-top:16px">
+    <button class="btn bp bsm" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'help'};go('create')">🤝 Jobb</button>
+    <button class="btn bs bsm" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'service'};go('create')">💼 Tilby noe</button></div></div>`;}
 function vGroupMembers(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===gid);
   if(!g)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groupDetail',{gid:'${escA(gid)}'})">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Gruppe ikke funnet.</div></div></div>`;
   const mids=g._members||[];const allIds=new Set(mids);allIds.add(A.myId);
@@ -2446,6 +2593,8 @@ function vCreateGroup(){const priv=A.nb._gPriv!==false;const gImg=A.nb._gImg||nu
     :`<label style="display:flex;align-items:center;gap:10px;padding:12px;border:2px dashed var(--s3);border-radius:12px;cursor:pointer"><span style="font-size:24px">📷</span><span style="font-size:13px;color:var(--t2)">Last opp bilde</span><input type="file" accept="image/*" onchange="handleGroupImg(this)" style="display:none"></label>`}</div>
   <div class="fld"><label class="fl">Gruppenavn</label><input class="fi" id="gn" placeholder="${priv?'F.eks. Familien, Jobbteamet':'F.eks. Oslo Hjelp, Nabolaget'}" maxlength="40"></div>
   <div class="fld"><label class="fl">Beskrivelse (valgfritt)</label><input class="fi" id="gd" placeholder="Hva er gruppen for?" maxlength="120"></div>
+  ${priv?`<div class="fld"><label class="fl">Passord (valgfritt)</label><input class="fi" id="gpass" type="password" placeholder="Sett passord for gruppen" maxlength="64" autocomplete="new-password">
+    <div style="font-size:11px;color:var(--t3);margin-top:4px">Ekstra sikkerhet. Inviterte må skrive passordet for å bli med.</div></div>`:''}
   <div class="fld"><label class="fl">Fylke</label><select class="fi" onchange="A.nb._gFylke=this.value;render()">
     <option value="">Velg fylke...</option>${FYLKER.map(f=>`<option value="${f.id}"${gFylke===f.id?' selected':''}>${esc(f.name)}</option>`).join('')}</select></div>
   <button class="btn bp" onclick="doCreateGroup()">OPPRETT GRUPPE →</button></div>`;}
@@ -2453,7 +2602,7 @@ function vGroupCreated(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===
   return`<div class="obw" style="text-align:center"><div style="font-size:64px;margin-bottom:16px">✅</div>
   <div style="font-size:22px;font-weight:800;margin-bottom:8px">Gruppen er opprettet!</div>
   <div style="font-size:14px;color:var(--t2);margin-bottom:24px">${esc(g?.name||'')}</div>
-  <div style="font-size:13px;color:var(--t2);margin-bottom:12px">Del koden med de du vil ha med:</div>
+  <div style="font-size:13px;color:var(--t2);margin-bottom:12px">Intern gruppekode. Inviter folk direkte fra gruppevisningen.</div>
   <div class="idd" style="margin-bottom:12px">${gid}</div>
   <button class="btn bs" style="margin-bottom:12px" onclick="copyGid('${escA(gid)}')">📋 Kopier gruppekode</button>
   <button class="btn bp" onclick="go('groups')">Gå til grupper →</button></div>`;}
@@ -2475,6 +2624,16 @@ function installHint(){if(ls('oInstDismissed'))return'';
     <span style="font-size:20px">📱</span><div style="flex:1;font-size:12px;color:var(--t2)">Trykk Del-ikonet i Safari og velg «Legg til på hjemskjerm»</div>
     <button style="font-size:14px;color:var(--t3);padding:4px" onclick="dismissInstall()">✕</button></div>`;
   return'';}
+function showInstallPopup(){if(ls('oInstAsked'))return;ss('oInstAsked','1');
+  const bg=document.createElement('div');bg.className='modal-bg';
+  bg.innerHTML=`<div class="modal"><div style="font-size:16px;font-weight:800;margin-bottom:8px">📲 Legg til OptoU på hjemskjermen?</div>
+    <div style="font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:20px">Da åpner appen raskere uten nettleser.</div>
+    <div class="brow"><button class="btn bs" style="flex:1" id="_ip_no">Ikke nå</button>
+    <button class="btn bp" style="flex:1" id="_ip_yes">Ja</button></div></div>`;
+  document.body.appendChild(bg);
+  bg.querySelector('#_ip_no').onclick=()=>{ss('oInstDismissed','1');bg.remove();};
+  bg.querySelector('#_ip_yes').onclick=()=>{bg.remove();doInstall();};
+  bg.onclick=e=>{if(e.target===bg){ss('oInstDismissed','1');bg.remove();}};}
 
 // ═══ SHARE ═══
 window.shareApp=async()=>{if(D())console.log('[shareApp]');var url='https://edvardbrekke1.github.io/Optou/';
@@ -2529,7 +2688,7 @@ async function boot(){
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
     fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'friends posts');});
     fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();});
-    fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsCheckPointUpdates();fsCleanupOrphanedGroups();fsSyncMyPosts();fsCheckMyInvitations();
+    fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsCheckPointUpdates();fsCleanupOrphanedGroups();fsSyncMyPosts();fsCheckMyInvitations();fsCheckMyGroupRequests();
     // Load group posts from Firestore
     if(hasFS()&&A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
       .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(e=>console.warn('[FS] groupPosts',e));});
@@ -2541,6 +2700,10 @@ async function boot(){
       if(data.members){g._members=data.members;data.members.forEach(mid=>{if(mid!==A.myId)tryC(mid);});changed=true;}
       if(data.creatorId&&!g.creatorId){g.creatorId=data.creatorId;changed=true;}
       if(data.imageUrl&&g.imageUrl!==data.imageUrl){g.imageUrl=data.imageUrl;changed=true;}
+      const remoteHasPass=data.hasPasscode!==undefined?data.hasPasscode:!!data.passHash;
+      if(g.hasPasscode!==remoteHasPass){g.hasPasscode=remoteHasPass;changed=true;}
+      const remotePol=data.invitePolicy||'members';
+      if(g.invitePolicy!==remotePol){g.invitePolicy=remotePol;changed=true;}
       if(changed){persist();sR();}}});});}
   else{if(D())console.log('[boot] phase:onboarding');go(ls('oSeen')?'setup':'onboarding');ss('oSeen','1');}
   // Garbage collection (prevents Scuttlebutt bloat)
@@ -2558,7 +2721,7 @@ async function boot(){
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
     fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
     fsCheckInterests();
-    fsCheckJobStatus();fsCheckMyInvitations();
+    fsCheckJobStatus();fsCheckMyInvitations();fsCheckMyGroupRequests();
     // EVERY 2nd round: job chats + public groups + group posts + group orphan cleanup + point updates
     if(r%2===0){
       fsCheckJobChats();fsCheckPointUpdates();
