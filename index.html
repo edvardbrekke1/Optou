@@ -121,7 +121,8 @@ input,textarea,select{font-family:inherit;outline:none;-webkit-appearance:none;b
 // - Groups must hydrate creatorId, _members, imageUrl from Firestore at every join path
 // - vGroupDetail must not assume current user is admin when creatorId is missing or empty
 // - cancelMyJob must handle ghost-jobs in A.openJobs, not just A.myJobs
-// - withdrawHelp must set terminal status + _deadJobs, not hard-delete from myJobs
+// - withdrawHelp legacy (no items): must set terminal status + _deadJobs, not hard-delete from myJobs
+// - withdrawHelp point-mode (items): must reopen only own points, NOT terminate job, NOT add to _deadJobs
 // - updatePointStatus syncs via PU message to owner, not just BM text
 // - Keep checkRules R65 meaningful — do not suppress without fixing source
 // - Public post discovery must NOT use gossip POST — use direct INV to contacts + Firestore (fsWritePost + fsLoadPublicPosts)
@@ -139,6 +140,10 @@ input,textarea,select{font-family:inherit;outline:none;-webkit-appearance:none;b
 // - syncP/BS must only sync active statuses (open/accepting/active/pending_review), never terminal
 // - BS handler must no-op on same/lower priority status to avoid redundant persist/render on reconnect
 // - Hotspot coords (_cx/_cy) are draft-only — published image-items use flattened baked-in markers, no coords needed
+// - Point-mode: only assignedTo person can toggle their own point (canTogglePoint); owner cannot toggle others' points
+// - Point-mode: job-chat is multi-person via jobParticipants(); regular DM is still 1:1
+// - Point-mode: done/pending_review/active can be valid WITHOUT global helperId when items have assignedTo
+// - Point-mode: markParticipantNeverDone reopens only that participant's points, does not terminate the whole job
 // ═══════════════════════════════════════
 
 const V='1.0.0';
@@ -289,7 +294,7 @@ function checkRules(){
     if(j.helperDone===true&&!['pending_review','done'].includes(j.status))E('R13','helperDone=true men feil status',{jid:j.id,status:j.status});
     if(j.status==='cancelled'&&j.helperId)E('R14','Cancelled med helperId (skal nullstilles)',{jid:j.id,helperId:j.helperId});
     if(j.status==='declined'&&!j.isHelper)E('R15','Declined uten isHelper',{jid:j.id});
-    if(j.status==='never_done'&&!j.helperId)E('R16','Never_done uten helperId',{jid:j.id});
+    if(j.status==='never_done'&&!j.helperId&&!(j.items?.some(it=>it.assignedTo)))E('R16','Never_done uten helperId',{jid:j.id});
     if(j.creatorId===A.myId&&j.isHelper)E('R17','Eier-jobb har isHelper',{jid:j.id});
     if(j.isHelper&&j.creatorId===A.myId)E('R18','Hjelper med creatorId===myId',{jid:j.id});
     if(j.isHelper&&!j.creatorName)W('R19','Hjelper-jobb uten creatorName',{jid:j.id});
