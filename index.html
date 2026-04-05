@@ -620,7 +620,7 @@ window.sendChatAudio=(type,id1,id2)=>{if(!window._pendingAudio)return;const{url,
     _at.forEach(pid=>send(pid,{t:'BM',jid:id1,name:A.myName,text:msg.text,audioUrl:url,duration:dur,ts:msg.ts,_mid:msg._mid}));}
   else if(type==='dm'){var dmaid=uid();var dts=now();addDM(id1,{from:A.myId,name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,ts:dts,_mid:dmaid,_status:'sent'});
     send(id1,{t:'DM',name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,enc:false,ts:dts,_mid:dmaid});}
-  persist();render();setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},50);};
+  persist();render();setTimeout(()=>{const m=$('ch-m')||$('jd-chat');if(m)m.scrollTop=m.scrollHeight;},50);};
 window.playChatAudio=url=>{if(_audio){_audio.pause();if(_audio.src===url){_audio=null;return;}}
   _audio=new Audio(url);_audio.play().catch(()=>notify('⚠️','Kunne ikke spille av lyd'));};
 window.showImg=url=>{if(D())console.log('[showImg]',url?.substr(0,60));var bg=document.createElement('div');
@@ -643,7 +643,7 @@ window.sendChatImg=async()=>{if(!window._pendingImg)return;var pi=window._pendin
     _it.forEach(pid=>send(pid,{t:'BM',jid:pi.id1,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:msg.ts,_mid:mid}));}
   else if(pi.type==='dm'){var its=now();addDM(pi.id1,{from:A.myId,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:its,_mid:mid,_status:'sent'});
     send(pi.id1,{t:'DM',name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,enc:false,ts:its,_mid:mid});}
-  persist();render();setTimeout(()=>{var m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},50);};
+  persist();render();setTimeout(()=>{var m=$('ch-m')||$('jd-chat');if(m)m.scrollTop=m.scrollHeight;},50);};
 
 // ═══ FIREBASE ═══
 const FB_CONFIG={"apiKey":"AIzaSyCVizzN68eYeyJ9uJLvVfi-Zz_EbHsppB8","authDomain":"optouhtml.firebaseapp.com","projectId":"optouhtml","storageBucket":"optouhtml.firebasestorage.app","messagingSenderId":"477651646969","appId":"1:477651646969:web:f10ae57573ee63cd5f6528"};
@@ -1245,7 +1245,7 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(Array.isArray(m.points)&&m.points.length&&j.items?.length){
       var ap=m.points.filter((idx,i,a)=>a.indexOf(idx)===i&&Number.isInteger(idx)&&j.items[idx]);
       if(ap.length){ap.forEach(idx=>{j.items[idx].assignedTo=A.myId;j.items[idx].assignedName=A.myName;j.items[idx].assignedStatus='accepted';j.items[idx].status='taken';});
-        j.isPointHelper=true;j._myPoints=ap.slice();j.status='active';
+        j.isHelper=true;j.isPointHelper=true;j._myPoints=ap.slice();j.status='active';
         if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;
         notify('✅ Du fikk '+ap.length+' punkt'+(ap.length>1?'er':'')+'!',m.name||'');persist();}updateB();sR();break;}
     // Whole-job branch
@@ -1951,11 +1951,20 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
     ${_last20.map(m=>`<div class="msg ${m.from===A.myId?'mm':'mo'}" style="font-size:13px;padding:8px 12px">${m.from!==A.myId?`<div class="mn">${esc(m.name||'?')}</div>`:''}${m.imageUrl?`<img src="${esc(m.imageUrl)}" style="max-width:180px;max-height:200px;border-radius:8px;display:block;margin-bottom:4px;cursor:pointer" onclick="event.stopPropagation();showImg('${escA(m.imageUrl)}')">`:m.audioUrl?`<button style="display:flex;align-items:center;gap:6px;background:none;color:inherit;font-size:12px" onclick="playChatAudio('${escA(m.audioUrl)}')">▶ ${esc(m.duration||'?')}s</button>`:esc(m.text)}<div class="mt2">${ago(m.ts)}${m.from===A.myId?' '+(m._status==='delivered'?'●':'○'):''}</div></div>`).join('')}
     </div>
     ${j.status==='done'?'<div style="text-align:center;padding:12px;font-size:13px;color:var(--t3);border-top:1px solid var(--s3);margin-top:8px">Jobben er fullført — chatten er låst</div>'
-    :`<div style="border-top:1px solid var(--s3);margin-top:8px;padding:8px 0">
+    :`${window._pendingAudio?`<div style="padding:8px 12px;background:var(--gb);border:1px solid var(--gbb);border-radius:10px;margin:8px 0;display:flex;align-items:center;gap:8px">
+      <span style="font-size:13px;color:var(--g2)">ðŸŽ™ï¸ Lydmelding klar (${window._pendingAudio.dur}s)</span>
+      <button class="btn bg bsm" style="margin-left:auto;padding:6px 12px" onclick="sendChatAudio('jc','${escA(jid)}','${escA(_oId||'')}')">Send âž¤</button>
+      <button style="font-size:14px;color:var(--t3);padding:4px" onclick="window._pendingAudio=null;render()">âœ•</button></div>`:''}
+    ${window._pendingImg?`<div style="padding:8px 12px;background:var(--bb);border:1px solid #BFDBFE;border-radius:10px;margin-bottom:8px;display:flex;align-items:center;gap:8px">
+      <img src="${esc(window._pendingImg.data)}" style="width:48px;height:48px;border-radius:8px;object-fit:cover">
+      <span style="font-size:13px;color:var(--bl)">ðŸ“· Bilde klart</span>
+      <button class="btn bp bsm" style="margin-left:auto;padding:6px 12px" onclick="sendChatImg()">Send âž¤</button>
+      <button style="font-size:14px;color:var(--t3);padding:4px" onclick="window._pendingImg=null;render()">âœ•</button></div>`:''}
+    <div style="border-top:1px solid var(--s3);margin-top:8px;padding:8px 0">
     <textarea class="chi" id="jd-ci" placeholder="Skriv..." maxlength="500" rows="1" style="width:100%;resize:none;overflow:hidden;min-height:36px;max-height:120px;margin-bottom:6px" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();jdCS('${escA(jid)}','${escA(_oId||'')}')}"></textarea>
     <div style="display:flex;gap:10px;align-items:center">
     <label style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;cursor:pointer;flex-shrink:0">📷<input type="file" accept="image/*" style="display:none" onchange="handleChatImg(this,'jc','${escA(jid)}','${escA(_oId||'')}')"></label>
-    <button style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
+    <button class="${_isChatRec?'rec-pulse':''}" style="width:44px;height:44px;border-radius:22px;background:${_isChatRec?'var(--rd)':'var(--s2)'};color:${_isChatRec?'#fff':'inherit'};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
     <div style="flex:1"></div>
     <button style="width:44px;height:44px;border-radius:22px;background:var(--pr);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="jdCS('${escA(jid)}','${escA(_oId||'')}')">➤</button>
     </div></div>`}`;}
@@ -2184,7 +2193,7 @@ function vJobChat(){const jid=A.params.jobId;const j=A.myJobs.find(x=>x.id===jid
   <textarea class="chi" id="jci" placeholder="Skriv..." maxlength="500" rows="1" style="width:100%;resize:none;overflow:hidden;min-height:36px;max-height:120px;margin-bottom:6px" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();jcS('${escA(jid)}','${escA(oId||'')}')}"></textarea>
   <div style="display:flex;gap:10px;align-items:center">
   <label style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;cursor:pointer;flex-shrink:0">📷<input type="file" accept="image/*" style="display:none" onchange="handleChatImg(this,'jc','${escA(jid)}','${escA(oId||'')}')"></label>
-  <button style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
+  <button class="${_isChatRec?'rec-pulse':''}" style="width:44px;height:44px;border-radius:22px;background:${_isChatRec?'var(--rd)':'var(--s2)'};color:${_isChatRec?'#fff':'inherit'};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
   <div style="flex:1"></div>
   <button style="width:44px;height:44px;border-radius:22px;background:var(--pr);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="jcS('${escA(jid)}','${escA(oId||'')}')">➤</button>
   </div></div></div></div>`;}
@@ -2215,7 +2224,7 @@ function vDM(){const pid=A.params.peerId;const nm=dn(pid,A.peers.get(pid)?.name)
   <textarea class="chi" id="dmi" placeholder="Skriv..." maxlength="500" rows="1" style="width:100%;resize:none;overflow:hidden;min-height:36px;max-height:120px;margin-bottom:6px" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();dmS('${escA(pid)}')}"></textarea>
   <div style="display:flex;gap:10px;align-items:center">
   <label style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;cursor:pointer;flex-shrink:0">📷<input type="file" accept="image/*" style="display:none" onchange="handleChatImg(this,'dm','${escA(pid)}')"></label>
-  <button style="width:44px;height:44px;border-radius:22px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
+  <button class="${_isChatRec?'rec-pulse':''}" style="width:44px;height:44px;border-radius:22px;background:${_isChatRec?'var(--rd)':'var(--s2)'};color:${_isChatRec?'#fff':'inherit'};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="toggleChatRec()">${_isChatRec?'🔴':'🎙️'}</button>
   <div style="flex:1"></div>
   <button style="width:44px;height:44px;border-radius:22px;background:var(--pr);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="dmS('${escA(pid)}')">➤</button>
   </div></div></div></div>`;}
