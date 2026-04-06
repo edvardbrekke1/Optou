@@ -581,7 +581,8 @@ window.doOwnerAssign=async(jid,idx,pid,name)=>{document.getElementById('owner-as
     return false;});
   if(D()&&_cleaned)console.log('[doOwnerAssign] cleaned applicants',{jid,idx,removed:_cleaned});
   await fsUpdatePostItems(jid,j.items);
-  send(pid,{t:'PI',jid,idx,title:j.title,itemText:it.text||'Punkt '+(idx+1),creatorId:A.myId,creatorName:A.myName});
+  var _piMid='pi:'+jid+':'+idx+':'+uid();
+  send(pid,{t:'PI',jid,idx,title:j.title,itemText:it.text||'Punkt '+(idx+1),creatorId:A.myId,creatorName:A.myName,_mid:_piMid});
   fsWritePointInvitation(pid,{jid,idx,creatorId:A.myId,creatorName:A.myName,title:j.title,itemText:it.text||'Punkt '+(idx+1),recipientId:pid,recipientName:name,status:'pending',ts:now(),updatedAt:now()});
   var ns=pointOwnerStatus(j);if(ns!==j.status){j.status=ns;fsUpdatePostStatus(jid,ns);}
   if(D())console.log('[ownerAssignPoint]',{jid,idx,pid,name});
@@ -1377,7 +1378,7 @@ function setupC(c){
   c.on('error',(err)=>{if(c._keepalive)clearInterval(c._keepalive);if(D())console.log('[CONN] error',c.peer,err?.type||err);A._pending.delete(c.peer);A.conns.delete(c.peer);});}
 function send(id,msg){const c=A.conns.get(id);if(c?.open){try{if(D())console.log('[SEND] DIRECT',msg.t,{to:id,jid:msg.jid||msg.job?.id});c.send(msg);return;}catch(e){}}
   if(D())console.log('[SEND] QUEUED',msg.t,{to:id,jid:msg.jid||msg.job?.id,connOpen:!!c?.open,conns:A.conns.size});
-  if(A.offlineQ.length>=100)A.offlineQ.shift();const mid=['INV','HC','PC','BM','DM','JR','JY','JN','RJ','JW'].includes(msg.t)?uid():null;
+  if(A.offlineQ.length>=100)A.offlineQ.shift();const mid=['INV','HC','PC','BM','DM','JR','JY','JN','RJ','JW','PI'].includes(msg.t)?uid():null;
   A.offlineQ.push({to:id,msg,ts:now(),mid});persist();if(mid)relayM(id,msg,mid);tryC(id);}
 function bcast(msg){var _bc=0;A.conns.forEach((c,id)=>{if(c.open&&id!==msg.from){try{c.send(msg);_bc++;}catch(e){}}});if(D())console.log('[bcast]',msg.t,{recipients:_bc});}
 function gossip(p){if(D())console.log('[gossip]',{payloadType:p.t});const msg={t:'GS',id:uid(),ttl:6,from:A.myId,origin:A.myId,p};
@@ -1597,6 +1598,8 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     _pj.items[m.idx].status=m.status;
     if(D())console.log('[PU] received',{jid:m.jid,idx:m.idx,status:m.status});persist();sR();break;}
   case 'PI':{if(!m.jid||m.idx==null||!m.creatorId)break;
+    if(m._mid&&A._seenMids.has(m._mid))break;
+    if(m._mid)A._seenMids.add(m._mid);
     if(D())console.log('[PI] received',{jid:m.jid,idx:m.idx,from:m.creatorName});
     if(A._pendingInvites.find(x=>x.jid===m.jid&&x.idx===m.idx))break;
     A._pendingInvites.push({jid:m.jid,idx:m.idx,title:m.title||'',itemText:m.itemText||'',creatorId:m.creatorId,creatorName:m.creatorName||'',recipientId:A.myId,status:'pending',ts:now()});
@@ -1713,6 +1716,18 @@ function dropOpenJobLocal(jid){var oj=A.openJobs.get(jid);if(!oj)return false;
   if(oj.visibility==='direct'&&(A._unreadJobs[jid]||0)&&A.unreadActivity>0)A.unreadActivity=Math.max(0,A.unreadActivity-1);
   if(oj.visibility==='direct')clearDirectInviteQueue(jid);
   delete A._unreadJobs[jid];A.openJobs.delete(jid);return true;}
+function restoreBrowsableJobLocal(j){
+  if(!j||isInvalidDirectJob(j))return false;
+  if(j.expiresAt&&j.expiresAt!==0&&j.expiresAt<=now())return false;
+  if(j.visibility==='group'&&!j.groupId)return false;
+  var reopened={...j,status:'open',helperId:null,helperName:null,helperDone:false,isHelper:false,isPointHelper:false,isPointApplicant:false,_myPoints:[]};
+  if(reopened.visibility==='public'||reopened.isPublic)reopened.isPublic=true;
+  reopened.isFromContact=reopened.isPublic?!!reopened.isFromContact:true;
+  A._deadJobs.delete(j.id);
+  delete A._unreadJobs[j.id];
+  A.openJobs.set(j.id,reopened);
+  return true;
+}
 
 // ═══ ROUTER ═══
 window.go=(s,p)=>{if(D())console.log('[go]',{from:A.screen,to:s,params:p});if(A.screen==='create'&&s!=='create'&&s!=='setup')A.nb={};
@@ -2069,7 +2084,8 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
   var _piSent=0;
   if(lj&&lj.items){lj.items.forEach((it,i)=>{if(it.assignedTo&&it.assignedTo!==A.myId){
     it.assignedStatus='pending';_piSent++;
-    send(it.assignedTo,{t:'PI',jid:jobId,idx:i,title:job.title,itemText:it.text||'Punkt '+(i+1),creatorId:A.myId,creatorName:A.myName});
+    var _piMid='pi:'+jobId+':'+i+':'+uid();
+    send(it.assignedTo,{t:'PI',jid:jobId,idx:i,title:job.title,itemText:it.text||'Punkt '+(i+1),creatorId:A.myId,creatorName:A.myName,_mid:_piMid});
     fsWritePointInvitation(it.assignedTo,{jid:jobId,idx:i,creatorId:A.myId,creatorName:A.myName,title:job.title,itemText:it.text||'Punkt '+(i+1),recipientId:it.assignedTo,recipientName:it.assignedName||'',status:'pending',ts:now(),updatedAt:now()});}});
     if(_piSent>0){var _pns=pointOwnerStatus(lj);lj.status=_pns;job.status=_pns;fsUpdatePostItems(jobId,lj.items);fsUpdatePostStatus(jobId,_pns);if(D())console.log('[POST] sent',_piSent,'point invitations');}}
   if(!_fsPostOk)notify('📡','Lagret lokalt. Synkes til Firebase igjen senere.');
@@ -2306,6 +2322,7 @@ window.doHelp=async(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A
   if(!A.contacts.find(c=>c.id===cid)){A.tempConns.set(jid,{peerId:cid,name:oj?.creatorName||'',ts:now()});tryC(cid);}
   dropOpenJobLocal(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
     fylke:oj?.fylke,by:oj?.by,imageUrl:oj?.imageUrl,imageData:oj?.imageData,groupId:oj?.groupId,groupName:oj?.groupName,jobDate:oj?.jobDate,jobTime:oj?.jobTime,
+    visibility:oj?.visibility||null,targetIds:Array.isArray(oj?.targetIds)?oj.targetIds.slice(0,1):[],expiresAt:oj?.expiresAt||0,isFromContact:!!oj?.isFromContact,isPublic:!!oj?.isPublic,
     creatorId:cid,creatorName:oj?.creatorName,status:'pending',isHelper:true,ts:now()});
   send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0});
   if(hasFS()){try{fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId).set({id:A.myId,name:A.myName,msg:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,ts:Date.now()}).catch(e=>console.warn('[FS] interest write',e));}catch(e){}}
@@ -2356,6 +2373,7 @@ window.doHelpPoints=(jid,cid)=>{var existing=A.myJobs.find(x=>x.id===jid);
   if(!A.contacts.find(c=>c.id===cid)){A.tempConns.set(jid,{peerId:cid,name:oj?.creatorName||'',ts:now()});tryC(cid);}
   if(!existing){dropOpenJobLocal(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
     fylke:oj?.fylke,by:oj?.by,imageUrl:oj?.imageUrl,imageData:oj?.imageData,groupId:oj?.groupId,groupName:oj?.groupName,jobDate:oj?.jobDate,jobTime:oj?.jobTime,
+    visibility:oj?.visibility||null,targetIds:Array.isArray(oj?.targetIds)?oj.targetIds.slice(0,1):[],expiresAt:oj?.expiresAt||0,isFromContact:!!oj?.isFromContact,isPublic:!!oj?.isPublic,
     creatorId:cid,creatorName:oj?.creatorName,status:'pending',isHelper:true,isPointApplicant:true,_myPoints:pts.slice(),ts:now()});
   }else{var _old=existing._myPoints||[];existing._myPoints=[..._old,...pts.filter(p=>!_old.includes(p))];existing.isPointApplicant=true;
     if(!(hasPointAssignment(existing,A.myId)||existing.isPointHelper))existing.status='pending';
@@ -2377,7 +2395,7 @@ window.withdrawHelp=async(jid,cid)=>{if(D())console.log('[withdrawHelp]',{jid,ci
     // Remove from myJobs, put back in openJobs if open points remain so user can re-browse
     var _hasOpenAfter=wj.items.some(it=>(it.status||'open')==='open'&&!it.assignedTo);
     A.myJobs=A.myJobs.filter(x=>x.id!==jid);
-    if(_hasOpenAfter){A.openJobs.set(jid,{...wj,status:'open',isHelper:false,isPointHelper:false,isPointApplicant:false,_myPoints:[],isFromContact:true});}
+    if(_hasOpenAfter)restoreBrowsableJobLocal(wj);
     persist();notify('↩️',n?'Du trakk deg fra '+n+' oppgave'+(n>1?'r':''):'Søknad trukket tilbake');return;}
   // Legacy whole-job branch
   if(wj){
@@ -2386,11 +2404,14 @@ window.withdrawHelp=async(jid,cid)=>{if(D())console.log('[withdrawHelp]',{jid,ci
     wj.helperDone=false;
     if(D())console.log('[withdrawHelp] terminal',{jid,newStatus:wj.status});
   }
-  A._deadJobs.add(jid);send(cid,{t:'JW',jid});
+  send(cid,{t:'JW',jid});
   if(_wholeWasAssigned&&hasFS())fsUpdatePostStatus(jid,'open',{helperId:null,helperName:null});
   if(hasFS())try{var _iRef=fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId);
     _iRef.get().then(d=>{if(d.exists){var dt=d.data();if(dt.audioUrl){fsDeleteMediaUrl(dt.audioUrl);if(D())console.log('[withdrawHelp] cleanup audioUrl',jid);}}
       _iRef.delete().catch(function(){});}).catch(function(){});}catch(e){}
+  var _reopened=restoreBrowsableJobLocal(wj);
+  if(_reopened)A.myJobs=A.myJobs.filter(x=>x.id!==jid);
+  else A._deadJobs.add(jid);
   persist();notify('↩️','Trukket tilbake');};
 window.doRate=(jid,tid)=>{if(D())console.log('[doRate]',{jid,tid,score:A.nb.rating});const s=A.nb.rating||0;if(!s){notify('⚠️','Gi en vurdering');return;}
   const c=A.nb._rc||$('rc')?.value?.trim()||'';if(tid)addRating(tid,{score:s,comment:c,jobId:jid,raterName:A.myName,ts:now(),nd:false});
@@ -3297,7 +3318,7 @@ async function boot(){
   // Foreground recovery
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&A.myName){
     if(A.peer?.disconnected&&!A.peer.destroyed)try{A.peer.reconnect();}catch(e){}
-    A.contacts.forEach(c=>tryC(c.id));flushQ();fsCheckJobChats();fsCheckMyJobChatAcks();fsCheckMyDMs();fsCheckMyDMAcks();fsCheckRatings();sR();
+    A.contacts.forEach(c=>tryC(c.id));flushQ();fsCheckJobChats();fsCheckMyJobChatAcks();fsCheckMyDMs();fsCheckMyDMAcks();fsCheckRatings();fsCheckMyInvitations();sR();
     setTimeout(()=>{A.contacts.forEach(c=>tryC(c.id));flushQ();},2e3);
     setTimeout(()=>{A.contacts.forEach(c=>tryC(c.id));A.conns.forEach((_,id)=>{deliverR(id);offerRH(id);syncP(id);});flushQ();sR();},5e3);
   }});
