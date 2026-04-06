@@ -2489,7 +2489,7 @@ function vMine(){
   if(mf==='active')filtered=A.myJobs.filter(j=>['open','accepting','pending','active','pending_review'].includes(j.status));
   else filtered=A.myJobs.filter(j=>j.status==='done');
   filtered.sort((a,b)=>b.ts-a.ts);
-  const mc=j=>{const isO=j.creatorId===A.myId;const _dp=j.visibility==='direct'?(j.targetIds||[])[0]:null;let[lbl,cls]=sm[j.status]||['—','bgr'];if(!isO&&j.status==='accepting'){lbl='Venter svar';cls='by1';}if(isO&&j.visibility==='direct'&&j.status==='open'&&!(j.interests?.length)){lbl='Venter svar';cls='by1';}const sD=['done','declined','never_done','cancelled'].includes(j.status);
+  const mc=j=>{const isO=j.creatorId===A.myId;const _dp=j.visibility==='direct'?(j.targetIds||[])[0]:null;let[lbl,cls]=sm[j.status]||['—','bgr'];if(!isO&&j.status==='accepting'){lbl='Venter svar';cls='by1';}if(isO&&j.visibility==='direct'&&['open','accepting'].includes(j.status)&&!(j.interests?.length)){lbl='Venter svar';cls='by1';}const sD=['done','declined','never_done','cancelled'].includes(j.status);
     const tIco=j.type==='help'?'🤝':j.type==='service'?'💼':'📋';
     const visIco=j.visibility==='public'?'🌐 Offentlig':j.visibility==='direct'?'📩 Direkte':j.groupName?'🏘️ '+esc(j.groupName):'👥 Venner';
     const expDays=j.expiresAt&&j.expiresAt>0?Math.max(0,Math.ceil((j.expiresAt-now())/864e5)):0;const _ju=A._unreadJobs[j.id]||0;
