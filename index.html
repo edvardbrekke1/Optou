@@ -241,7 +241,7 @@ async function persist(){
   if(A.relayQ.length>200)A.relayQ=A.relayQ.slice(0,200);
   if(A._seenMids.size>500)A._seenMids=new Set([...A._seenMids].slice(-300));
   // Expire old openJobs (prevents unbounded growth)
-  A.openJobs.forEach((j,id)=>{if(j.expiresAt&&j.expiresAt!==0&&j.expiresAt<now())A.openJobs.delete(id);});
+  A.openJobs.forEach((j,id)=>{if(j.expiresAt&&j.expiresAt!==0&&j.expiresAt<now())dropOpenJobLocal(id);});
   if(A.openJobs.size>200){const entries=[...A.openJobs.entries()].sort((a,b)=>b[1].ts-a[1].ts).slice(0,200);A.openJobs=new Map(entries);}
   // Trim chat histories
   Object.keys(A.jobChats).forEach(k=>{if(A.jobChats[k]?.length>200)A.jobChats[k]=A.jobChats[k].slice(-200);});
@@ -680,13 +680,25 @@ function initFB(){
     try{fbDb=firebase.firestore();console.log('[FB] Init OK — Storage + Firestore');}catch(e2){console.log('[FB] Init OK — Storage only');}}
   catch(e){console.warn('[FB]',e);}}
 function hasFS(){return!!fbDb;}
-function dropMissingGroup(gid,reason){if(D())console.log('[dropMissingGroup]',{gid,reason});
+function dropMissingGroup(gid,reason,quiet){if(D())console.log('[dropMissingGroup]',{gid,reason});
+  var changed=false;
+  var _beforeGroups=A.groups.length;
   A.groups=A.groups.filter(g=>g.id!==gid);
+  if(A.groups.length!==_beforeGroups)changed=true;
+  var _beforePublic=(A._publicGroups||[]).length;
   A._publicGroups=(A._publicGroups||[]).filter(g=>g.id!==gid);
-  A.openJobs.forEach((j,id)=>{if(j.groupId===gid)A.openJobs.delete(id);});
+  if(A._publicGroups.length!==_beforePublic)changed=true;
+  var _rmOpen=0;A.openJobs.forEach((j,id)=>{if(j.groupId===gid){if(dropOpenJobLocal(id))_rmOpen++;}});
+  if(_rmOpen)changed=true;
   var _rmJobs=0;A.myJobs=A.myJobs.filter(j=>{if(j.groupId===gid){delete A.jobChats[j.id];delete A._unreadJobs[j.id];_rmJobs++;return false;}return true;});
-  if(D()&&_rmJobs)console.log('[dropMissingGroup] removed myJobs',{gid,count:_rmJobs});
-  persist();sR();}
+  if(_rmJobs)changed=true;
+  if(A._unreadGroupPosts[gid]){delete A._unreadGroupPosts[gid];changed=true;}
+  if(A._groupRequests[gid]){delete A._groupRequests[gid];changed=true;}
+  if(A._groupRequestsTs[gid]){delete A._groupRequestsTs[gid];changed=true;}
+  if(A._myGroupRequests[gid]){delete A._myGroupRequests[gid];changed=true;}
+  if(D()&&(_rmJobs||_rmOpen))console.log('[dropMissingGroup] removed local group data',{gid,myJobs:_rmJobs,openJobs:_rmOpen});
+  if(changed&&!quiet){persist();sR();}
+  return changed;}
 async function fsWriteGroup(gid,data){if(D())console.log('[-> fsWriteGroup]',{gid});if(!hasFS())return false;try{await fbDb.collection('groups').doc(gid).set(data,{merge:true});if(D())console.log('[<- fsWriteGroup] success',gid);return true;}catch(e){console.warn('[FS] write',e);return false;}}
 function groupRequestAdminDocId(gid,peerId){return gid+'_'+peerId;}
 async function fsWriteGroupRequest(gid,req){if(D())console.log('[-> fsWriteGroupRequest]',{gid,peer:req.peerId,admin:req.adminId,status:req.status});if(!hasFS()||!gid||!req?.peerId)return false;try{
@@ -737,14 +749,21 @@ async function fsCheckMyGroupRequests(){if(!hasFS()||!A.myId)return;var gids=Obj
   }catch(e){console.warn('[fsCheckMyGroupRequests]',gid,e);}}}
 async function fsCheckMyGroups(){if(!hasFS()||!A.myId)return;
   try{const snap=await fbDb.collection('groups').where('members','array-contains',A.myId).limit(100).get();
-    var changed=false;for(const doc of snap.docs){if(upsertLocalGroupFromFs(doc.id,doc.data(),doc.data()?.name||doc.id))changed=true;}
+    var changed=false,remoteGids=new Set();
+    for(const doc of snap.docs){remoteGids.add(doc.id);if(upsertLocalGroupFromFs(doc.id,doc.data(),doc.data()?.name||doc.id))changed=true;}
+    if(snap.docs.length<100){
+      A.groups.filter(g=>!remoteGids.has(g.id)).forEach(g=>{if(dropMissingGroup(g.id,'fsCheckMyGroups — no longer member',true))changed=true;});
+    }
     if(D())console.log('[fsCheckMyGroups]',{remote:snap.docs.length,changed});
     if(changed){persist();bcast({t:'HI',...myPres()});sR();}
   }catch(e){if(D())console.log('[fsCheckMyGroups] error',e.message);}}
 async function fsCheckAdminGroupRequests(){if(!hasFS()||!A.myId)return;
-  var owned=new Set(A.groups.filter(g=>g.creatorId===A.myId).map(g=>g.id));if(!owned.size)return;
+  var owned=new Set(A.groups.filter(g=>g.creatorId===A.myId).map(g=>g.id));
+  var changed=false;
+  Object.keys(A._groupRequests).forEach(gid=>{if(!owned.has(gid)){delete A._groupRequests[gid];delete A._groupRequestsTs[gid];changed=true;}});
+  if(!owned.size){if(changed){persist();sR();}return;}
   try{const snap=await fbDb.collection('users').doc(A.myId).collection('groupRequests').where('status','==','pending').limit(40).get();
-    var byGid={},added=0,changed=false;snap.docs.forEach(d=>{var r={id:d.id,...d.data()};if(!r.gid||!owned.has(r.gid))return;
+    var byGid={},added=0;snap.docs.forEach(d=>{var r={id:d.id,...d.data()};if(!r.gid||!owned.has(r.gid))return;
       if(!byGid[r.gid])byGid[r.gid]=[];byGid[r.gid].push(r);
       if(!(A._groupRequests[r.gid]||[]).find(x=>x.peerId===r.peerId))added++;});
     owned.forEach(gid=>{var prev=A._groupRequests[gid]||[],next=byGid[gid]||[];
@@ -770,8 +789,8 @@ async function fsDeleteGroup(gid){if(!hasFS())return;if(D())console.log('[-> fsD
     await fbDb.collection('groups').doc(gid).delete();
     // Best-effort delete group image
     if(fbStorage)try{await fbStorage.ref().child('groups/'+gid+'.webp').delete();}catch(e){}
-    if(D())console.log('[<- fsDeleteGroup] success',gid);
-  }catch(e){if(D())console.log('[fsDeleteGroup] error',gid,e.message);}}
+    if(D())console.log('[<- fsDeleteGroup] success',gid);return true;
+  }catch(e){if(D())console.log('[fsDeleteGroup] error',gid,e.message);return false;}}
 async function fsLoadPublicGroups(){if(!hasFS())return[];if(D())console.log('[-> fsLoadPublicGroups]');
   // NOTE: Requires Firestore index on groups(private) — see Firebase console
   try{const snap=await fbDb.collection('groups').where('private','==',false).limit(50).get();
@@ -782,8 +801,8 @@ function fsRefreshPublicGroupsIfNeeded(){if(!hasFS()||now()-_pubGroupsTs<90000)r
   fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();}).catch(()=>{});}
 let _grpPostsTs=0;
 function fsRefreshGroupPostsIfNeeded(){if(!hasFS()||!A.groups.length||now()-_grpPostsTs<90000)return;_grpPostsTs=now();
-  A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
-    .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){if(A.screen!=='groups')A.unreadGroups+=added;if(!(A.screen==='groupDetail'&&A.params.gid===g.id))A._unreadGroupPosts[g.id]=(A._unreadGroupPosts[g.id]||0)+added;updateB();persist();sR();}}).catch(()=>{});});}
+  A.groups.forEach(g=>{fsLoadGroupPosts(g.id).then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});
+    if(added>0){if(A.screen!=='groups')A.unreadGroups+=added;if(!(A.screen==='groupDetail'&&A.params.gid===g.id))A._unreadGroupPosts[g.id]=(A._unreadGroupPosts[g.id]||0)+added;updateB();persist();sR();}}).catch(()=>{});});}
 async function fsRegisterUser(){if(D())console.log('[-> fsRegisterUser]',{myId:A.myId,myName:A.myName});if(!hasFS()||!A.myId||!A.myName)return;try{await fbDb.collection('users').doc(A.myId).set({name:A.myName,nameLower:A.myName.toLowerCase(),fylke:A.myFylke||'',by:A.myBy||'',avatar:ls('oAvatar')||'',pub:A.pubB64||'',epub:A.ecdhPubB64||'',esig:A.ecdhSig||'',updatedAt:Date.now()},{merge:true});if(D())console.log('[<- fsRegisterUser] success');}catch(e){console.warn('[FS] registerUser',e);}}
 async function fsSearchUsers(query){if(!hasFS()||!query||query.length<2)return[];try{var q=query.toLowerCase();var snap=await fbDb.collection('users').where('nameLower','>=',q).where('nameLower','<=',q+'\uf8ff').limit(20).get();return snap.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.id!==A.myId&&!A.blocked.has(u.id));}catch(e){console.warn('[FS] searchUsers',e);return[];}}
 async function fsHydrateUserNames(ids){if(!hasFS()||!ids.length)return;
@@ -792,12 +811,23 @@ async function fsHydrateUserNames(ids){if(!hasFS()||!ids.length)return;
   for(var id of unknown){try{var doc=await fbDb.collection('users').doc(id).get();
     if(doc.exists&&doc.data().name){A._userNames[id]=doc.data().name;if(D())console.log('[hydrate]',id,doc.data().name);}
   }catch(e){}}sR();}
-async function fsWritePost(p){if(D())console.log('[-> fsWritePost]',{jid:p.id,visibility:p.visibility});if(!hasFS())return false;try{await fbDb.collection('posts').doc(p.id).set({id:p.id,type:p.type,title:p.title,desc:p.desc,reward:p.reward||'',location:p.location||'',fylke:p.fylke||'',by:p.by||'',
-  imageUrl:p.imageUrl||null,items:(p.items||[]).map(it=>({text:it.text,audioUrl:it.audioUrl||null,duration:it.duration||0,mode:it.mode||'list',status:it.status||'open',assignedTo:it.assignedTo||null,assignedName:it.assignedName||null,assignedStatus:it.assignedStatus||null})),jobDate:p.jobDate||null,jobTime:p.jobTime||null,
-  groupId:p.groupId||null,groupName:p.groupName||null,creatorId:p.creatorId,creatorName:p.creatorName,creatorAvatar:ls('oAvatar')||'',ts:p.ts,expiresAt:p.expiresAt,visibility:p.visibility||'public',status:p.status||'open'});
+const DISCOVERABLE_POST_STATUSES=['open','accepting'];
+function _postAudioExt(dataUrl){return /^data:audio\/mp4/i.test(dataUrl||'')||/^data:audio\/m4a/i.test(dataUrl||'')?'.m4a':'.webm';}
+function postItemsForFs(items){return(items||[]).map(it=>({text:it.text||'',audioUrl:it.audioUrl||null,duration:it.duration||0,mode:it.mode||'list',status:it.status||'open',assignedTo:it.assignedTo||null,assignedName:it.assignedName||null,assignedStatus:it.assignedStatus||null}));}
+function postMirrorDoc(p,avatarOverride){return{id:p.id,type:p.type,title:p.title,desc:p.desc,reward:p.reward||'',location:p.location||'',fylke:p.fylke||'',by:p.by||'',imageUrl:p.imageUrl||null,
+  items:postItemsForFs(p.items),jobDate:p.jobDate||null,jobTime:p.jobTime||null,groupId:p.groupId||null,groupName:p.groupName||null,targetIds:Array.isArray(p.targetIds)?p.targetIds:[],
+  creatorId:p.creatorId,creatorName:p.creatorName,creatorAvatar:avatarOverride!==undefined?avatarOverride:(p.creatorAvatar||ls('oAvatar')||''),helperId:p.helperId||null,helperName:p.helperName||null,ts:p.ts,expiresAt:p.expiresAt,visibility:p.visibility||'public',status:p.status||'open'};}
+function sameMirroredPost(localPost,remotePost){try{return JSON.stringify(postMirrorDoc(localPost,ls('oAvatar')||''))===JSON.stringify(postMirrorDoc(remotePost,remotePost?.creatorAvatar||''));}catch(e){return false;}}
+async function ensurePostFsMedia(p){if(!p||!fbStorage)return false;var changed=false;
+  if(p.imageData&&!p.imageUrl){try{var _iu=await fbUpload(p.imageData,'posts/'+p.id+'.webp');if(_iu){p.imageUrl=_iu;changed=true;}}catch(e){}}
+  for(var i=0;i<(p.items||[]).length;i++){var it=p.items[i];
+    if(it?.audioData&&!it.audioUrl){try{var _au=await fbUpload(it.audioData,'audio/'+p.id+'_'+i+_postAudioExt(it.audioData));if(_au){it.audioUrl=_au;it.audioData=null;changed=true;}}catch(e){}}}
+  return changed;}
+async function fsMirrorPost(p){if(!p?.id||!hasFS())return{ok:false,changed:false};try{var changed=await ensurePostFsMedia(p);var ok=await fsWritePost(p);return{ok,changed};}catch(e){if(D())console.log('[fsMirrorPost] error',p?.id,e.message);return{ok:false,changed:false};}}
+async function fsWritePost(p){if(D())console.log('[-> fsWritePost]',{jid:p.id,visibility:p.visibility});if(!hasFS())return false;try{await fbDb.collection('posts').doc(p.id).set(postMirrorDoc(p,ls('oAvatar')||''));
   if(D())console.log('[<- fsWritePost] success',p.id);return true;}catch(e){console.warn('[FS] writePost',e);return false;}}
 async function fsUpdatePostItems(pid,items){if(!hasFS())return false;try{await fbDb.collection('posts').doc(pid).update({
-    items:(items||[]).map(it=>({text:it.text||'',audioUrl:it.audioUrl||null,duration:it.duration||0,mode:it.mode||'list',status:it.status||'open',assignedTo:it.assignedTo||null,assignedName:it.assignedName||null,assignedStatus:it.assignedStatus||null}))});
+    items:postItemsForFs(items)});
     if(D())console.log('[FS] updatePostItems',pid);return true;}catch(e){if(D())console.log('[FS] updatePostItems error',pid,e.message);return false;}}
 async function fsWritePointInvitation(userId,inv){if(!hasFS())return;try{var invId=inv.jid+'_'+inv.idx;
   await fbDb.collection('users').doc(userId).collection('invitations').doc(invId).set(inv);
@@ -884,7 +914,7 @@ async function respondInvite(accepted){var inv=A._showingInvite;if(!inv){documen
   }else{if(D())console.log('[respondInvite] skipped fsUpdatePostItems — no valid items',{jid:inv.jid});}
   if(accepted){
     var lj2=A.myJobs.find(x=>x.id===inv.jid);
-    if(!lj2&&j){A.openJobs.delete(inv.jid);lj2={...j};A.myJobs.push(lj2);}
+    if(!lj2&&j){dropOpenJobLocal(inv.jid);lj2={...j};A.myJobs.push(lj2);}
     if(lj2){
       lj2.status='active';lj2.isHelper=true;lj2.isPointHelper=true;lj2.isPointApplicant=false;
       var _lp2=new Set(lj2._myPoints||[]);_lp2.add(inv.idx);lj2._myPoints=[..._lp2].sort((a,b)=>a-b);
@@ -956,20 +986,42 @@ async function fsCheckRatings(targetIds){if(!hasFS())return;var ids=[...new Set(
       snap.docs.forEach(doc=>{if(mergeRatingLocal(rid,{_rid:doc.id,...doc.data()}))changed=true;});
     }catch(e){if(D())console.log('[fsCheckRatings] error',rid,e.message);}}
   if(changed){persist();sR();}}
-async function fsLoadPublicPosts(){if(D())console.log('[-> fsLoadPublicPosts]');if(!hasFS())return[];try{var cutoff=now()-30*864e5;
-  // NOTE: Requires composite index (visibility, status, ts) on posts collection
-  var snap=await fbDb.collection('posts').where('visibility','==','public').where('status','==','open').where('ts','>',cutoff).orderBy('ts','desc').limit(100).get();
-  if(D())console.log('[<- fsLoadPublicPosts]',{count:snap.docs.length});return snap.docs.map(d=>d.data());}catch(e){console.warn('[FS] loadPosts',e);return[];}}
+async function fsLoadPublicPosts(){if(D())console.log('[-> fsLoadPublicPosts]');if(!hasFS())return[];try{var cutoff=now()-30*864e5,byId=new Map();
+  for(const st of DISCOVERABLE_POST_STATUSES){try{
+    var snap=await fbDb.collection('posts').where('visibility','==','public').where('status','==',st).where('ts','>',cutoff).orderBy('ts','desc').limit(100).get();
+    snap.docs.forEach(d=>{if(!byId.has(d.id))byId.set(d.id,d.data());});
+  }catch(e){}}
+  var out=[...byId.values()].sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,100);
+  if(D())console.log('[<- fsLoadPublicPosts]',{count:out.length});return out;}catch(e){console.warn('[FS] loadPosts',e);return[];}}
 async function fsLoadFriendsPosts(){if(!hasFS()||!A.contacts.length)return[];if(D())console.log('[-> fsLoadFriendsPosts]');
   try{var cutoff=now()-30*864e5;var cids=A.contacts.map(c=>c.id);var results=[];
     // Firestore 'in' supports max 10 values per query — chunk
     for(var i=0;i<cids.length;i+=10){var chunk=cids.slice(i,i+10);
-      try{var snap=await fbDb.collection('posts').where('creatorId','in',chunk).where('status','==','open').where('ts','>',cutoff).orderBy('ts','desc').limit(50).get();
-        snap.docs.forEach(d=>results.push(d.data()));}catch(e){}}
+      for(const st of DISCOVERABLE_POST_STATUSES){try{
+        var snap=await fbDb.collection('posts').where('creatorId','in',chunk).where('status','==',st).where('ts','>',cutoff).orderBy('ts','desc').limit(50).get();
+        snap.docs.forEach(d=>results.push(d.data()));
+      }catch(e){}}}
     // Only return friends-visibility posts (public comes via fsLoadPublicPosts)
     results=results.filter(p=>p.visibility==='friends');
+    var byId=new Map();results.forEach(p=>{if(p?.id&&!byId.has(p.id))byId.set(p.id,p);});results=[...byId.values()].sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,100);
     if(D())console.log('[<- fsLoadFriendsPosts]',{count:results.length});return results;
   }catch(e){if(D())console.log('[fsLoadFriendsPosts] error',e.message);return[];}}
+async function fsLoadDirectPosts(){if(!hasFS()||!A.myId)return[];if(D())console.log('[-> fsLoadDirectPosts]');
+  try{var cutoff=now()-30*864e5,byId=new Map();
+    for(const st of DISCOVERABLE_POST_STATUSES){try{
+      var snap=await fbDb.collection('posts').where('visibility','==','direct').where('targetIds','array-contains',A.myId).where('status','==',st).where('ts','>',cutoff).orderBy('ts','desc').limit(100).get();
+      snap.docs.forEach(d=>{if(!byId.has(d.id))byId.set(d.id,d.data());});
+    }catch(e){}}
+    var out=[...byId.values()].filter(p=>p.creatorId!==A.myId).sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,100);
+    if(D())console.log('[<- fsLoadDirectPosts]',{count:out.length});return out;
+  }catch(e){if(D())console.log('[fsLoadDirectPosts] error',e.message);return[];}}
+async function fsLoadGroupPosts(gid){if(!hasFS()||!gid)return[];try{var byId=new Map();
+  for(const st of DISCOVERABLE_POST_STATUSES){try{
+    var snap=await fbDb.collection('posts').where('groupId','==',gid).where('status','==',st).orderBy('ts','desc').limit(50).get();
+    snap.docs.forEach(d=>{if(!byId.has(d.id))byId.set(d.id,d.data());});
+  }catch(e){}}
+  return[...byId.values()].sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,50);
+}catch(e){if(D())console.log('[fsLoadGroupPosts] error',gid,e.message);return[];}}
 async function fsUpdatePostStatus(pid,status,extra){if(D())console.log('[-> fsUpdatePostStatus]',{jid:pid,status,extra});if(!hasFS())return false;try{const doc=await fbDb.collection('posts').doc(pid).get();if(!doc.exists)return false;
   var upd={status};if(extra)Object.assign(upd,extra);
   await fbDb.collection('posts').doc(pid).update(upd);if(D())console.log('[<- fsUpdatePostStatus] success',pid);return true;}catch(e){if(D())console.log('[FS] updatePost skip',pid);return false;}}
@@ -1032,13 +1084,13 @@ async function fsDeleteStorageFiles(pid,itemCount){if(!fbStorage)return;var n=it
     try{await fbStorage.ref().child('audio/'+pid+'_'+i+'.webm').delete();}catch(e){}
     try{await fbStorage.ref().child('audio/'+pid+'_'+i+'.m4a').delete();}catch(e){}
   }if(D())console.log('[storage] cleanup done',pid,{items:n});}
-async function fsCleanupOrphanedJobs(){if(!hasFS())return;
-  var candidates=[];A.openJobs.forEach((j,id)=>{if(now()-(j.ts||0)>300000)candidates.push(id);});
-  var removed=0;for(const jid of candidates.slice(0,30)){
+async function fsCleanupOrphanedJobs(forceAll){if(!hasFS())return;
+  var candidates=[];A.openJobs.forEach((j,id)=>{if(forceAll||now()-(j.ts||0)>300000)candidates.push(id);});
+  var removed=0;for(const jid of candidates.slice(0,forceAll?120:30)){
     try{const doc=await fbDb.collection('posts').doc(jid).get();
-      if(!doc.exists){A.openJobs.delete(jid);removed++;if(D())console.log('[fsCleanup] orphaned',jid);}
-      else{const d=doc.data();if(['done','cancelled','never_done'].includes(d.status)){A.openJobs.delete(jid);removed++;if(D())console.log('[fsCleanup] terminal',jid,d.status);}}
-    }catch(e){}}if(removed>0){if(D())console.log('[fsCleanup] removed',removed);persist();sR();}}
+      if(!doc.exists){if(dropOpenJobLocal(jid))removed++;if(D())console.log('[fsCleanup] orphaned',jid);}
+      else{const d=doc.data();if(['done','cancelled','never_done'].includes(d.status)){if(dropOpenJobLocal(jid))removed++;if(D())console.log('[fsCleanup] terminal',jid,d.status);}}
+    }catch(e){}}if(removed>0){if(D())console.log('[fsCleanup] removed',removed,{forceAll:!!forceAll});persist();sR();}}
 async function fsCleanupOrphanedGroups(){if(!hasFS()||!A.groups.length)return;
   var gids=[...A.groups.map(g=>g.id)];var removed=0;
   for(var gid of gids){try{var doc=await fbDb.collection('groups').doc(gid).get();
@@ -1048,23 +1100,27 @@ async function fsCleanupOrphanedGroups(){if(!hasFS()||!A.groups.length)return;
 async function fsSyncMyPosts(){if(!hasFS()||!A.myId)return;if(D())console.log('[-> fsSyncMyPosts]');
   try{const snap=await fbDb.collection('posts').where('creatorId','==',A.myId).get();
     const myLocalIds=new Set(A.myJobs.filter(j=>j.creatorId===A.myId).map(j=>j.id));
-    var deleted=0,updated=0,missingLocal=0,recovered=0;
+    const remoteIds=new Set(snap.docs.map(d=>d.id));
+    var deleted=0,updated=0,missingLocal=0,recovered=0,mirrored=0;
     for(const doc of snap.docs){const fs=doc.data();
       if(!myLocalIds.has(fs.id)){
         missingLocal++;if(D())console.log('[fsSync] remote own post missing locally - skip destructive delete',fs.id);
         if(!A._deadJobs.has(fs.id)){A.myJobs.push({...fs});myLocalIds.add(fs.id);recovered++;if(D())console.log('[fsSync] recovered missing local own post',fs.id);}
         else if(D())console.log('[fsSync] remote own post missing locally but tombstoned - skip restore',fs.id);
       }else{const lj=A.myJobs.find(j=>j.id===fs.id);
-        if(lj&&lj.status!==fs.status){
-          try{await doc.ref.update({status:lj.status,helperId:lj.helperId||null,helperName:lj.helperName||null});
-            updated++;if(D())console.log('[fsSync] updated',fs.id,{from:fs.status,to:lj.status});
+        if(lj&&!sameMirroredPost(lj,fs)){
+          try{var _mr2=await fsMirrorPost(lj);if(_mr2.ok){updated++;if(D())console.log('[fsSync] mirrored existing remote own post',fs.id);}if(_mr2.changed)persist();
           }catch(e){if(D())console.log('[fsSync] update error',fs.id,e.message);}}
         if(lj&&lj.expiresAt&&lj.expiresAt<Date.now()&&['done','cancelled','never_done','declined'].includes(lj.status)){
           try{await fsDeletePost(fs.id);deleted++;
             if(D())console.log('[fsSync] deleted expired terminal',fs.id,{status:lj.status,expiresAt:new Date(lj.expiresAt).toISOString()});
           }catch(e){if(D())console.log('[fsSync] expired delete error',fs.id,e.message);}}}}
-    if(recovered){persist();sR();}
-    if(D())console.log('[<- fsSyncMyPosts]',{checked:snap.docs.length,deleted,updated,missingLocal,recovered});
+    for(const lj of A.myJobs.filter(j=>j.creatorId===A.myId&&!A._deadJobs.has(j.id))){
+      if(remoteIds.has(lj.id))continue;
+      if(lj.expiresAt&&lj.expiresAt<Date.now()&&['done','cancelled','never_done','declined'].includes(lj.status))continue;
+      try{var _mr=await fsMirrorPost(lj);if(_mr.ok){mirrored++;if(D())console.log('[fsSync] mirrored missing remote own post',lj.id);}if(_mr.changed)persist();}catch(e){if(D())console.log('[fsSync] mirror missing remote error',lj.id,e.message);}}
+    if(mirrored||recovered){persist();sR();}
+    if(D())console.log('[<- fsSyncMyPosts]',{checked:snap.docs.length,deleted,updated,missingLocal,recovered,mirrored});
   }catch(e){if(D())console.log('[fsSyncMyPosts] error',e.message);}}
 async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if(!hasFS())return;try{
   const terminal=['done','cancelled','never_done','declined'];
@@ -1337,7 +1393,7 @@ function onData(from,m){try{if(!m||A.blocked.has(from))return;
     if(m.sig&&m.pub){verifyGossipSig(m).then(ok=>{if(ok){applyG(m.p);fwdGS();}else console.warn('[SEC] Invalid gossip sig from',m.origin);});}
     else{applyG(m.p);fwdGS();}return;}
   handleD(from,m);}catch(e){console.error('[onData]',m?.t,e);}}
-function applyG(p){if(!p)return;if(p.t==='TAKE'||p.t==='CANCEL'){A.openJobs.delete(p.jobId);sR();}
+function applyG(p){if(!p)return;if(p.t==='TAKE'||p.t==='CANCEL'){dropOpenJobLocal(p.jobId);sR();}
   if(p.t==='RAT'&&p.uid&&p.ratings){var _rc=false;p.ratings.forEach(r=>{if(mergeRatingLocal(p.uid,r))_rc=true;});if(_rc){persist();sR();}}
   // POST gossip removed — public post discovery via direct INV + Firestore only
   // GRP gossip removed — public group discovery via Firestore (fsLoadPublicGroups) only
@@ -1360,6 +1416,7 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(m.job.groupId&&m.job.groupName){const g=A.groups.find(x=>x.id===m.job.groupId);if(g&&(!g.name||g.name===g.id||g.name==='Gruppe...'))g.name=m.job.groupName;}
     if(m.job.groupId){if(!(A.screen==='groupDetail'&&A.params.gid===m.job.groupId)&&A.screen!=='groups')A.unreadGroups++;
       if(!(A.screen==='groupDetail'&&A.params.gid===m.job.groupId))A._unreadGroupPosts[m.job.groupId]=(A._unreadGroupPosts[m.job.groupId]||0)+1;}
+    else if(m.job.visibility==='direct'){A._unreadJobs[m.job.id]=(A._unreadJobs[m.job.id]||0)+1;if(A.screen!=='chatHub')A.unreadChat++;}
     else{if(A.screen!=='feed')A.unreadFeed++;}
     notify('📩 '+(m.job.creatorName||''),m.job.title?.substr(0,40),()=>go('jobDetail',{jobId:m.job.id}));
     updateB();sR();break;}
@@ -1409,9 +1466,9 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(j.items?.length&&(j.isPointHelper||hasPointAssignment(j,A.myId))){
       j.isHelper=false;j.isPointHelper=false;j.isPointApplicant=false;j._myPoints=[];
       (j.items||[]).forEach(it=>{if(it.assignedTo===A.myId){it.assignedTo=null;it.assignedName=null;it.assignedStatus=null;it.status='open';}});
-      A._deadJobs.add(m.jid);A.myJobs=A.myJobs.filter(x=>x.id!==m.jid);delete A._unreadJobs[m.jid];
+      A._deadJobs.add(m.jid);A.myJobs=A.myJobs.filter(x=>x.id!==m.jid);delete A._unreadJobs[m.jid];delete A.jobChats[m.jid];
       if(hasFS())fsCheckRatings([A.myId]);
-      if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;
+      if(A.screen!=='mine')A.unreadActivity++;
       notify('⚠️','Du fikk et permanent merke for denne oppgaven');persist();updateB();sR();break;}
     // Legacy: terminate entire job
     j.status='never_done';fsUpdatePostStatus(m.jid,'never_done');
@@ -1497,10 +1554,11 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(!A._groupRequests[m.gid])A._groupRequests[m.gid]=[];
     var _gqr={peerId:m.peerId,name:m.name||'',avatar:m.avatar||'',bio:m.bio||'',fylke:m.fylke||'',by:m.by||'',gname:m.gname||_gq.name||'',status:'pending',ts:m.ts||now()};
     var _gqe=A._groupRequests[m.gid].find(r=>r.peerId===m.peerId);
+    var _gqNew=!_gqe;
     if(_gqe)Object.assign(_gqe,_gqr);else A._groupRequests[m.gid].unshift(_gqr);
     A._groupRequestsTs[m.gid]=now();
-    if(!(A.screen==='groups'||(A.screen==='groupDetail'&&A.params.gid===m.gid)))A.unreadGroups++;
-    updateB();persist();notify('🏘️ '+(m.name||'Noen'),'Vil bli med i «'+(_gq.name||m.gname||'gruppen')+'»',()=>go('groupDetail',{gid:m.gid}));sR();break;}
+    if(_gqNew&&!(A.screen==='groups'||(A.screen==='groupDetail'&&A.params.gid===m.gid)))A.unreadGroups++;
+    updateB();persist();if(_gqNew)notify('🏘️ '+(m.name||'Noen'),'Vil bli med i «'+(_gq.name||m.gname||'gruppen')+'»',()=>go('groupDetail',{gid:m.gid}));sR();break;}
   case 'GR':{if(!m.gid||!m.status)break;
     var _grn=A._myGroupRequests[m.gid]?.name||m.gname||'gruppen';
     if(m.status==='approved'){fsReadGroup(m.gid).then(data=>{var added=data?upsertLocalGroupFromFs(m.gid,data,_grn):false;
@@ -1552,14 +1610,26 @@ async function doPrivateJoin(id,data,onDone){
   var res=await fsJoinGroup(id,A.myId);
   if(res.missing){notify('⚠️','Gruppen finnes ikke lenger');return;}
   if(!res.ok){notify('⚠️','Kunne ikke bli med i gruppen akkurat nå');return;}
-  if(!A.groups.find(g=>g.id===id))A.groups.push({id,name:data.name||'Gruppe...',desc:data.desc||'',creatorId:data.creatorId||'',createdTs:now(),isGroup:true,
-    private:data.private||false,_members:data.members||[],imageUrl:data.imageUrl||null,hasPasscode:data.hasPasscode||!!data.passHash});
+  var _joinMembers=Array.from(new Set([...(Array.isArray(data.members)?data.members:[]),A.myId]));
+  var _joinData={...data,members:_joinMembers};
+  if(!A.groups.find(g=>g.id===id))A.groups.push({id,name:data.name||'Gruppe...',desc:data.desc||'',creatorId:data.creatorId||'',createdTs:data.createdAt||now(),isGroup:true,
+    private:data.private||false,_members:_joinMembers,imageUrl:data.imageUrl||null,hasPasscode:data.hasPasscode||!!data.passHash,invitePolicy:data.invitePolicy||'members'});
+  else upsertLocalGroupFromFs(id,_joinData,data.name||id);
+  delete A._myGroupRequests[id];
   persist();bcast({t:'HI',...myPres()});
   if(D())console.log('[doPrivateJoin] joined',{id,name:data.name});
   notify('✅','Ble med i '+(data.name||'gruppen')+'!');if(onDone)onDone();else render();}
+window.leaveGroup=async gid=>{if(D())console.log('[leaveGroup]',{gid});var g=A.groups.find(x=>x.id===gid);if(!g){notify('⚠️','Gruppe ikke funnet');return;}
+  var res=await fsLeaveGroup(gid,A.myId);
+  if(res.missing){dropMissingGroup(gid,'leaveGroup — missing');bcast({t:'HI',...myPres()});notify('ℹ️','Gruppen finnes ikke lenger');go('groups');return;}
+  if(!res.ok){notify('⚠️','Kunne ikke forlate gruppen akkurat nå');return;}
+  dropMissingGroup(gid,'leaveGroup');bcast({t:'HI',...myPres()});notify('👋','Du forlot gruppen');go('groups');};
 function _setB(id,n){var el=$(id);if(!el)return;el.style.display=n>0?'flex':'none';el.textContent=n>99?'99+':n;}
 function updateB(){_setB('bdg-f',A.unreadFeed);_setB('bdg-g',A.unreadGroups);_setB('bdg-m',A.unreadActivity);_setB('bdg-c',A.unreadChat);}
 function itemBadge(n){if(!n)return'';return`<span style="display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:9px;background:var(--rd);color:#fff;font-size:10px;font-weight:800;padding:0 5px;margin-left:6px;flex-shrink:0">${n>99?'99+':n}</span>`;}
+function dropOpenJobLocal(jid){var oj=A.openJobs.get(jid);if(!oj)return false;
+  if(oj.visibility==='direct'&&(A._unreadJobs[jid]||0)&&A.unreadChat>0)A.unreadChat=Math.max(0,A.unreadChat-1);
+  delete A._unreadJobs[jid];A.openJobs.delete(jid);return true;}
 
 // ═══ ROUTER ═══
 window.go=(s,p)=>{if(D())console.log('[go]',{from:A.screen,to:s,params:p});if(A.screen==='create'&&s!=='create'&&s!=='setup')A.nb={};
@@ -1575,7 +1645,11 @@ window.go=(s,p)=>{if(D())console.log('[go]',{from:A.screen,to:s,params:p});if(A.
   if(s==='mine')A.unreadActivity=0;
   if(s==='chatHub'){A.unreadChat=0;A._unreadDMs={};}
   if(s==='dm'&&p?.peerId)delete A._unreadDMs[p.peerId];
-  if((s==='jobDetail'||s==='jobChat'||s==='interests')&&p?.jobId)delete A._unreadJobs[p.jobId];
+  if((s==='jobDetail'||s==='jobChat'||s==='interests')&&p?.jobId){
+    const _uj=A._unreadJobs[p.jobId]||0,_oj=A.openJobs.get(p.jobId);
+    if(_uj&&_oj?.visibility==='direct'&&A.unreadChat>0)A.unreadChat=Math.max(0,A.unreadChat-1);
+    delete A._unreadJobs[p.jobId];
+  }
   if(s==='groupDetail'&&p?.gid)delete A._unreadGroupPosts[p.gid];
   updateB();render();window.scrollTo(0,0);
   if(s==='groups'){fsRefreshPublicGroupsIfNeeded();fsRefreshGroupPostsIfNeeded();}
@@ -1662,15 +1736,15 @@ window.finishSetup=async()=>{
   const grps=A.nb._grps||[];const wgn=A.nb._wgn;
   for(const gn of grps){if(gn==='family'){const raw='Familien'+A.myId;const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(raw));
       const id='g'+ab64(h).replace(/[^a-zA-Z0-9]/g,'').substr(0,14);
-      if(!A.groups.find(g=>g.id===id))A.groups.push({id,name:'Familien',desc:'Privat familiegruppe',creatorId:A.myId,createdTs:now(),isGroup:true,private:true});}
+      if(!A.groups.find(g=>g.id===id))A.groups.push({id,name:'Familien',desc:'Privat familiegruppe',creatorId:A.myId,createdTs:now(),isGroup:true,private:true,_members:[A.myId],hasPasscode:false,invitePolicy:'members'});}
     else{const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(gn));
       const id='g'+ab64(h).replace(/[^a-zA-Z0-9]/g,'').substr(0,14);
-      if(!A.groups.find(g=>g.id===id))A.groups.push({id,name:gn,desc:'',creatorId:'',createdTs:now(),isGroup:true,private:false});}}
+      if(!A.groups.find(g=>g.id===id))A.groups.push({id,name:gn,desc:'',creatorId:A.myId,createdTs:now(),isGroup:true,private:false,_members:[A.myId],hasPasscode:false,invitePolicy:'members'});}}
   if(wgn?.trim()){const raw=wgn.trim()+A.myId;const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(raw));
     const id='g'+ab64(h).replace(/[^a-zA-Z0-9]/g,'').substr(0,14);
-    if(!A.groups.find(g=>g.id===id))A.groups.push({id,name:wgn.trim(),desc:'Jobbgruppe',creatorId:A.myId,createdTs:now(),isGroup:true,private:true});}
+    if(!A.groups.find(g=>g.id===id))A.groups.push({id,name:wgn.trim(),desc:'Jobbgruppe',creatorId:A.myId,createdTs:now(),isGroup:true,private:true,_members:[A.myId],hasPasscode:false,invitePolicy:'members'});}
   // Write groups + user to Firestore (best-effort)
-  A.groups.forEach(g=>{fsWriteGroup(g.id,{name:g.name,nameLower:(g.name||'').toLowerCase(),desc:g.desc||'',private:g.private,creatorId:g.creatorId||A.myId,createdAt:Date.now(),members:[A.myId]});});
+  A.groups.forEach(g=>{fsWriteGroup(g.id,{name:g.name,nameLower:(g.name||'').toLowerCase(),desc:g.desc||'',private:g.private,creatorId:g.creatorId||A.myId,createdAt:Date.now(),members:[A.myId],hasPasscode:!!g.hasPasscode,invitePolicy:g.invitePolicy||'members'});});
   fsRegisterUser();persist();if(!A.peer||A.peer.destroyed)initPeer();$('nav').style.display='block';A.nb={};go('feed');setTimeout(showInstallPopup,500);};
 
 // ═══ FEED ═══
@@ -1908,22 +1982,24 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
     creatorId:A.myId,creatorName:A.myName,ts:now(),expiresAt:expAt,status:'open',interests:[]};
   A.myJobs.push({...job});
   if(A.nb.imageData)dbPut('images',jobId,A.nb.imageData);
-  const toSend=stripJobForSend(job);
+  var lj=A.myJobs.find(x=>x.id===jobId);
+  // All posts go to Firestore (backbone for offline delivery)
+  var _mr0=await fsMirrorPost(lj||job),_fsPostOk=_mr0.ok;
+  if(D())console.log('[POST] routing',{vis:job.visibility,fsWrite:_fsPostOk});
+  const toSend=stripJobForSend(lj||job);
   // Route based on visibility (P2P for speed, Firestore for reliability)
   if(job.visibility==='direct'){(job.targetIds||[]).forEach(id=>send(id,{t:'INV',job:{...toSend,fromContact:true}}));}
   else if(job.visibility==='group'){const gid=job.groupId;A.contacts.forEach(c=>{const p=A.peers.get(c.id);if(!gid||p?.gids?.includes(gid))send(c.id,{t:'INV',job:{...toSend,fromContact:true}});});}
   else if(job.visibility==='public'){A.contacts.forEach(c=>send(c.id,{t:'INV',job:{...toSend,fromContact:true}}));}
   else{A.contacts.forEach(c=>send(c.id,{t:'INV',job:{...toSend,fromContact:true}}));}
-  // All posts go to Firestore (backbone for offline delivery)
-  await fsWritePost(job);
-  if(D())console.log('[POST] routing',{vis:job.visibility,fsWrite:true});
   // Send point invitations for assigned items
-  var _piSent=0;var lj=A.myJobs.find(x=>x.id===jobId);
+  var _piSent=0;
   if(lj&&lj.items){lj.items.forEach((it,i)=>{if(it.assignedTo&&it.assignedTo!==A.myId){
     it.assignedStatus='pending';_piSent++;
     send(it.assignedTo,{t:'PI',jid:jobId,idx:i,title:job.title,itemText:it.text||'Punkt '+(i+1),creatorId:A.myId,creatorName:A.myName});
     fsWritePointInvitation(it.assignedTo,{jid:jobId,idx:i,creatorId:A.myId,creatorName:A.myName,title:job.title,itemText:it.text||'Punkt '+(i+1),recipientId:it.assignedTo,recipientName:it.assignedName||'',status:'pending',ts:now(),updatedAt:now()});}});
-    if(_piSent>0){fsUpdatePostItems(jobId,lj.items);if(D())console.log('[POST] sent',_piSent,'point invitations');}}
+    if(_piSent>0){var _pns=pointOwnerStatus(lj);lj.status=_pns;job.status=_pns;fsUpdatePostItems(jobId,lj.items);fsUpdatePostStatus(jobId,_pns);if(D())console.log('[POST] sent',_piSent,'point invitations');}}
+  if(!_fsPostOk)notify('📡','Lagret lokalt. Synkes til Firebase igjen senere.');
   if(D())console.log('[← POST] done',{jid:jobId});
   addAct('Nytt: '+t.substr(0,30),'📋');persist();A.nb={};go(job.visibility==='direct'?'chatHub':'mine');
   }finally{window._postBusy=false;}};
@@ -1933,7 +2009,7 @@ window.cancelMyJob=function(jobId){
   if(D())console.log('[cancelMyJob]',{jobId,inMyJobs:!!x,inOpenJobs:A.openJobs.has(jobId),status:x?.status});
   // Ghost-job cleanup: job visible in vDetail via openJobs but not in myJobs
   if(!x){var gh=A.openJobs.get(jobId);
-    if(gh){A._deadJobs.add(jobId);A.openJobs.delete(jobId);
+    if(gh){A._deadJobs.add(jobId);dropOpenJobLocal(jobId);
       if(gh.creatorId===A.myId){fsDeletePost(jobId);notify('🧹','Fjernet gammel kopi');if(D())console.log('[cancelMyJob] ghost cleanup — own post',jobId);}
       else{notify('🧹','Skjulte gammel kopi');if(D())console.log('[cancelMyJob] ghost cleanup — other post',jobId);}
       persist();render();return;}
@@ -1942,7 +2018,7 @@ window.cancelMyJob=function(jobId){
   if(['cancelled','done','never_done','declined'].includes(x.status)){notify('ℹ️','Jobben er allerede avsluttet');return;}
   var _hid=x.helperId;
   x.status='cancelled';x.helperId=null;x.helperName=null;x.helperDone=false;
-  A._deadJobs.add(jobId);A.openJobs.delete(jobId);
+  A._deadJobs.add(jobId);dropOpenJobLocal(jobId);
   gossip({t:'CANCEL',jobId});fsUpdatePostStatus(jobId,'cancelled');
   (x.interests||[]).forEach(p=>send(p.id,{t:'JN',jid:jobId}));
   if(x.items?.length){jobParticipants(x).forEach(pid=>send(pid,{t:'BS',jid:jobId,status:'cancelled'}));}
@@ -1957,10 +2033,41 @@ window.removeTerminalJob=function(jobId){
     dbDel('images',jobId).catch(function(){});persist();render();};
   if(j.creatorId===A.myId)showConfirm('Fjerne?','Innlegget fjernes permanent.','Ja, fjern',doIt);
   else doIt();};
+function fsRefreshDetailOpenJob(jid){
+  if(!hasFS()||!jid)return;
+  window._detailFsCheck=window._detailFsCheck||{};
+  if(window._detailFsCheck[jid]&&now()-window._detailFsCheck[jid]<15000)return;
+  window._detailFsCheck[jid]=now();
+  fbDb.collection('posts').doc(jid).get().then(doc=>{
+    var oj=A.openJobs.get(jid);if(!oj||A.myJobs.find(x=>x.id===jid))return;
+    if(!doc.exists){
+      dropOpenJobLocal(jid);persist();updateB();
+      if(A.screen==='jobDetail'&&A.params.jobId===jid){notify('⚠️','Innlegget finnes ikke lenger');go(oj.visibility==='direct'?'chatHub':(oj.groupId?'groupDetail':'feed'),oj.groupId?{gid:oj.groupId}:undefined);}
+      else sR();
+      return;
+    }
+    var fs=doc.data();
+    if(['done','cancelled','never_done','declined'].includes(fs.status)){
+      dropOpenJobLocal(jid);persist();updateB();
+      if(A.screen==='jobDetail'&&A.params.jobId===jid){notify('ℹ️','Innlegget er ikke lenger tilgjengelig');go(oj.visibility==='direct'?'chatHub':(oj.groupId?'groupDetail':'feed'),oj.groupId?{gid:oj.groupId}:undefined);}
+      else sR();
+      return;
+    }
+    var localItems=JSON.stringify(postItemsForFs(oj.items||[])),fsItems=JSON.stringify(postItemsForFs(fs.items||[]));
+    if((fs.status||'open')!==(oj.status||'open')||fs.helperId!==oj.helperId||fs.helperName!==oj.helperName||fsItems!==localItems){
+      var merged={...oj,...fs,isFromContact:oj.isFromContact,isPublic:oj.isPublic};
+      if(oj.imageData&&oj.imageData!=='[img]'&&!fs.imageUrl)merged.imageData=oj.imageData;
+      if(oj.groupName&&!merged.groupName)merged.groupName=oj.groupName;
+      if(oj.creatorName&&!merged.creatorName)merged.creatorName=oj.creatorName;
+      A.openJobs.set(jid,merged);persist();if(A.screen==='jobDetail'&&A.params.jobId===jid)sR();
+    }
+  }).catch(function(){});
+}
 
 // ═══ JOB DETAIL ═══
 function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);if(!j){const oj=A.openJobs.get(jid);if(oj)j=oj;}
   if(!j)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('feed')">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Fant ikke innlegget.</div></div></div>`;
+  if(!A.myJobs.find(x=>x.id===jid)&&A.openJobs.has(jid))fsRefreshDetailOpenJob(jid);
   const isO=j.creatorId===A.myId,isH=j.isHelper,ints=j.interests||[],pr=avgR(j.creatorId),rated=A.rated.has(j.id);
   const typeMap={help:['🤝','Jobb','bg1'],service:['💼','Tilbyr','bp1']};
   const[tIco,tName,tCls]=typeMap[j.type]||['📋','Innlegg','bg1'];
@@ -2109,7 +2216,7 @@ window.doHelp=(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A.open
   if(D())console.log('[doHelp]',{jid,cid,isContact:!!A.contacts.find(c=>c.id===cid),connOpen:!!A.conns.get(cid)?.open,hasAudio:!!window._helpAudio});
   const ha=window._helpAudio;window._helpAudio=null;
   if(!A.contacts.find(c=>c.id===cid)){A.tempConns.set(jid,{peerId:cid,name:oj?.creatorName||'',ts:now()});tryC(cid);}
-  A.openJobs.delete(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
+  dropOpenJobLocal(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
     fylke:oj?.fylke,by:oj?.by,imageUrl:oj?.imageUrl,imageData:oj?.imageData,groupId:oj?.groupId,groupName:oj?.groupName,jobDate:oj?.jobDate,jobTime:oj?.jobTime,
     creatorId:cid,creatorName:oj?.creatorName,status:'pending',isHelper:true,ts:now()});
   send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0});
@@ -2127,7 +2234,7 @@ window.doHelpPoints=(jid,cid)=>{var existing=A.myJobs.find(x=>x.id===jid);
   var msg=$('jmsg')?.value?.trim()||'';var ha=window._helpAudio;window._helpAudio=null;
   if(D())console.log('[doHelpPoints]',{jid,cid,points:pts,reApply:!!existing});
   if(!A.contacts.find(c=>c.id===cid)){A.tempConns.set(jid,{peerId:cid,name:oj?.creatorName||'',ts:now()});tryC(cid);}
-  if(!existing){A.openJobs.delete(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
+  if(!existing){dropOpenJobLocal(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
     fylke:oj?.fylke,by:oj?.by,imageUrl:oj?.imageUrl,imageData:oj?.imageData,groupId:oj?.groupId,groupName:oj?.groupName,jobDate:oj?.jobDate,jobTime:oj?.jobTime,
     creatorId:cid,creatorName:oj?.creatorName,status:'pending',isHelper:true,isPointApplicant:true,_myPoints:pts.slice(),ts:now()});
   }else{var _old=existing._myPoints||[];existing._myPoints=[..._old,...pts.filter(p=>!_old.includes(p))];existing.isPointApplicant=true;
@@ -2297,13 +2404,29 @@ function vMine(){
 
 // ═══ CHAT HUB ═══
 function vChatHub(){const dl=Object.keys(A.dms).filter(id=>A.dms[id]?.length);
+  const directJobs=[...A.openJobs.values()].filter(j=>j.visibility==='direct'&&j.creatorId!==A.myId&&(!j.expiresAt||j.expiresAt===0||j.expiresAt>now())&&!['cancelled','done','never_done'].includes(j.status))
+    .sort((a,b)=>(A._unreadJobs[b.id]||0)-(A._unreadJobs[a.id]||0)||((b.ts||0)-(a.ts||0)));
   return`<div class="scr"><div class="hdr"><div style="font-size:22px;font-weight:800">Meldinger</div><button class="btn bs bsm" style="width:auto" onclick="go('contacts')">+ Ny</button></div>
+  ${directJobs.length?`<div class="slbl">📩 DIREKTE OPPGAVER</div>
+  <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">${directJobs.map(j=>{const ur=A._unreadJobs[j.id]||0;const tLbl=j.type==='service'?'Tilbyr':'Jobb';
+    return`<div class="cd cdt" style="${ur?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        ${avHtml(j.creatorId,j.creatorName,40)}
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span style="font-size:14px;font-weight:${ur?800:700}">${esc(j.title||'Direkte oppgave')}</span>${itemBadge(ur)}
+          </div>
+          <div style="font-size:12px;color:var(--t3);line-height:1.45;margin-top:2px">Fra ${esc(j.creatorName||'ukjent')} · ${tLbl}${j.status==='accepting'?' · Venter på svar':''}${j.jobDate?' · '+esc(fmtDate(j.jobDate,j.jobTime)):''}</div>
+        </div>
+        <div style="font-size:11px;color:var(--t3);flex-shrink:0">${ago(j.ts)}</div>
+      </div>
+    </div>`;}).join('')}</div>`:''}
   ${dl.length?dl.sort((a,b)=>(A._unreadDMs[b]||0)-(A._unreadDMs[a]||0)||(A.dms[b]?.slice(-1)[0]?.ts||0)-(A.dms[a]?.slice(-1)[0]?.ts||0)).map(id=>{const nm=dn(id);const last=A.dms[id]?.slice(-1)[0];const online=A.conns.get(id)?.open;const ur=A._unreadDMs[id]||0;
     return`<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid ${ur?'var(--pbb)':'var(--s2)'};cursor:pointer${ur?';background:var(--pb);margin:0 -16px;padding-left:16px;padding-right:16px':''}" onclick="go('dm',{peerId:'${escA(id)}'})">
     ${avHtml(id,nm,40)}<div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:14px;font-weight:${ur?800:600}">${esc(nm)}</span>${online?'<span style="width:6px;height:6px;border-radius:3px;background:var(--gn);flex-shrink:0"></span>':''}${itemBadge(ur)}</div>
     <div style="font-size:12px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${last?esc(last.text?.substr(0,40)):''} · ${last?ago(last.ts):''}</div></div>
     <button style="padding:6px;font-size:14px;color:var(--t3);flex-shrink:0;background:none;border:none;cursor:pointer" onclick="event.stopPropagation();delete A.dms['${escA(id)}'];delete A._unreadDMs['${escA(id)}'];if(D())console.log('[delDM]','${escA(id)}');persist();render()">🗑</button></div>`;}).join('')
-    :`<div class="emp"><div class="emp-i">✉️</div><div class="emp-t">Ingen meldinger ennå.<br>Gå til Venner og start en samtale.</div></div>`}</div>`;}
+    :`${directJobs.length?'':`<div class="emp"><div class="emp-i">✉️</div><div class="emp-t">Ingen meldinger ennå.<br>Gå til Venner og start en samtale.</div></div>`}`}</div>`;}
 
 // ═══ JOB CHAT ═══
 function vJobChat(){const jid=A.params.jobId;const j=A.myJobs.find(x=>x.id===jid);
@@ -2510,7 +2633,7 @@ function vSettings(){
   <div class="slbl">📱 LAGRING</div>
   <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:6px">Du bruker ${A.openJobs.size+countActivePosts()} innlegg og ${countActiveChats()} samtaler.</div>
   <div style="font-size:11px;color:var(--t3);line-height:1.5;margin-bottom:12px">Rydd opp fjerner avsluttede innlegg eldre enn 30 dager og samtaler eldre enn 60 dager. Aktive jobber og venner beholdes.</div>
-  <button class="btn bs" onclick="showConfirm('Rydd opp?','Sletter innlegg eldre enn 30 dager og samtaler eldre enn 60 dager. Frigjør plass.','Rydd opp',()=>{var n=now();var d30=n-30*864e5,d60=n-60*864e5;A.openJobs.forEach((j,id)=>{if(j.ts<d30)A.openJobs.delete(id);});A.myJobs.filter(j=>j.ts<d30&&!['open','accepting','active','pending_review'].includes(j.status)&&j.creatorId===A.myId).forEach(j=>fsDeletePost(j.id));A.myJobs=A.myJobs.filter(j=>j.ts>d30||['open','accepting','active','pending_review'].includes(j.status));Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)&&(!A.jobChats[k].length||A.jobChats[k][A.jobChats[k].length-1].ts<d60))delete A.jobChats[k];});Object.keys(A.dms).forEach(k=>{if(!A.dms[k].length||A.dms[k][A.dms[k].length-1].ts<d60)delete A.dms[k];});persist();notify('✅','Ryddet opp!');render();})">🧹 Rydd opp</button>
+  <button class="btn bs" onclick="showConfirm('Rydd opp?','Sletter innlegg eldre enn 30 dager og samtaler eldre enn 60 dager. Frigjør plass.','Rydd opp',()=>{var n=now();var d30=n-30*864e5,d60=n-60*864e5;A.openJobs.forEach((j,id)=>{if(j.ts<d30)dropOpenJobLocal(id);});A.myJobs.filter(j=>j.ts<d30&&!['open','accepting','active','pending_review'].includes(j.status)&&j.creatorId===A.myId).forEach(j=>fsDeletePost(j.id));A.myJobs=A.myJobs.filter(j=>j.ts>d30||['open','accepting','active','pending_review'].includes(j.status));Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)&&(!A.jobChats[k].length||A.jobChats[k][A.jobChats[k].length-1].ts<d60))delete A.jobChats[k];});Object.keys(A.dms).forEach(k=>{if(!A.dms[k].length||A.dms[k][A.dms[k].length-1].ts<d60)delete A.dms[k];});persist();notify('✅','Ryddet opp!');render();})">🧹 Rydd opp</button>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">${t('lang').toUpperCase()}</div>
   <div style="display:flex;gap:8px;margin-bottom:16px">${[['no','Norsk'],['en','English']].map(([v,l])=>
@@ -2560,13 +2683,18 @@ window.shareGroupLink=(gid,gname)=>{var text='Bli med i gruppen "'+(gname||'Grup
 window.handleGroupEditImg=async inp=>{if(!inp.files[0])return;try{A._pendingGroupImg=await compressImage(inp.files[0]);render();}catch(e){notify('⚠️','Kunne ikke laste bilde');}};
 window.saveGroupEdit=async gid=>{if(D())console.log('[saveGroupEdit]',{gid});
   var g=A.groups.find(x=>x.id===gid);if(!g||g.creatorId!==A.myId)return;
-  var desc=$('gedit-desc')?.value?.trim()||'';g.desc=desc;
-  if(A._pendingGroupImg){var url=await fbUpload(A._pendingGroupImg,'groups/'+gid+'.webp');if(url)g.imageUrl=url;A._pendingGroupImg=null;}
+  var desc=$('gedit-desc')?.value?.trim()||'';
+  var nextImageUrl=g.imageUrl||null;
+  if(A._pendingGroupImg){var url=await fbUpload(A._pendingGroupImg,'groups/'+gid+'.webp');if(url)nextImageUrl=url;else{notify('⚠️','Kunne ikke laste opp nytt gruppebilde');return;}}
   var rawPass=g.private?($('gedit-pass')?.value?.trim()||''):'';
-  var fsPatch={desc:g.desc,imageUrl:g.imageUrl||null,updatedAt:Date.now()};
-  if(rawPass){var ph=await hashPass(rawPass);fsPatch.passHash=ph;fsPatch.hasPasscode=true;g.hasPasscode=true;}
-  if(!g.private){var pol=$('gedit-invpol')?.value||'members';fsPatch.invitePolicy=pol;g.invitePolicy=pol;}
-  fsWriteGroup(gid,fsPatch);
+  var nextHasPass=!!g.hasPasscode;
+  var nextPol=g.invitePolicy||'members';
+  var fsPatch={desc,imageUrl:nextImageUrl,updatedAt:Date.now()};
+  if(rawPass){var ph=await hashPass(rawPass);fsPatch.passHash=ph;fsPatch.hasPasscode=true;nextHasPass=true;}
+  if(!g.private){nextPol=$('gedit-invpol')?.value||'members';fsPatch.invitePolicy=nextPol;}
+  var ok=await fsWriteGroup(gid,fsPatch);
+  if(!ok){notify('⚠️','Kunne ikke oppdatere gruppen akkurat nå');return;}
+  g.desc=desc;g.imageUrl=nextImageUrl;g.hasPasscode=nextHasPass;g.invitePolicy=nextPol;A._pendingGroupImg=null;
   A._editGroup=false;persist();notify('✅','Gruppe oppdatert!');render();};
 window.inviteToGroup=(gid,gname,pid)=>{if(D())console.log('[inviteToGroup]',{gid,gname,pid});const g=A.groups.find(x=>x.id===gid);
   if(g&&!g.private&&g.invitePolicy==='admin'&&g.creatorId!==A.myId){notify('🔒','Kun admin kan invitere i denne gruppen');return;}
@@ -2599,7 +2727,8 @@ window.approveGroupRequest=async(gid,peerId,name)=>{if(D())console.log('[approve
   if(res.missing){notify('⚠️','Gruppen finnes ikke lenger');return;}
   if(!res.ok){notify('⚠️','Kunne ikke legge til medlem');return;}
   await fsResolveGroupRequest(gid,peerId,g.creatorId||A.myId,'approved');
-  if(g._members&&!g._members.includes(peerId))g._members.push(peerId);
+  if(!Array.isArray(g._members))g._members=[A.myId];
+  if(!g._members.includes(peerId))g._members.push(peerId);
   A._groupRequests[gid]=(A._groupRequests[gid]||[]).filter(r=>r.peerId!==peerId);
   A.tempConns.set('grr:'+gid+':'+peerId,{peerId,name:name||'',ts:now()});send(peerId,{t:'GR',gid,gname:g.name||gid,status:'approved'});
   persist();notify('✅',(name||'Bruker')+' ble med i gruppen!');render();};
@@ -2608,7 +2737,7 @@ window.denyGroupRequest=async(gid,peerId,name)=>{if(D())console.log('[denyGroupR
   await fsResolveGroupRequest(gid,peerId,g?.creatorId||A.myId,'declined');
   A._groupRequests[gid]=(A._groupRequests[gid]||[]).filter(r=>r.peerId!==peerId);
   A.tempConns.set('grr:'+gid+':'+peerId,{peerId,name:name||'',ts:now()});send(peerId,{t:'GR',gid,gname:g?.name||gid,status:'declined'});
-  notify('ℹ️',(name||'Forespørsel')+' ble avvist');render();};
+  persist();notify('ℹ️',(name||'Forespørsel')+' ble avvist');render();};
 window.joinGroup=async()=>{const inp=$('add-gid');if(!inp)return;const id=inp.value.trim();if(D())console.log('[joinGroup]',{id});
   if(!id||!/^g[a-zA-Z0-9]{1,20}$/.test(id)){notify('⚠️','Ugyldig gruppe-ID (starter med g)');return;}
   if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
@@ -2628,11 +2757,10 @@ window.searchGroups=async q=>{const el=$('grp-search-results');if(!el)return;q=(
       <div style="font-size:11px;color:var(--t3)">${g.members?g.members.length:''} medlemmer</div></div>
       ${already?'<span class="badge bg1" style="font-size:11px">Medlem</span>':`<button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="requestGroupJoin('${escA(gid)}','${escA(g.name||gid)}')">Bli med</button>`}</div>`;}).join('');
   }catch(e){console.warn('[searchGroups]',e);el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:8px">Søk feilet.</div>';}};
-window.deleteGroup=(gid)=>{if(D())console.log('[deleteGroup]',gid);
-  A.groups=A.groups.filter(x=>x.id!==gid);
-  A.openJobs.forEach((j,id)=>{if(j.groupId===gid)A.openJobs.delete(id);});
-  A.myJobs=A.myJobs.filter(j=>j.groupId!==gid);
-  fsDeleteGroup(gid);
+window.deleteGroup=async(gid)=>{if(D())console.log('[deleteGroup]',gid);
+  var ok=await fsDeleteGroup(gid);
+  if(!ok){notify('⚠️','Kunne ikke slette gruppen akkurat nå');return;}
+  dropMissingGroup(gid,'deleteGroup',true);
   // GDEL gossip removed — other peers detect deletion via fsCleanupOrphanedGroups + dropMissingGroup
   persist();bcast({t:'HI',...myPres()});notify('🗑️','Gruppen er slettet');go('groups');};
 window.doCreateGroup=async()=>{if(D())console.log('[-> doCreateGroup]');const n=$('gn')?.value?.trim();if(!n){notify('⚠️','Skriv et gruppenavn');return;}
@@ -2643,13 +2771,13 @@ window.doCreateGroup=async()=>{if(D())console.log('[-> doCreateGroup]');const n=
   const rawPass=priv?($('gpass')?.value?.trim()||''):'';
   const ph=rawPass?await hashPass(rawPass):null;
   let imageUrl=null;
-  if(A.nb._gImg&&hasFB()){try{imageUrl=await fbUpload(A.nb._gImg,'groups/'+id+'.webp');}catch(e){if(D())console.log('[doCreateGroup] img upload err',e.message);}}
-  A.groups.push({id,name:n,desc,creatorId:A.myId,createdTs:now(),isGroup:true,private:priv,imageUrl,fylke,hasPasscode:!!ph,invitePolicy:'members'});
-  persist();bcast({t:'HI',...myPres()});
-  // GRP gossip removed — public group discovery via Firestore (fsLoadPublicGroups) only
+  if(A.nb._gImg&&hasFB()){try{imageUrl=await fbUpload(A.nb._gImg,'groups/'+id+'.webp');}catch(e){if(D())console.log('[doCreateGroup] img upload err',e.message);notify('⚠️','Kunne ikke laste opp gruppebildet');return;}}
   const fsData={name:n,nameLower:n.toLowerCase(),desc,private:priv,fylke,imageUrl:imageUrl||null,creatorId:A.myId,createdAt:Date.now(),members:[A.myId],hasPasscode:!!ph,invitePolicy:'members'};
   if(ph)fsData.passHash=ph;
-  fsWriteGroup(id,fsData);
+  if(!(await fsWriteGroup(id,fsData))){notify('⚠️','Kunne ikke opprette gruppen akkurat nå');return;}
+  A.groups.push({id,name:n,desc,creatorId:A.myId,createdTs:now(),isGroup:true,private:priv,_members:[A.myId],imageUrl,fylke,hasPasscode:!!ph,invitePolicy:'members'});
+  persist();bcast({t:'HI',...myPres()});
+  // GRP gossip removed — public group discovery via Firestore (fsLoadPublicGroups) only
   A.nb={};
   if(priv){go('groupCreated',{gid:id});}else{notify('✅','Gruppe opprettet!');go('groupDetail',{gid:id});}};
 function vGroups(){
@@ -2818,7 +2946,7 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
     <div class="idd">${g.id}</div>
     <button class="btn bs bsm" style="margin-top:6px" onclick="copyGid('${escA(g.id)}')">📋 Kopier kode</button></details>`:''}
     ${isAdmin?`<button class="btn br bsm" style="margin-top:8px" onclick="showConfirm('Slett gruppen?','Du er admin. Gruppen og alle innlegg slettes for alle.','Ja, slett',()=>{deleteGroup('${escA(g.id)}');})">🗑️ Slett</button>`
-      :`<button class="btn br bsm" style="margin-top:8px" onclick="showConfirm('Forlate gruppen?','${g.private?'Du må bli invitert igjen for å komme tilbake.':'Du kan sende ny forespørsel senere.'}','Ja, forlat',()=>{A.groups=A.groups.filter(x=>x.id!=='${escA(g.id)}');persist();bcast({t:'HI',...myPres()});fsLeaveGroup('${escA(g.id)}',A.myId);go('groups');})">Forlat</button>`}
+      :`<button class="btn br bsm" style="margin-top:8px" onclick="showConfirm('Forlate gruppen?','${g.private?'Du må bli invitert igjen for å komme tilbake.':'Du kan sende ny forespørsel senere.'}','Ja, forlat',()=>leaveGroup('${escA(g.id)}'))">Forlat</button>`}
   </div></details></div>`;}
 function vGroupMembers(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===gid);
   if(!g)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groupDetail',{gid:'${escA(gid)}'})">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Gruppe ikke funnet.</div></div></div>`;
@@ -2925,6 +3053,16 @@ window.shareApp=async()=>{if(D())console.log('[shareApp]');var url='https://edva
 
 
 // ═══ BOOT ═══
+async function fsBootReconcile(){
+  if(!hasFS()||!A.myName)return;
+  try{await fsRegisterUser();}catch(e){}
+  try{await fsCheckMyGroups();}catch(e){}
+  try{await fsCleanupOrphanedGroups();}catch(e){}
+  try{await fsCheckJobStatus();}catch(e){}
+  try{await fsCheckPointUpdates();}catch(e){}
+  try{await fsSyncMyPosts();}catch(e){}
+  try{await fsCleanupOrphanedJobs(true);}catch(e){}
+}
 async function boot(){
   if(D())console.log('[-> boot] phase:start');
   fetch('https://'+PEER_CONFIG.host).catch(()=>{});// Wake Render early
@@ -2946,15 +3084,20 @@ async function boot(){
     // Migration: clean orphaned jobChats
     var _chatCleaned=0;Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)){delete A.jobChats[k];_chatCleaned++;}});
     if(_chatCleaned){console.log('[MIGRATE] Cleaned',_chatCleaned,'orphaned jobChats');persist();}
+    if(D())console.log('[boot] phase:firestore-reconcile');
+    await fsBootReconcile();
     if(D())console.log('[boot] phase:peer');initPeer();$('nav').style.display='block';go('feed');
-    if(D())console.log('[boot] phase:firestore-sync');fsRegisterUser();
+    if(D())console.log('[boot] phase:firestore-sync');
     // Background: load discoverable posts from Firestore
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
     fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'friends posts');});
+    fsLoadDirectPosts().then(posts=>{var added=0,_new=[];posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});A._unreadJobs[p.id]=(A._unreadJobs[p.id]||0)+1;added++;_new.push(p);}});
+      if(added>0){if(A.screen!=='chatHub')A.unreadChat+=added;updateB();persist();sR();_new.slice(0,3).forEach(p=>notify('📩 '+(p.creatorName||''),(p.title||'').substr(0,40),()=>go('jobDetail',{jobId:p.id})));}
+      if(D())console.log('[FS] loaded',added,'direct posts');});
     fsCheckInterests();fsCheckJobChats();fsCheckMyJobChatAcks();fsCheckMyDMs();fsCheckMyDMAcks();fsCheckRatings();fsCheckJobStatus();fsCheckPointUpdates();fsCleanupOrphanedGroups();fsSyncMyPosts();fsCheckMyInvitations();fsCheckMyGroupRequests();fsCheckMyGroups();fsCheckAdminGroupRequests();
     // Load group posts from Firestore
-    if(hasFS()&&A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
-      .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(e=>console.warn('[FS] groupPosts',e));});
+    if(hasFS()&&A.groups.length)A.groups.forEach(g=>{fsLoadGroupPosts(g.id)
+      .then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(e=>console.warn('[FS] groupPosts',e));});
     // Background: update group metadata from Firestore
     if(hasFS())A.groups.forEach(g=>{fsReadGroup(g.id).then(data=>{if(data){let changed=false;
       if(data.name&&data.name!==g.name&&(g.name==='Gruppe...'||g.name===g.id)){g.name=data.name;changed=true;}
@@ -2971,7 +3114,7 @@ async function boot(){
   else{if(D())console.log('[boot] phase:onboarding');go(ls('oSeen')?'setup':'onboarding');ss('oSeen','1');}
   // Garbage collection (prevents Scuttlebutt bloat)
   setInterval(async()=>{
-    A.openJobs.forEach((j,id)=>{if(j.expiresAt&&j.expiresAt!==0&&j.expiresAt<now())A.openJobs.delete(id);});
+    A.openJobs.forEach((j,id)=>{if(j.expiresAt&&j.expiresAt!==0&&j.expiresAt<now())dropOpenJobLocal(id);});
     A.relayQ=A.relayQ.filter(r=>r.expiresAt>now());
     A.tempConns.forEach((tc,jid)=>{if(now()-tc.ts>30*864e5)A.tempConns.delete(jid);});
     await persist();sR();
@@ -2983,6 +3126,8 @@ async function boot(){
     // EVERY round: posts + interests + status (critical path)
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
     fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
+    fsLoadDirectPosts().then(posts=>{var added=0,_new=[];posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});A._unreadJobs[p.id]=(A._unreadJobs[p.id]||0)+1;added++;_new.push(p);}});
+      if(added>0){if(A.screen!=='chatHub')A.unreadChat+=added;updateB();persist();sR();_new.slice(0,2).forEach(p=>notify('📩 '+(p.creatorName||''),(p.title||'').substr(0,40),()=>go('jobDetail',{jobId:p.id})));}}).catch(()=>{});
     fsCheckInterests();fsCheckMyDMs();fsCheckMyDMAcks();
     fsCheckJobStatus();fsCheckMyInvitations();fsCheckMyGroupRequests();fsCheckMyGroups();fsCheckAdminGroupRequests();
     // EVERY 2nd round: job chats + public groups + group posts + group orphan cleanup + point updates
