@@ -206,7 +206,7 @@ async function loadState(){
   if(D())console.log('[-> loadState]');
   A.myName=ls('oName')||'';A.myBio=ls('oBio')||'';A.myCity=ls('oCity')||'';A.myFylke=ls('oFylke')||'';A.myBy=ls('oBy')||'';
   if(!db){try{const fb=JSON.parse(ls('oFallback')||'{}');A.myJobs=fb.myJobs||[];A.contacts=fb.contacts||[];A.ratings=fb.ratings||{};
-    A.openJobs=new Map(fb.openJobs||[]);}catch(e){}if(D())console.log('[<- loadState] fallback mode');return;}
+    A.openJobs=new Map((fb.openJobs||[]).filter(([,j])=>!isInvalidDirectPointJob(j)));}catch(e){}if(D())console.log('[<- loadState] fallback mode');return;}
   A.myJobs=(await dbGet('config','myJobs'))||[];
   A.jobChats=(await dbGet('config','jobChats'))||{};
   A.dms=(await dbGet('config','dms'))||{};
@@ -226,7 +226,7 @@ async function loadState(){
   A._deadJobs=new Set((await dbGet('config','deadJobs'))||[]);
   A._myGroupRequests=(await dbGet('config','myGroupRequests'))||{};
   const oj=(await dbGet('config','openJobs'))||[];
-  A.openJobs=new Map(oj.filter(([,j])=>!j.expiresAt||j.expiresAt===0||j.expiresAt>now()));
+  A.openJobs=new Map(oj.filter(([,j])=>(!j.expiresAt||j.expiresAt===0||j.expiresAt>now())&&!isInvalidDirectPointJob(j)));
   if(D())console.log('[<- loadState]',{jobs:A.myJobs.length,contacts:A.contacts.length,openJobs:A.openJobs.size,groups:A.groups.length,offlineQ:A.offlineQ.length,relayQ:A.relayQ.length});
 }
 
@@ -598,6 +598,7 @@ window.ownerReleasePendingPoint=async(jid,idx)=>{var j=A.myJobs.find(x=>x.id===j
   persist();notify('↩️','Punkt frigjort');render();};
 function jobParticipants(j){var ids=new Set();if(j.helperId)ids.add(j.helperId);if(j.creatorId)ids.add(j.creatorId);
   (j.items||[]).forEach(it=>{if(it.assignedTo)ids.add(it.assignedTo);});ids.delete(A.myId);return[...ids];}
+function isInvalidDirectPointJob(j){return !!(j&&j.visibility==='direct'&&Array.isArray(j.items)&&j.items.length);}
 function keepParticipantPending(j,st,helperId){
   if(!j||j.creatorId===A.myId)return false;
   if(st!=='accepting')return false;
@@ -1024,7 +1025,7 @@ async function fsLoadDirectPosts(){if(!hasFS()||!A.myId)return[];if(D())console.
       var snap=await fbDb.collection('posts').where('visibility','==','direct').where('targetIds','array-contains',A.myId).where('status','==',st).where('ts','>',cutoff).orderBy('ts','desc').limit(100).get();
       snap.docs.forEach(d=>{if(!byId.has(d.id))byId.set(d.id,d.data());});
     }catch(e){}}
-    var out=[...byId.values()].filter(p=>p.creatorId!==A.myId).sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,100);
+    var out=[...byId.values()].filter(p=>p.creatorId!==A.myId&&!isInvalidDirectPointJob(p)).sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,100);
     if(D())console.log('[<- fsLoadDirectPosts]',{count:out.length});return out;
   }catch(e){if(D())console.log('[fsLoadDirectPosts] error',e.message);return[];}}
 async function fsLoadGroupPosts(gid){if(!hasFS()||!gid)return[];try{var byId=new Map();
@@ -1420,6 +1421,7 @@ function applyG(p){if(!p)return;if(p.t==='TAKE'||p.t==='CANCEL'){dropOpenJobLoca
 function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','JW','GQ','GR'].includes(m.t))console.log('[MSG]',m.t,{from,jid:m.jid||m.job?.id,gid:m.gid});switch(m.t){
   case 'INV':{if(!m.job?.id||!/^[a-zA-Z0-9_-]{1,50}$/.test(m.job.id)||!m.job.creatorId||!/^[a-zA-Z0-9_-]{1,50}$/.test(m.job.creatorId))break;
     if(A._deadJobs.has(m.job.id)){if(D())console.log('[INV] blocked — deadJobs',{jid:m.job.id});break;}
+    if(isInvalidDirectPointJob(m.job)){if(D())console.log('[INV] blocked — invalid direct point job',{jid:m.job.id});break;}
     var _exJob=A.myJobs.find(j=>j.id===m.job.id);
     if(_exJob){if(D())console.log('[INV] blocked — in myJobs',{jid:m.job.id,status:_exJob.status});break;}
     if(A.openJobs.has(m.job.id))break;
@@ -2248,6 +2250,7 @@ window.togglePointInterest=(jid,idx)=>{if(!A._pointPick[jid])A._pointPick[jid]=[
     arr.push(idx);}render();};
 window.doHelpPoints=(jid,cid)=>{var existing=A.myJobs.find(x=>x.id===jid);
   var oj=A.openJobs.get(jid)||existing;var pts=A._pointPick[jid]||[];
+  if(isInvalidDirectPointJob(oj)){notify('⚠️','Direkte oppgaver kan ikke bruke punkter');delete A._pointPick[jid];return;}
   if(!pts.length){notify('⚠️','Velg minst ett punkt');return;}
   var msg=$('jmsg')?.value?.trim()||'';var ha=window._helpAudio;window._helpAudio=null;
   if(D())console.log('[doHelpPoints]',{jid,cid,points:pts,reApply:!!existing});
@@ -2422,7 +2425,7 @@ function vMine(){
 
 // ═══ CHAT HUB ═══
 function vChatHub(){const dl=Object.keys(A.dms).filter(id=>A.dms[id]?.length);
-  const directJobs=[...A.openJobs.values()].filter(j=>j.visibility==='direct'&&j.creatorId!==A.myId&&(!j.expiresAt||j.expiresAt===0||j.expiresAt>now())&&!['cancelled','done','never_done'].includes(j.status))
+  const directJobs=[...A.openJobs.values()].filter(j=>j.visibility==='direct'&&j.creatorId!==A.myId&&!isInvalidDirectPointJob(j)&&(!j.expiresAt||j.expiresAt===0||j.expiresAt>now())&&!['cancelled','done','never_done'].includes(j.status))
     .sort((a,b)=>(A._unreadJobs[b.id]||0)-(A._unreadJobs[a.id]||0)||((b.ts||0)-(a.ts||0)));
   return`<div class="scr"><div class="hdr"><div style="font-size:22px;font-weight:800">Meldinger</div><button class="btn bs bsm" style="width:auto" onclick="go('contacts')">+ Ny</button></div>
   ${directJobs.length?`<div class="slbl">📩 DIREKTE OPPGAVER</div>
