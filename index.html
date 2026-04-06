@@ -2752,7 +2752,15 @@ function vProfile(){const pr=avgR(A.myId);const loc=[A.myBy,FYLKER.find(f=>f.id=
   <button class="btn bs" style="margin-bottom:8px" onclick="go('repProfile',{uid:'${escA(A.myId)}',name:'${escA(A.myName)}'})">⭐ Mitt rykte</button>
   <button class="btn bs" style="margin-bottom:8px" onclick="go('contacts')">👥 Venner</button>
   <button class="btn bs" style="margin-bottom:8px" onclick="go('settings')">⚙️ Innstillinger</button>
-  <button class="btn bs" style="margin-bottom:8px" onclick="shareApp()">📤 Del appen med noen</button></div>`;}
+  <button class="btn bs" style="margin-bottom:8px" onclick="shareApp()">📤 Del appen med noen</button>
+  <div class="dv" style="margin:20px 0"></div>
+  <div class="slbl">📲 LEGG TIL PÅ HJEMSKJERMEN</div>
+  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px">Åpne appen raskere uten nettleser.</div>
+  <button class="btn bs" style="margin-bottom:20px" onclick="doInstall()">📲 Legg til</button>
+  <div class="slbl">STØTT UTVIKLEREN</div>
+  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px">OptoU er gratis og reklamefritt. Hvis du liker appen, kan du støtte utviklingen.</div>
+  <button class="btn" style="width:100%;background:var(--pr);color:#fff;border:none;border-radius:16px;padding:14px;font-size:15px;font-weight:700;box-shadow:0 4px 16px rgba(255,107,53,.18);margin-bottom:8px;cursor:pointer" onclick="window.location.href='https://qr.vipps.no/vp/0sYbxfEnM'">💚 Støtt med Vipps</button>
+  <div style="font-size:11px;color:var(--t3);text-align:center">Vipps-nummer: 45390</div></div>`;}
 
 // ═══ SETTINGS ═══
 function vSettings(){
@@ -2780,17 +2788,6 @@ function vSettings(){
   <div style="display:flex;gap:8px;margin-bottom:16px">${[['no','Norsk'],['en','English']].map(([v,l])=>
     `<button class="btn ${(ls('oLang')||'no')===v?'bp':'bs'}" style="flex:1" onclick="ss('oLang','${v}');render()">${l}</button>`).join('')}</div>
   <div class="dv" style="margin:24px 0"></div>
-  <button class="btn bp" onclick="shareApp()">📤 ${t('shareApp')}</button>
-  <div class="dv" style="margin:24px 0"></div>
-  <div class="slbl">📲 LEGG TIL PÅ HJEMSKJERMEN</div>
-  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px">Åpne appen raskere uten nettleser.</div>
-  <button class="btn bs" onclick="doInstall()">📲 Legg til</button>
-  <div class="dv" style="margin:24px 0"></div>
-  <div class="slbl">STØTT UTVIKLEREN</div>
-  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px">OptoU er gratis og reklamefritt. Hvis du liker appen, kan du støtte utviklingen.</div>
-  <button class="btn" style="width:100%;background:var(--pr);color:#fff;border:none;border-radius:16px;padding:14px;font-size:15px;font-weight:700;box-shadow:0 4px 16px rgba(255,107,53,.18);margin-bottom:8px;cursor:pointer" onclick="window.location.href='https://qr.vipps.no/vp/0sYbxfEnM'">💚 Støtt med Vipps</button>
-  <div style="font-size:11px;color:var(--t3);text-align:center">Vipps-nummer: 45390</div>
-  <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">ℹ️ OM OPTOU</div>
   <div style="font-size:13px;color:var(--t2);line-height:1.7;margin-bottom:12px">OptoU v${V} — Få ting gjort sammen.<br>Én HTML-fil. Ingen server. Ingen eier dataene dine.<br>${A.conns.size} tilkoblinger · ${A.peers.size} i nettverket</div>
   <div class="dv" style="margin:24px 0"></div>
@@ -2803,10 +2800,11 @@ function vSettings(){
   <div class="dv" style="margin:12px 0"></div>
   <div class="slbl">SIGNALSERVER</div>
   <div style="font-size:12px;color:${A._useFallback?'var(--yw)':'var(--g2)'};margin-bottom:8px;font-weight:600">Tilkoblet via: ${A._useFallback?'PeerJS Cloud (fallback)':'Render (primær)'}</div>
-  <div style="font-size:11px;color:var(--t3);line-height:1.5">Primær: ${esc(PEER_CONFIG.host)}<br>Fallback: ${esc(PEER_FALLBACK.host)}<br>Bytter automatisk ved feil.</div></details>
-  <div class="dv" style="margin:24px 0"></div><div class="slbl" style="color:var(--rd)">FARLIG SONE</div>
+  <div style="font-size:11px;color:var(--t3);line-height:1.5">Primær: ${esc(PEER_CONFIG.host)}<br>Fallback: ${esc(PEER_FALLBACK.host)}<br>Bytter automatisk ved feil.</div>
+  <div class="dv" style="margin:20px 0"></div>
+  <div class="slbl" style="color:var(--rd)">FARLIG SONE</div>
   <div class="wbox">⚠️ Slett alt og start på nytt. Du mister alle jobber, venner, meldinger og vurderinger permanent. Du får en helt ny profil.</div>
-  <button class="btn br" onclick="showConfirm('Nullstill alt?','SISTE SJANSE: Din identitet og alle data slettes permanent.','Ja, slett alt',()=>{localStorage.clear();indexedDB.deleteDatabase('optou');location.reload();})">⚠️ Nullstill alt</button></div>`;}
+  <button class="btn br" onclick="showConfirm('Nullstill alt?','SISTE SJANSE: Din identitet og alle data slettes permanent.','Ja, slett alt',()=>{localStorage.clear();indexedDB.deleteDatabase('optou');location.reload();})">⚠️ Nullstill alt</button></details></div>`;}
 window.updateAvatar=async inp=>{if(!inp.files[0])return;try{const d=await compressAvatar(inp.files[0]);
   if(hasFB()){const url=await fbUpload(d,'profiles/'+A.myId+'.webp');if(url){ss('oAvatar',url);notify('✅','Bilde oppdatert!');render();return;}}
   ss('oAvatar',d);notify('✅','Bilde oppdatert!');render();}catch(e){notify('⚠️','Kunne ikke laste bilde');}};
