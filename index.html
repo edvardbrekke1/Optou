@@ -425,6 +425,31 @@ function addAct(t,i){A.activity.unshift({text:t,ico:i||'📌',ts:now()});}
 function addJMsg(jid,m){if(!A.jobChats[jid])A.jobChats[jid]=[];A.jobChats[jid].push(m);}
 function addDM(pid,m){if(!A.dms[pid])A.dms[pid]=[];A.dms[pid].push(m);}
 function dn(id,fb){const c=A.contacts.find(x=>x.id===id);return c?c.alias||c.name:fb||(id||'?').substr(0,8);}
+function ratingRid(r){return r?._rid||'';}
+function sameRating(a,b){
+  const ar=ratingRid(a),br=ratingRid(b);
+  if((a?.jobId||'')&&(b?.jobId||'')&&(a?.raterId||'')&&(b?.raterId||''))
+    return(a.jobId===b.jobId)&&(a.raterId===b.raterId)&&!!a?.nd===!!b?.nd;
+  if(ar&&br)return ar===br;
+  return(a?.jobId||'')===(b?.jobId||'')&&(a?.ts||0)===(b?.ts||0)&&!!a?.nd===!!b?.nd;
+}
+function mergeRatingLocal(uid,r){
+  if(!uid||!r)return false;
+  if(!A.ratings[uid])A.ratings[uid]=[];
+  const clean={score:Number(r.score)||0,comment:r.comment||'',jobId:r.jobId||'',raterId:r.raterId||'',raterName:r.raterName||'',ts:r.ts||now(),nd:!!r.nd};
+  if(r._rid)clean._rid=r._rid;
+  if(A.ratings[uid].find(x=>sameRating(x,clean)))return false;
+  A.ratings[uid].push(clean);
+  if(A.ratings[uid].length>50)A.ratings[uid]=A.ratings[uid].slice(-50);
+  return true;
+}
+window.addRating=function(targetId,rating){
+  if(!targetId||!rating)return false;
+  var rr={...rating,_rid:rating._rid||uid(),raterId:rating.raterId||A.myId};
+  var added=mergeRatingLocal(targetId,rr);
+  if(added){fsWriteRating(targetId,rr);gossip({t:'RAT',uid:targetId,ratings:A.ratings[targetId]});}
+  return added;
+};
 function avgR(u){const r=(A.ratings[u]||[]).filter(x=>!x.nd);if(!r.length)return null;return Math.round(r.reduce((s,x)=>s+x.score,0)/r.length*10)/10;}
 function npC(u){return(A.ratings[u]||[]).filter(x=>x.nd).length;}
 function avHtml(id,name,size){const sz=size||40;const av=id===A.myId?ls('oAvatar'):(A.peers.get(id)?.avatar||null);
@@ -588,14 +613,14 @@ window.updatePointStatus=function(jobId,idx){if(D())console.log('[updatePointSta
     var puTargets=new Set();if(j.creatorId&&j.creatorId!==A.myId)puTargets.add(j.creatorId);
     (j.items||[]).forEach(x=>{if(x.assignedTo&&x.assignedTo!==A.myId)puTargets.add(x.assignedTo);});
     puTargets.forEach(pid=>send(pid,{t:'PU',jid:jobId,idx,status:ns}));
-    if(ns==='done'&&j.creatorId&&j.creatorId!==A.myId)send(j.creatorId,{t:'BM',jid:jobId,name:A.myName,text:'Punkt "'+(it.text||'#'+(idx+1))+'" er fullført!',ts:now()});
+    if(ns==='done'&&j.creatorId&&j.creatorId!==A.myId){var _ptTs=now(),_ptMid=uid(),_ptTxt='Punkt "'+(it.text||'#'+(idx+1))+'" er fullført!';var _ptMsg={from:A.myId,name:A.myName,text:_ptTxt,ts:_ptTs,_mid:_ptMid};fsWriteJobChat(jobId,_ptMsg);send(j.creatorId,{t:'BM',jid:jobId,name:A.myName,text:_ptTxt,ts:_ptTs,_mid:_ptMid});}
     persist();render();return;}
   // Legacy mode: old helper toggle open↔done (no assignedTo)
   if(!j.isHelper)return;
   var it2=j.items?.[idx];if(!it2)return;var s2=it2.status||'open';var ns2=s2==='done'?'open':'done';
   if(D())console.log('[updatePointStatus] legacy',{idx,from:s2,to:ns2});it2.status=ns2;
   if(j.creatorId&&j.creatorId!==A.myId){send(j.creatorId,{t:'PU',jid:jobId,idx,status:ns2});
-    if(ns2==='done')send(j.creatorId,{t:'BM',jid:jobId,name:A.myName,text:'Punkt "'+(it2.text||'#'+(idx+1))+'" er fullført!',ts:now()});}
+    if(ns2==='done'){var _ltTs=now(),_ltMid=uid(),_ltTxt='Punkt "'+(it2.text||'#'+(idx+1))+'" er fullført!';var _ltMsg={from:A.myId,name:A.myName,text:_ltTxt,ts:_ltTs,_mid:_ltMid};fsWriteJobChat(jobId,_ltMsg);send(j.creatorId,{t:'BM',jid:jobId,name:A.myName,text:_ltTxt,ts:_ltTs,_mid:_ltMid});}}
   persist();render();};
 window.playBullet=(jobId,idx)=>{const j=A.openJobs.get(jobId)||A.myJobs.find(x=>x.id===jobId);
   const item=j?.items?.[idx];if(!item)return;const url=item.audioUrl||item.audioData;if(!url)return;
@@ -618,8 +643,9 @@ window.sendChatAudio=(type,id1,id2)=>{if(!window._pendingAudio)return;const{url,
   if(type==='jc'){const msg={from:A.myId,name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,ts:now(),_mid:uid(),_status:'sent'};
     addJMsg(id1,msg);fsWriteJobChat(id1,msg);var _aj=A.myJobs.find(x=>x.id===id1);var _at=_aj?jobParticipants(_aj):(id2?[id2]:[]);
     _at.forEach(pid=>send(pid,{t:'BM',jid:id1,name:A.myName,text:msg.text,audioUrl:url,duration:dur,ts:msg.ts,_mid:msg._mid}));}
-  else if(type==='dm'){var dmaid=uid();var dts=now();addDM(id1,{from:A.myId,name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,ts:dts,_mid:dmaid,_status:'sent'});
-    send(id1,{t:'DM',name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,enc:false,ts:dts,_mid:dmaid});}
+  else if(type==='dm'){var dmaid=uid();var dts=now();var dmsg={t:'DM',name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,enc:false,ts:dts,_mid:dmaid,senderPub:A.pubB64||'',senderEpub:A.ecdhPubB64||'',senderEsig:A.ecdhSig||''};
+    addDM(id1,{from:A.myId,name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,ts:dts,_mid:dmaid,_status:'sent'});
+    send(id1,dmsg);fsWriteDM(id1,dmsg);}
   persist();render();setTimeout(()=>{const m=$('ch-m')||$('jd-chat');if(m)m.scrollTop=m.scrollHeight;},50);};
 window.playChatAudio=url=>{if(_audio){_audio.pause();if(_audio.src===url){_audio=null;return;}}
   _audio=new Audio(url);_audio.play().catch(()=>notify('⚠️','Kunne ikke spille av lyd'));};
@@ -641,8 +667,9 @@ window.sendChatImg=async()=>{if(!window._pendingImg)return;var pi=window._pendin
   if(pi.type==='jc'){var msg={from:A.myId,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:now(),_mid:mid,_status:'sent'};
     addJMsg(pi.id1,msg);fsWriteJobChat(pi.id1,msg);var _ij=A.myJobs.find(x=>x.id===pi.id1);var _it=_ij?jobParticipants(_ij):(pi.id2?[pi.id2]:[]);
     _it.forEach(pid=>send(pid,{t:'BM',jid:pi.id1,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:msg.ts,_mid:mid}));}
-  else if(pi.type==='dm'){var its=now();addDM(pi.id1,{from:A.myId,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:its,_mid:mid,_status:'sent'});
-    send(pi.id1,{t:'DM',name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,enc:false,ts:its,_mid:mid});}
+  else if(pi.type==='dm'){var its=now();var imsg={t:'DM',name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,enc:false,ts:its,_mid:mid,senderPub:A.pubB64||'',senderEpub:A.ecdhPubB64||'',senderEsig:A.ecdhSig||''};
+    addDM(pi.id1,{from:A.myId,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:its,_mid:mid,_status:'sent'});
+    send(pi.id1,imsg);fsWriteDM(pi.id1,imsg);}
   persist();render();setTimeout(()=>{var m=$('ch-m')||$('jd-chat');if(m)m.scrollTop=m.scrollHeight;},50);};
 
 // ═══ FIREBASE ═══
@@ -757,7 +784,7 @@ let _grpPostsTs=0;
 function fsRefreshGroupPostsIfNeeded(){if(!hasFS()||!A.groups.length||now()-_grpPostsTs<90000)return;_grpPostsTs=now();
   A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
     .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){if(A.screen!=='groups')A.unreadGroups+=added;if(!(A.screen==='groupDetail'&&A.params.gid===g.id))A._unreadGroupPosts[g.id]=(A._unreadGroupPosts[g.id]||0)+added;updateB();persist();sR();}}).catch(()=>{});});}
-async function fsRegisterUser(){if(D())console.log('[-> fsRegisterUser]',{myId:A.myId,myName:A.myName});if(!hasFS()||!A.myId||!A.myName)return;try{await fbDb.collection('users').doc(A.myId).set({name:A.myName,nameLower:A.myName.toLowerCase(),fylke:A.myFylke||'',by:A.myBy||'',avatar:ls('oAvatar')||'',updatedAt:Date.now()},{merge:true});if(D())console.log('[<- fsRegisterUser] success');}catch(e){console.warn('[FS] registerUser',e);}}
+async function fsRegisterUser(){if(D())console.log('[-> fsRegisterUser]',{myId:A.myId,myName:A.myName});if(!hasFS()||!A.myId||!A.myName)return;try{await fbDb.collection('users').doc(A.myId).set({name:A.myName,nameLower:A.myName.toLowerCase(),fylke:A.myFylke||'',by:A.myBy||'',avatar:ls('oAvatar')||'',pub:A.pubB64||'',epub:A.ecdhPubB64||'',esig:A.ecdhSig||'',updatedAt:Date.now()},{merge:true});if(D())console.log('[<- fsRegisterUser] success');}catch(e){console.warn('[FS] registerUser',e);}}
 async function fsSearchUsers(query){if(!hasFS()||!query||query.length<2)return[];try{var q=query.toLowerCase();var snap=await fbDb.collection('users').where('nameLower','>=',q).where('nameLower','<=',q+'\uf8ff').limit(20).get();return snap.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.id!==A.myId&&!A.blocked.has(u.id));}catch(e){console.warn('[FS] searchUsers',e);return[];}}
 async function fsHydrateUserNames(ids){if(!hasFS()||!ids.length)return;
   var unknown=ids.filter(id=>!A._userNames[id]&&id!==A.myId&&!A.contacts.find(c=>c.id===id)&&!A.peers.get(id)?.name);
@@ -856,10 +883,79 @@ async function respondInvite(accepted){var inv=A._showingInvite;if(!inv){documen
       Object.assign(lj.items[inv.idx],j.items[inv.idx]);}
   }else{if(D())console.log('[respondInvite] skipped fsUpdatePostItems — no valid items',{jid:inv.jid});}
   if(accepted){
-    if(!A.myJobs.find(x=>x.id===inv.jid)&&j){A.openJobs.delete(inv.jid);A.myJobs.push({...j,isHelper:true,isPointHelper:true});}
+    var lj2=A.myJobs.find(x=>x.id===inv.jid);
+    if(!lj2&&j){A.openJobs.delete(inv.jid);lj2={...j};A.myJobs.push(lj2);}
+    if(lj2){
+      lj2.status='active';lj2.isHelper=true;lj2.isPointHelper=true;lj2.isPointApplicant=false;
+      var _lp2=new Set(lj2._myPoints||[]);_lp2.add(inv.idx);lj2._myPoints=[..._lp2].sort((a,b)=>a-b);
+      if(lj2.items?.[inv.idx]){lj2.items[inv.idx].assignedTo=A.myId;lj2.items[inv.idx].assignedName=A.myName;lj2.items[inv.idx].assignedStatus='accepted';lj2.items[inv.idx].status='taken';}
+    }
     notify('✅','Du tok punkt: '+(inv.itemText||'').substr(0,30));
   }else{notify('↩️','Takket nei til punkt');}
   persist();sR();showNextInvite();}
+async function hydratePeerCryptoFromFs(pid,fallbackName){if(!hasFS()||!pid)return null;try{
+  var doc=await fbDb.collection('users').doc(pid).get();if(!doc.exists)return null;var data=doc.data()||{};
+  if(!data.pub||!data.epub||!data.esig)return null;var ok=await verifyECDHSig(data.pub,data.epub,data.esig);if(!ok)return null;
+  var prev=A.peers.get(pid)||{};A.peers.set(pid,{...prev,id:pid,name:prev.name||data.name||fallbackName||pid.substr(0,8),pub:data.pub,epub:data.epub,esig:data.esig,epubV:true,ts:Math.max(prev.ts||0,now()),online:!!prev.online,avatar:data.avatar||prev.avatar||''});
+  return data.epub;
+}catch(e){if(D())console.log('[hydratePeerCryptoFromFs] error',pid,e.message);return null;}}
+async function resolveDmEpub(pid,m){var peer=A.peers.get(pid);
+  if(peer?.epub&&peer.epubV!==false)return peer.epub;
+  if(m?.senderPub&&m?.senderEpub&&m?.senderEsig){try{var ok=await verifyECDHSig(m.senderPub,m.senderEpub,m.senderEsig);
+      if(ok){var prev=A.peers.get(pid)||{};A.peers.set(pid,{...prev,id:pid,name:prev.name||m.name||pid.substr(0,8),pub:m.senderPub,epub:m.senderEpub,esig:m.senderEsig,epubV:true,ts:Math.max(prev.ts||0,m.ts||0),online:!!prev.online,avatar:prev.avatar||''});return m.senderEpub;}
+    }catch(e){}}
+  return hydratePeerCryptoFromFs(pid,m?.name||'');}
+function finishIncomingDM(pid,m,text,deferPersist){addDM(pid,{from:pid,name:m.name||dn(pid),text:text,audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||now(),_mid:m._mid});
+  if(A.screen!=='dm'||A.params.peerId!==pid){notify('✉️ '+(m.name||''),(text||m.text||'').substr?.(0,40));A.unreadChat++;A._unreadDMs[pid]=(A._unreadDMs[pid]||0)+1;}
+  updateB();if(!deferPersist){persist();sR();}}
+async function ingestDM(pid,m,opt){opt=opt||{};if(!pid||!m)return false;
+  if(m._mid&&A._seenMids.has(m._mid))return'dup';var text=m.text||'';
+  if(m.enc&&!m.audioUrl&&!m.imageUrl){var epub=await resolveDmEpub(pid,m);if(!epub){if(D())console.log('[DM] decrypt blocked — missing epub',{from:pid,_mid:m._mid});return false;}
+    text=await decFrom(m.text,epub);if(!text||text==='[Feil]'||text==='[Kunne ikke dekryptere]'){if(D())console.log('[DM] decrypt failed',{from:pid,_mid:m._mid});return false;}}
+  if(m._mid)A._seenMids.add(m._mid);finishIncomingDM(pid,m,text,opt.deferPersist);return true;}
+async function fsWriteDM(userId,msg){if(!hasFS()||!A.myId||!userId||!msg||!msg._mid)return false;
+  if(!msg.audioUrl&&!msg.imageUrl&&!msg.enc)return false;try{await fbDb.collection('users').doc(userId).collection('dms').doc(msg._mid).set({
+      from:A.myId,name:msg.name||A.myName,text:msg.text||'',enc:!!msg.enc,audioUrl:msg.audioUrl||null,imageUrl:msg.imageUrl||null,duration:msg.duration||0,
+      ts:msg.ts||Date.now(),_mid:msg._mid,senderPub:A.pubB64||'',senderEpub:A.ecdhPubB64||'',senderEsig:A.ecdhSig||''});
+    if(D())console.log('[FS] writeDM',userId,msg._mid);return true;
+  }catch(e){if(D())console.log('[FS] writeDM error',userId,e.message);return false;}}
+async function fsWriteDMAck(userId,mid){if(!hasFS()||!userId||!mid)return false;try{
+    await fbDb.collection('users').doc(userId).collection('dmAcks').doc(mid).set({from:A.myId,ts:Date.now(),_mid:mid});
+    if(D())console.log('[FS] writeDMAck',userId,mid);return true;
+  }catch(e){if(D())console.log('[FS] writeDMAck error',userId,e.message);return false;}}
+async function fsCheckMyDMs(){if(!hasFS()||!A.myId)return;try{
+  var snap=await fbDb.collection('users').doc(A.myId).collection('dms').orderBy('ts','desc').limit(120).get();if(!snap.docs.length)return;
+  var docs=snap.docs.slice().sort((a,b)=>(a.data()?.ts||0)-(b.data()?.ts||0));
+  var added=0,cleaned=0,deferred=0,changed=false;for(var doc of docs){var m={_mid:doc.id,...doc.data()};if(!m.from||A.blocked.has(m.from)){await doc.ref.delete().catch(function(){});cleaned++;continue;}
+    if(m._mid&&A._seenMids.has(m._mid)){send(m.from,{t:'MA',_mid:m._mid});fsWriteDMAck(m.from,m._mid);await doc.ref.delete().catch(function(){});cleaned++;continue;}
+    var ok=await ingestDM(m.from,m,{deferPersist:true});if(!ok){deferred++;continue;}
+    if(m._mid){send(m.from,{t:'MA',_mid:m._mid});fsWriteDMAck(m.from,m._mid);}await doc.ref.delete().catch(function(){});added++;cleaned++;changed=true;}
+  if(changed){persist();sR();}if(D()&&(added||cleaned||deferred))console.log('[fsCheckMyDMs]',{added,cleaned,deferred});
+}catch(e){if(D())console.log('[fsCheckMyDMs] error',e.message);}}
+async function fsCheckMyDMAcks(){if(!hasFS()||!A.myId)return;try{
+  var snap=await fbDb.collection('users').doc(A.myId).collection('dmAcks').orderBy('ts','desc').limit(120).get();if(!snap.docs.length)return;
+  var changed=false,cleaned=0;for(var doc of snap.docs){var a={_mid:doc.id,...doc.data()};if(!a._mid){await doc.ref.delete().catch(function(){});cleaned++;continue;}
+    var found=false;Object.values(A.dms).forEach(msgs=>{if(found)return;const msg=msgs.find(x=>x._mid===a._mid);if(msg&&msg._status!=='delivered'){msg._status='delivered';found=true;}else if(msg)found=true;});
+    await doc.ref.delete().catch(function(){});cleaned++;if(found)changed=true;}
+  if(changed){persist();sR();}if(D()&&(changed||cleaned))console.log('[fsCheckMyDMAcks]',{changed,cleaned});
+}catch(e){if(D())console.log('[fsCheckMyDMAcks] error',e.message);}}
+function ratingSyncTargets(){var s=new Set([A.myId]);const add=id=>{if(id&&!A.blocked.has(id))s.add(id);};
+  if(A.screen==='dm'&&A.params.peerId)add(A.params.peerId);
+  if(A.screen==='repProfile'&&A.params.uid)add(A.params.uid);
+  if(A.screen==='contacts')A.contacts.slice(0,10).forEach(c=>add(c.id));
+  var focusJob=A.params.jobId?(A.myJobs.find(x=>x.id===A.params.jobId)||A.openJobs.get(A.params.jobId)):null;
+  [focusJob,...A.myJobs.slice(-8)].forEach(j=>{if(!j)return;add(j.creatorId);add(j.helperId);(j.items||[]).forEach(it=>add(it.assignedTo));(j.interests||[]).slice(0,4).forEach(it=>add(it.id));});
+  A.conns.forEach((_,id)=>add(id));A.openJobs.forEach(j=>{if(s.size<16)add(j.creatorId);});
+  return[...s].slice(0,16);}
+async function fsWriteRating(userId,rating){if(!hasFS()||!userId||!rating||!rating._rid)return false;try{await fbDb.collection('users').doc(userId).collection('ratings').doc(rating._rid).set({
+      _rid:rating._rid,score:Number(rating.score)||0,comment:rating.comment||'',jobId:rating.jobId||'',raterId:rating.raterId||A.myId,raterName:rating.raterName||'',ts:rating.ts||Date.now(),nd:!!rating.nd,updatedAt:Date.now()});
+    if(D())console.log('[FS] writeRating',userId,rating._rid);return true;
+  }catch(e){if(D())console.log('[FS] writeRating error',userId,e.message);return false;}}
+async function fsCheckRatings(targetIds){if(!hasFS())return;var ids=[...new Set((Array.isArray(targetIds)&&targetIds.length?targetIds:ratingSyncTargets()).filter(id=>id&&(id===A.myId||!A.blocked.has(id))))].slice(0,16);if(!ids.length)return;
+  var changed=false;for(var rid of ids){try{var snap=await fbDb.collection('users').doc(rid).collection('ratings').orderBy('ts','desc').limit(20).get();
+      snap.docs.forEach(doc=>{if(mergeRatingLocal(rid,{_rid:doc.id,...doc.data()}))changed=true;});
+    }catch(e){if(D())console.log('[fsCheckRatings] error',rid,e.message);}}
+  if(changed){persist();sR();}}
 async function fsLoadPublicPosts(){if(D())console.log('[-> fsLoadPublicPosts]');if(!hasFS())return[];try{var cutoff=now()-30*864e5;
   // NOTE: Requires composite index (visibility, status, ts) on posts collection
   var snap=await fbDb.collection('posts').where('visibility','==','public').where('status','==','open').where('ts','>',cutoff).orderBy('ts','desc').limit(100).get();
@@ -985,9 +1081,12 @@ async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if
       if(!fs.status||fs.status===j.status)continue;
       const pri={open:0,accepting:1,active:2,pending_review:3,done:4,cancelled:5,never_done:5,declined:5};
       const myP=pri[j.status]||0;const fsP=pri[fs.status]||0;
-      if(fsP>myP){if(D())console.log('[fsSync] status update',{jid:j.id,from:j.status,to:fs.status,fsHelperId:fs.helperId,fsCreatorName:fs.creatorName});
+      const allowRepair=(j.creatorId!==A.myId&&fs.status==='active'&&['pending_review','done'].includes(j.status))
+        ||(j.creatorId===A.myId&&!j.items?.length&&fs.status==='open'&&['active','pending_review'].includes(j.status)&&!fs.helperId);
+      if(fsP>myP||allowRepair){if(D())console.log('[fsSync] status update',{jid:j.id,from:j.status,to:fs.status,fsHelperId:fs.helperId,fsCreatorName:fs.creatorName,repair:allowRepair});
         j.status=fs.status;
         if(fs.status==='cancelled'){j.helperId=null;j.helperName=null;j.helperDone=false;}
+        else if(fs.status==='open'&&!j.items?.length){j.helperId=null;j.helperName=null;j.helperDone=false;}
         else{if(fs.helperId&&!j.helperId)j.helperId=fs.helperId;
           if(fs.helperName&&!j.helperName)j.helperName=fs.helperName;}
         if(fs.creatorName&&!j.creatorName)j.creatorName=fs.creatorName;
@@ -996,7 +1095,7 @@ async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if
         if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[j.id]=(A._unreadJobs[j.id]||0)+1;}
     }catch(e){}}if(D())console.log('[<- fsCheckJobStatus]');updateB();persist();sR();}catch(e){if(D())console.log('[fsSync] error',e);}}
 async function fsCheckPointUpdates(){if(!hasFS())return;if(D())console.log('[-> fsCheckPointUpdates]');
-  try{const terminal=['done','cancelled','never_done','declined'];var changed=0;
+  try{const terminal=['done','cancelled','never_done','declined'];var changed=0,reopenLocal=[],dropLocal=[];
     for(const j of A.myJobs){if(!j?.items?.length||terminal.includes(j.status))continue;
       try{const doc=await fbDb.collection('posts').doc(j.id).get();if(!doc.exists)continue;
         const fs=doc.data();if(!fs?.items?.length)continue;var lc=false;
@@ -1004,10 +1103,31 @@ async function fsCheckPointUpdates(){if(!hasFS())return;if(D())console.log('[-> 
           var diff=(fi.assignedTo||null)!==(li.assignedTo||null)||(fi.assignedName||null)!==(li.assignedName||null)||(fi.assignedStatus||null)!==(li.assignedStatus||null)||(fi.status||'open')!==(li.status||'open');
           if(diff){li.assignedTo=fi.assignedTo||null;li.assignedName=fi.assignedName||null;li.assignedStatus=fi.assignedStatus||null;li.status=fi.status||'open';lc=true;}});
         var myPts=(j.items||[]).map((it,idx)=>it.assignedTo===A.myId?idx:-1).filter(idx=>idx>=0);
+        var hadPointState=!!j.isPointHelper||!!(j._myPoints||[]).length;
         if(myPts.length){if(!j.isPointHelper){j.isPointHelper=true;lc=true;}if(!j.isHelper){j.isHelper=true;lc=true;}
+          if(j.isPointApplicant){j.isPointApplicant=false;lc=true;}
+          if(!['active','pending_review','done'].includes(j.status)){j.status='active';lc=true;}
           var np=JSON.stringify(myPts),pp=JSON.stringify(j._myPoints||[]);if(np!==pp){j._myPoints=myPts.slice();lc=true;}}
+        else{
+          if(j.isPointHelper){j.isPointHelper=false;lc=true;}
+          if((j._myPoints||[]).length){j._myPoints=[];lc=true;}
+          if(hadPointState&&j.isHelper&&!j.helperId){j.isHelper=false;lc=true;}}
+        if(!myPts.length&&hadPointState&&j.creatorId!==A.myId&&!j.isPointApplicant&&!j.helperId){
+          if((j.items||[]).some(it=>(it.status||'open')==='open'&&!it.assignedTo))reopenLocal.push(j.id);
+          else dropLocal.push(j.id);
+          lc=true;}
+        if(j.creatorId===A.myId&&(['open','accepting','active'].includes(j.status)||(j.status==='pending_review'&&!allPointsDone(j)))){
+          var _ownPs=pointOwnerStatus(j);
+          if(_ownPs!==j.status){j.status=_ownPs;fsUpdatePostStatus(j.id,_ownPs);lc=true;}}
         if(lc)changed++;
       }catch(e){if(D())console.log('[fsCheckPointUpdates] error',j.id,e.message);}}
+    if(reopenLocal.length||dropLocal.length){
+      var reSet=new Set(reopenLocal),drSet=new Set(dropLocal);
+      A.myJobs=A.myJobs.filter(j=>{if(!reSet.has(j.id)&&!drSet.has(j.id))return true;
+        if(reSet.has(j.id))A.openJobs.set(j.id,{...j,status:'open',isHelper:false,isPointHelper:false,isPointApplicant:false,_myPoints:[],isFromContact:true});
+        return false;});
+      changed+=reopenLocal.length+dropLocal.length;
+    }
     if(changed){persist();updateB();sR();}
     if(D())console.log('[<- fsCheckPointUpdates]',{changed});
   }catch(e){if(D())console.log('[fsCheckPointUpdates] error',e.message);}}
@@ -1017,15 +1137,31 @@ async function fsWriteJobChat(jid,msg){if(!hasFS())return;
     imageUrl:msg.imageUrl||null,duration:msg.duration||0,ts:msg.ts||Date.now(),_mid:msg._mid});
     if(D())console.log('[FS] writeJobChat',jid,msg._mid);
   }catch(e){if(D())console.log('[FS] writeJobChat error',e.message);}}
+async function fsWriteJobChatAck(userId,jid,mid){if(!hasFS()||!userId||!jid||!mid)return false;try{
+    await fbDb.collection('users').doc(userId).collection('jobChatAcks').doc(mid).set({from:A.myId,jid,ts:Date.now(),_mid:mid});
+    if(D())console.log('[FS] writeJobChatAck',userId,jid,mid);return true;
+  }catch(e){if(D())console.log('[FS] writeJobChatAck error',userId,jid,e.message);return false;}}
 async function fsCheckJobChats(){if(!hasFS())return;
-  var active=A.myJobs.filter(j=>['active','pending_review'].includes(j.status)&&(j.helperId||j.creatorId));
+  var active=A.myJobs.filter(j=>['active','pending_review','done'].includes(j.status)&&(j.helperId||j.creatorId||j.items?.some(it=>it.assignedTo)));
   for(var j of active){try{var localMsgs=A.jobChats[j.id]||[];var localMids=new Set(localMsgs.map(m=>m._mid).filter(Boolean));
-    var snap=await fbDb.collection('posts').doc(j.id).collection('chat').orderBy('ts','desc').limit(50).get();
-    var added=0;snap.docs.forEach(doc=>{var m=doc.data();if(m.from===A.myId)return;if(m._mid&&localMids.has(m._mid))return;
-      addJMsg(j.id,{from:m.from,name:m.name||'?',text:m.text||'',audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||Date.now(),_mid:m._mid});added++;});
+    var snap=await fbDb.collection('posts').doc(j.id).collection('chat').orderBy('ts','desc').limit(200).get();
+    var docs=snap.docs.slice().sort((a,b)=>(a.data()?.ts||0)-(b.data()?.ts||0));
+    var added=0,ackMarked=false;docs.forEach(doc=>{var m=doc.data();if(m.from===A.myId)return;
+      if(m._mid&&(localMids.has(m._mid)||A._seenMids.has(m._mid))){var ak='jc:'+m._mid;if(!A._seenAcks.has(ak)){A._seenAcks.add(ak);send(m.from,{t:'MA',_mid:m._mid});fsWriteJobChatAck(m.from,j.id,m._mid);ackMarked=true;}return;}
+      if(m._mid)A._seenMids.add(m._mid);
+      addJMsg(j.id,{from:m.from,name:m.name||'?',text:m.text||'',audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||Date.now(),_mid:m._mid});
+      if(m._mid){var ak2='jc:'+m._mid;if(!A._seenAcks.has(ak2)){A._seenAcks.add(ak2);send(m.from,{t:'MA',_mid:m._mid});fsWriteJobChatAck(m.from,j.id,m._mid);ackMarked=true;}}added++;});
     if(added>0){if(!((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===j.id)){A.unreadActivity+=added;A._unreadJobs[j.id]=(A._unreadJobs[j.id]||0)+added;}
       if(D())console.log('[FS] checkJobChats',j.id,{added});updateB();persist();sR();}
+    else if(ackMarked)persist();
   }catch(e){if(D())console.log('[FS] checkJobChats error',j.id,e.message);}}}
+async function fsCheckMyJobChatAcks(){if(!hasFS()||!A.myId)return;try{
+  var snap=await fbDb.collection('users').doc(A.myId).collection('jobChatAcks').orderBy('ts','desc').limit(120).get();if(!snap.docs.length)return;
+  var changed=false,cleaned=0;for(var doc of snap.docs){var a={_mid:doc.id,...doc.data()};if(!a._mid){await doc.ref.delete().catch(function(){});cleaned++;continue;}
+    var found=false;Object.values(A.jobChats).forEach(msgs=>{if(found)return;const msg=msgs.find(x=>x._mid===a._mid);if(msg&&msg._status!=='delivered'){msg._status='delivered';found=true;}else if(msg)found=true;});
+    await doc.ref.delete().catch(function(){});cleaned++;if(found)changed=true;}
+  if(changed){persist();sR();}if(D()&&(changed||cleaned))console.log('[fsCheckMyJobChatAcks]',{changed,cleaned});
+}catch(e){if(D())console.log('[fsCheckMyJobChatAcks] error',e.message);}}
 async function fbUpload(dataUrl,path){
   if(D())console.log('[-> fbUpload]',{path});
   if(!fbStorage)return null;
@@ -1202,8 +1338,7 @@ function onData(from,m){try{if(!m||A.blocked.has(from))return;
     else{applyG(m.p);fwdGS();}return;}
   handleD(from,m);}catch(e){console.error('[onData]',m?.t,e);}}
 function applyG(p){if(!p)return;if(p.t==='TAKE'||p.t==='CANCEL'){A.openJobs.delete(p.jobId);sR();}
-  if(p.t==='RAT'&&p.uid&&p.ratings){if(!A.ratings[p.uid])A.ratings[p.uid]=[];
-    p.ratings.forEach(r=>{if(!A.ratings[p.uid].find(x=>x.jobId===r.jobId&&x.ts===r.ts))A.ratings[p.uid].push(r);});persist();}
+  if(p.t==='RAT'&&p.uid&&p.ratings){var _rc=false;p.ratings.forEach(r=>{if(mergeRatingLocal(p.uid,r))_rc=true;});if(_rc){persist();sR();}}
   // POST gossip removed — public post discovery via direct INV + Firestore only
   // GRP gossip removed — public group discovery via Firestore (fsLoadPublicGroups) only
   // GDEL gossip removed — deleted groups detected via fsCleanupOrphanedGroups + dropMissingGroup
@@ -1245,7 +1380,8 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(Array.isArray(m.points)&&m.points.length&&j.items?.length){
       var ap=m.points.filter((idx,i,a)=>a.indexOf(idx)===i&&Number.isInteger(idx)&&j.items[idx]);
       if(ap.length){ap.forEach(idx=>{j.items[idx].assignedTo=A.myId;j.items[idx].assignedName=A.myName;j.items[idx].assignedStatus='accepted';j.items[idx].status='taken';});
-        j.isHelper=true;j.isPointHelper=true;j._myPoints=ap.slice();j.status='active';
+        var _jp=new Set(j._myPoints||[]);ap.forEach(idx=>_jp.add(idx));
+        j.isHelper=true;j.isPointHelper=true;j.isPointApplicant=false;j._myPoints=[..._jp].sort((a,b)=>a-b);if(!['pending_review','done'].includes(j.status))j.status='active';
         if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;
         notify('✅ Du fikk '+ap.length+' punkt'+(ap.length>1?'er':'')+'!',m.name||'');persist();}updateB();sR();break;}
     // Whole-job branch
@@ -1254,9 +1390,12 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
   case 'JN':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[JN] received',{from,jid:m.jid,jobFound:!!j,isHelper:j?.isHelper,status:j?.status,points:m.points});
     if(!j)break;
     // Point-branch: declined for point-application
-    if(Array.isArray(m.points)&&m.points.length&&j.isPointApplicant){j.status='declined';
+    if(Array.isArray(m.points)&&m.points.length&&j.isPointApplicant){j.isPointApplicant=false;
+      var _jnPts=(j.items||[]).map((it,idx)=>it.assignedTo===A.myId?idx:-1).filter(idx=>idx>=0);j._myPoints=_jnPts.slice();
+      if(_jnPts.length||j.isPointHelper){if(!['active','pending_review','done'].includes(j.status))j.status='active';}
+      else j.status='declined';
       if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;
-      notify('↩️','Punkt-søknaden ble avslått');persist();updateB();sR();break;}
+      notify('↩️',(_jnPts.length||j.isPointHelper)?'Ekstra punkt-søknad ble avslått':'Punkt-søknaden ble avslått');persist();updateB();sR();break;}
     // Whole-job branch
     if(j.isHelper){j.status='declined';if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;}persist();updateB();sR();break;}
   case 'HC':{const j=A.myJobs.find(x=>x.id===m.jid);if(D())console.log('[HC] received',{from,jid:m.jid,jobFound:!!j,status:j?.status});
@@ -1267,30 +1406,25 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;notify('🎉 Godkjent!','Fullført!');persist();}updateB();sR();break;}
   case 'NP':{const j=A.myJobs.find(x=>x.id===m.jid);if(!j)break;
     // Point-mode: only penalize this participant's points, don't terminal entire job
-    if(j.items?.length&&j.isPointHelper){
-      j.isHelper=false;j.isPointHelper=false;j._myPoints=[];
+    if(j.items?.length&&(j.isPointHelper||hasPointAssignment(j,A.myId))){
+      j.isHelper=false;j.isPointHelper=false;j.isPointApplicant=false;j._myPoints=[];
       (j.items||[]).forEach(it=>{if(it.assignedTo===A.myId){it.assignedTo=null;it.assignedName=null;it.assignedStatus=null;it.status='open';}});
-      if(!A.ratings[A.myId])A.ratings[A.myId]=[];
-      A.ratings[A.myId].push({score:1,comment:'Fullførte aldri.',jobId:m.jid,raterName:j.creatorName||'?',ts:now(),nd:true});
-      gossip({t:'RAT',uid:A.myId,ratings:A.ratings[A.myId]});
+      A._deadJobs.add(m.jid);A.myJobs=A.myJobs.filter(x=>x.id!==m.jid);delete A._unreadJobs[m.jid];
+      if(hasFS())fsCheckRatings([A.myId]);
       if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;
       notify('⚠️','Du fikk et permanent merke for denne oppgaven');persist();updateB();sR();break;}
     // Legacy: terminate entire job
     j.status='never_done';fsUpdatePostStatus(m.jid,'never_done');
-    if(!A.ratings[A.myId])A.ratings[A.myId]=[];
-    A.ratings[A.myId].push({score:1,comment:'Fullførte aldri.',jobId:m.jid,raterName:j.creatorName||'?',ts:now(),nd:true});
-    if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;gossip({t:'RAT',uid:A.myId,ratings:A.ratings[A.myId]});persist();updateB();sR();break;}
-  case 'BM':{if(!m.jid||!m.text)break;if(m._mid){if(A._seenMids.has(m._mid))break;A._seenMids.add(m._mid);}
-    addJMsg(m.jid,{from,name:m.name||'?',text:m.text,audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||now()});
-    if(m._mid)send(from,{t:'MA',_mid:m._mid});
+    if(hasFS())fsCheckRatings([A.myId]);
+    if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;persist();updateB();sR();break;}
+  case 'BM':{if(!m.jid||!m.text)break;if(m._mid&&A._seenMids.has(m._mid)){var _bak='jc:'+m._mid;if(!A._seenAcks.has(_bak)){A._seenAcks.add(_bak);send(from,{t:'MA',_mid:m._mid});fsWriteJobChatAck(from,m.jid,m._mid);persist();}break;}
+    if(m._mid)A._seenMids.add(m._mid);
+    addJMsg(m.jid,{from,name:m.name||'?',text:m.text,audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||now(),_mid:m._mid||null});
+    if(m._mid){var _bak2='jc:'+m._mid;if(!A._seenAcks.has(_bak2)){A._seenAcks.add(_bak2);send(from,{t:'MA',_mid:m._mid});fsWriteJobChatAck(from,m.jid,m._mid);}}
     if(!((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===m.jid)){A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;notify('💬 '+(m.name||'?'),m.text?.substr(0,40),()=>go('jobDetail',{jobId:m.jid}));}
     persist();updateB();if((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===m.jid)sR();break;}
-  case 'DM':{if(m._mid){if(A._seenMids.has(m._mid))break;A._seenMids.add(m._mid);}
-    if(m._mid)send(from,{t:'MA',_mid:m._mid});
-    if(m.enc&&!m.audioUrl&&!m.imageUrl){decFrom(m.text,A.peers.get(from)?.epub).then(pt=>{addDM(from,{from,name:m.name,text:pt,ts:m.ts||now()});
-      if(A.screen!=='dm'||A.params.peerId!==from){notify('✉️ '+(m.name||''),pt?.substr?.(0,40));A.unreadChat++;A._unreadDMs[from]=(A._unreadDMs[from]||0)+1;}updateB();persist();sR();});}
-    else{addDM(from,{from,name:m.name,text:m.text,audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||now()});
-      if(A.screen!=='dm'||A.params.peerId!==from){notify('✉️ '+(m.name||''),m.text?.substr?.(0,40));A.unreadChat++;A._unreadDMs[from]=(A._unreadDMs[from]||0)+1;}updateB();persist();sR();}break;}
+  case 'DM':{if(m._mid&&A._seenMids.has(m._mid)){send(from,{t:'MA',_mid:m._mid});fsWriteDMAck(from,m._mid);break;}
+    ingestDM(from,m).then(ok=>{if(ok&&m._mid){send(from,{t:'MA',_mid:m._mid});fsWriteDMAck(from,m._mid);}});break;}
   case 'RR':{if(!m.to||!m.msg)break;
     if(m.to===A.myId){const rrFrom=m.originalFrom||m.from||from;const isDup=m.mid&&A._seenMids.has('r:'+m.mid);
       if(!isDup&&!A.blocked.has(rrFrom)){if(m.mid)A._seenMids.add('r:'+m.mid);handleD(rrFrom,m.msg);}
@@ -1356,6 +1490,7 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     else{_paj.items[m.idx].assignedTo=null;_paj.items[m.idx].assignedName=null;_paj.items[m.idx].assignedStatus=null;_paj.items[m.idx].status='open';
       notify('↩️',dn(from)+' takket nei til punkt');}
     fsUpdatePostItems(m.jid,_paj.items);
+    var _pans=pointOwnerStatus(_paj);if(_pans!==_paj.status){_paj.status=_pans;fsUpdatePostStatus(m.jid,_pans);}
     if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;persist();updateB();sR();break;}
   case 'GQ':{if(!m.gid||!m.peerId)break;
     var _gq=A.groups.find(x=>x.id===m.gid);if(!_gq||_gq.creatorId!==A.myId)break;
@@ -1870,7 +2005,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
       ${avHtml(pid,nm,32)}<div style="flex:1"><div style="font-size:13px;font-weight:600">${esc(nm)}</div>
       <div style="font-size:11px;color:var(--t3)">${dn4}/${pts.length} punkt ferdig</div></div>
       <button class="btn br bsm" style="width:auto;padding:6px 10px;font-size:11px" onclick="showConfirm('Aldri gjort opp?','${escA(nm)} får et permanent merke synlig for alle.','Ja, merk',()=>markParticipantNeverDone('${escA(j.id)}','${escA(pid)}'))">⚠️</button></div>`;}).join('')}</div>`;}
-  if(isO&&j.status==='active'&&!j.items?.length)b+=`<button class="btn br" style="margin-bottom:4px" onclick="showConfirm('Aldri gjort opp?','Er du sikker? Dette gir personen et permanent merke som alle kan se.','Ja, merk som aldri gjort',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='never_done';send(x.helperId,{t:'NP',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','never_done');if(!A.ratings[x.helperId])A.ratings[x.helperId]=[];A.ratings[x.helperId].push({score:1,comment:'Aldri gjort opp.',jobId:'${escA(j.id)}',raterName:A.myName,ts:now(),nd:true});gossip({t:'RAT',uid:x.helperId,ratings:A.ratings[x.helperId]});}persist();render();})">⚠️ Aldri gjort opp</button>
+  if(isO&&j.status==='active'&&!j.items?.length)b+=`<button class="btn br" style="margin-bottom:4px" onclick="showConfirm('Aldri gjort opp?','Er du sikker? Dette gir personen et permanent merke som alle kan se.','Ja, merk som aldri gjort',()=>{var x=A.myJobs.find(z=>z.id==='${escA(j.id)}');if(x){x.status='never_done';send(x.helperId,{t:'NP',jid:'${escA(j.id)}'});fsUpdatePostStatus('${escA(j.id)}','never_done');addRating(x.helperId,{score:1,comment:'Aldri gjort opp.',jobId:'${escA(j.id)}',raterName:A.myName,ts:now(),nd:true});}persist();render();})">⚠️ Aldri gjort opp</button>
     <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Gir personen et permanent merke synlig for alle.</div>`;
   // Chat is inline below — no separate "Åpne chat" button needed
   if(isH&&j.status==='active')b+=`<button class="btn br" style="margin-top:8px" onclick="showConfirm('Trekke deg?','Er du sikker? Eieren blir varslet.','Ja, trekk meg',()=>{withdrawHelp('${escA(j.id)}','${escA(j.creatorId)}');go('mine');})">↩️ Trekk meg fra jobben</button>`;
@@ -1995,13 +2130,16 @@ window.doHelpPoints=(jid,cid)=>{var existing=A.myJobs.find(x=>x.id===jid);
   if(!existing){A.openJobs.delete(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
     fylke:oj?.fylke,by:oj?.by,imageUrl:oj?.imageUrl,imageData:oj?.imageData,groupId:oj?.groupId,groupName:oj?.groupName,jobDate:oj?.jobDate,jobTime:oj?.jobTime,
     creatorId:cid,creatorName:oj?.creatorName,status:'pending',isHelper:true,isPointApplicant:true,_myPoints:pts.slice(),ts:now()});
-  }else{var _old=existing._myPoints||[];existing._myPoints=[..._old,...pts.filter(p=>!_old.includes(p))];existing.isPointApplicant=true;existing.status='pending';}
+  }else{var _old=existing._myPoints||[];existing._myPoints=[..._old,...pts.filter(p=>!_old.includes(p))];existing.isPointApplicant=true;
+    if(!(hasPointAssignment(existing,A.myId)||existing.isPointHelper))existing.status='pending';
+    else if(!['active','pending_review','done'].includes(existing.status))existing.status='active';}
   var _sendPts=existing?existing._myPoints.slice():pts.slice();
   send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,points:_sendPts});
   if(hasFS()){try{fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId).set({id:A.myId,name:A.myName,msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,points:_sendPts,type:'application',ts:Date.now()},{merge:true}).catch(e=>console.warn('[FS] interest write',e));}catch(e){}}
   delete A._pointPick[jid];persist();go('mine');notify('✅','Søknad sendt for '+pts.length+' punkt'+(pts.length>1?'er':'')+'!');};
 window.withdrawHelp=async(jid,cid)=>{if(D())console.log('[withdrawHelp]',{jid,cid,connOpen:!!A.conns.get(cid)?.open});
   var wj=A.myJobs.find(z=>z.id===jid);
+  var _wholeWasAssigned=!!(wj&&['active','pending_review'].includes(wj.status)&&!wj.items?.length);
   // Point-branch: reopen my assigned points OR withdraw point-applicant state
   if(wj&&wj.items?.length&&(hasPointAssignment(wj,A.myId)||wj.isPointApplicant||wj.isPointHelper)){
     var n=reopenWithdrawnPoints(wj,A.myId);
@@ -2022,14 +2160,13 @@ window.withdrawHelp=async(jid,cid)=>{if(D())console.log('[withdrawHelp]',{jid,ci
     if(D())console.log('[withdrawHelp] terminal',{jid,newStatus:wj.status});
   }
   A._deadJobs.add(jid);send(cid,{t:'JW',jid});
+  if(_wholeWasAssigned&&hasFS())fsUpdatePostStatus(jid,'open',{helperId:null,helperName:null});
   if(hasFS())try{var _iRef=fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId);
     _iRef.get().then(d=>{if(d.exists){var dt=d.data();if(dt.audioUrl){fsDeleteMediaUrl(dt.audioUrl);if(D())console.log('[withdrawHelp] cleanup audioUrl',jid);}}
       _iRef.delete().catch(function(){});}).catch(function(){});}catch(e){}
   persist();notify('↩️','Trukket tilbake');};
 window.doRate=(jid,tid)=>{if(D())console.log('[doRate]',{jid,tid,score:A.nb.rating});const s=A.nb.rating||0;if(!s){notify('⚠️','Gi en vurdering');return;}
-  const c=A.nb._rc||$('rc')?.value?.trim()||'';if(tid){if(!A.ratings[tid])A.ratings[tid]=[];
-    A.ratings[tid].push({score:s,comment:c,jobId:jid,raterName:A.myName,ts:now(),nd:false});
-    gossip({t:'RAT',uid:tid,ratings:A.ratings[tid]});}
+  const c=A.nb._rc||$('rc')?.value?.trim()||'';if(tid)addRating(tid,{score:s,comment:c,jobId:jid,raterName:A.myName,ts:now(),nd:false});
   A.rated.add(jid);A.nb.rating=0;A.nb._rc='';
   // Cleanup temp connection + offer friendship
   var tc=A.tempConns.get(jid);if(tc){A.tempConns.delete(jid);
@@ -2068,9 +2205,7 @@ window.markParticipantNeverDone=async function(jid,pid){var j=A.myJobs.find(x=>x
   if(!j||!j.items?.length||j.creatorId!==A.myId)return;
   var nm=pointAssigneeName(j,pid);var n=reopenWithdrawnPoints(j,pid);
   if(!n){notify('⚠️','Fant ingen punkt for denne deltakeren');return;}
-  if(!A.ratings[pid])A.ratings[pid]=[];
-  A.ratings[pid].push({score:1,comment:'Aldri gjort opp.',jobId:jid,raterName:A.myName,ts:now(),nd:true});
-  gossip({t:'RAT',uid:pid,ratings:A.ratings[pid]});
+  addRating(pid,{score:1,comment:'Aldri gjort opp.',jobId:jid,raterName:A.myName,ts:now(),nd:true});
   var ns=pointOwnerStatus(j);j.status=ns;
   await fsUpdatePostItems(jid,j.items);fsUpdatePostStatus(jid,ns);
   send(pid,{t:'NP',jid});
@@ -2207,8 +2342,8 @@ window.jdCS=(jid,oId)=>{const inp=$('jd-ci');if(!inp?.value.trim())return;const 
 // ═══ DM ═══
 function vDM(){const pid=A.params.peerId;const nm=dn(pid,A.peers.get(pid)?.name);const msgs=A.dms[pid]||[];
   return`<div class="scr" style="padding-bottom:10px"><div class="tbar"><button class="bk" onclick="go('chatHub')">Tilbake</button><div class="pgt">${esc(nm)}</div></div>
-  <div class="ibox">Ende-til-ende kryptert.</div>
-  <div style="font-size:11px;color:var(--t3);text-align:center;padding:0 0 8px">Direktemeldinger leveres når begge er online</div>
+  <div class="ibox">Tekstmeldinger er ende-til-ende kryptert.</div>
+  <div style="font-size:11px;color:var(--t3);text-align:center;padding:0 0 8px">Tekst som kan krypteres lagres kryptert og leveres også senere. Bilder og lyd huskes også, men sendes ikke med samme kryptering.</div>
   <div class="chwp"><div class="chms" id="ch-m">${!msgs.length?'<div class="msg ms">Ingen meldinger ennå. Skriv noe for å starte samtalen.</div>':''}
   ${msgs.map(m=>`<div class="msg ${m.from===A.myId?'mm':'mo'}">${m.imageUrl?`<img src="${esc(m.imageUrl)}" style="max-width:220px;max-height:300px;border-radius:12px;display:block;margin-bottom:4px;cursor:pointer;object-fit:contain" onclick="event.stopPropagation();showImg('${escA(m.imageUrl)}')">`:m.audioUrl?`<button style="display:inline-flex;align-items:center;gap:12px;background:var(--s2);border:1px solid var(--s3);border-radius:16px;padding:12px 16px;color:inherit;font-size:16px;font-weight:700;min-height:48px;cursor:pointer" onclick="playChatAudio('${escA(m.audioUrl)}')">▶ Lydmelding (${esc(m.duration||'?')}s)</button>`:esc(m.text)}<div class="mt2">${ago(m.ts)}${m.from===A.myId?' '+(m._status==='delivered'?'●':'○'):''}</div></div>`).join('')}
   </div>${window._pendingAudio?`<div style="padding:8px 12px;background:var(--gb);border:1px solid var(--gbb);border-radius:10px;margin-bottom:8px;display:flex;align-items:center;gap:8px">
@@ -2229,8 +2364,11 @@ function vDM(){const pid=A.params.peerId;const nm=dn(pid,A.peers.get(pid)?.name)
   <button style="width:44px;height:44px;border-radius:22px;background:var(--pr);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="dmS('${escA(pid)}')">➤</button>
   </div></div></div></div>`;}
 window.dmS=async pid=>{const inp=$('dmi');if(!inp?.value.trim())return;const raw=inp.value.trim();const peer=A.peers.get(pid);
-  let enc=raw,isE=false;if(peer?.epub&&peer?.epubV!==false){try{const r=await encFor(raw,peer.epub);if(r){enc=r;isE=true;}}catch(e){}}else if(peer?.epub&&peer?.epubV===false){notify('⚠️','Krypteringsnøkkel ikke verifisert');}
-  const dmid=uid();const dts=now();addDM(pid,{from:A.myId,name:A.myName,text:raw,ts:dts,_mid:dmid,_status:'sent'});send(pid,{t:'DM',name:A.myName,text:enc,enc:isE,ts:dts,_mid:dmid});
+  if((!peer?.epub||peer?.epubV===false)&&hasFS())await hydratePeerCryptoFromFs(pid,dn(pid));
+  const peerNow=A.peers.get(pid)||peer;
+  let enc=raw,isE=false;if(peerNow?.epub&&peerNow?.epubV!==false){try{const r=await encFor(raw,peerNow.epub);if(r){enc=r;isE=true;}}catch(e){}}else if(peerNow?.epub&&peerNow?.epubV===false){notify('⚠️','Krypteringsnøkkel ikke verifisert');}
+  const dmid=uid();const dts=now();const dmsg={t:'DM',name:A.myName,text:enc,enc:isE,ts:dts,_mid:dmid,senderPub:A.pubB64||'',senderEpub:A.ecdhPubB64||'',senderEsig:A.ecdhSig||''};
+  addDM(pid,{from:A.myId,name:A.myName,text:raw,ts:dts,_mid:dmid,_status:'sent'});send(pid,dmsg);fsWriteDM(pid,dmsg);
   inp.value='';persist();render();setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},50);};
 
 // ═══ CONTACTS ═══
@@ -2813,7 +2951,7 @@ async function boot(){
     // Background: load discoverable posts from Firestore
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
     fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'friends posts');});
-    fsCheckInterests();fsCheckJobChats();fsCheckJobStatus();fsCheckPointUpdates();fsCleanupOrphanedGroups();fsSyncMyPosts();fsCheckMyInvitations();fsCheckMyGroupRequests();fsCheckMyGroups();fsCheckAdminGroupRequests();
+    fsCheckInterests();fsCheckJobChats();fsCheckMyJobChatAcks();fsCheckMyDMs();fsCheckMyDMAcks();fsCheckRatings();fsCheckJobStatus();fsCheckPointUpdates();fsCleanupOrphanedGroups();fsSyncMyPosts();fsCheckMyInvitations();fsCheckMyGroupRequests();fsCheckMyGroups();fsCheckAdminGroupRequests();
     // Load group posts from Firestore
     if(hasFS()&&A.groups.length)A.groups.forEach(g=>{fbDb.collection('posts').where('groupId','==',g.id).where('status','==','open').orderBy('ts','desc').limit(50).get()
       .then(snap=>{var added=0;snap.docs.forEach(d=>{var p=d.data();if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(e=>console.warn('[FS] groupPosts',e));});
@@ -2845,24 +2983,24 @@ async function boot(){
     // EVERY round: posts + interests + status (critical path)
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
     fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
-    fsCheckInterests();
+    fsCheckInterests();fsCheckMyDMs();fsCheckMyDMAcks();
     fsCheckJobStatus();fsCheckMyInvitations();fsCheckMyGroupRequests();fsCheckMyGroups();fsCheckAdminGroupRequests();
     // EVERY 2nd round: job chats + public groups + group posts + group orphan cleanup + point updates
     if(r%2===0){
-      fsCheckJobChats();fsCheckPointUpdates();
+      fsCheckJobChats();fsCheckMyJobChatAcks();fsCheckPointUpdates();
       if(['groups','groupDetail'].includes(A.screen))fsRefreshPublicGroupsIfNeeded();
       fsCleanupOrphanedGroups();
       if(['feed','groups','groupDetail'].includes(A.screen))fsRefreshGroupPostsIfNeeded();
     }
     // EVERY 3rd round: master-slave sync
-    if(r%3===0)fsSyncMyPosts();
+    if(r%3===0){fsSyncMyPosts();fsCheckRatings();}
     // EVERY 4th round: orphan job cleanup
     if(r%4===3)fsCleanupOrphanedJobs();
   },3e5);
   // Foreground recovery
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&A.myName){
     if(A.peer?.disconnected&&!A.peer.destroyed)try{A.peer.reconnect();}catch(e){}
-    A.contacts.forEach(c=>tryC(c.id));flushQ();sR();
+    A.contacts.forEach(c=>tryC(c.id));flushQ();fsCheckJobChats();fsCheckMyJobChatAcks();fsCheckMyDMs();fsCheckMyDMAcks();fsCheckRatings();sR();
     setTimeout(()=>{A.contacts.forEach(c=>tryC(c.id));flushQ();},2e3);
     setTimeout(()=>{A.contacts.forEach(c=>tryC(c.id));A.conns.forEach((_,id)=>{deliverR(id);offerRH(id);syncP(id);});flushQ();sR();},5e3);
   }});
