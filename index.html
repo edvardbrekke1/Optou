@@ -925,7 +925,7 @@ async function respondInvite(accepted){var inv=A._showingInvite;if(!inv){documen
     if(!accepted){persist();sR();showNextInvite();return;}
     var dj=A.openJobs.get(inv.jid);
     if(!dj&&hasFS()){try{var djDoc=await fbDb.collection('posts').doc(inv.jid).get();if(djDoc.exists)dj={...djDoc.data()};}catch(e){}}
-    if(!dj||['cancelled','done','never_done'].includes(dj.status)){notify('⚠️','Jobben er ikke lenger tilgjengelig');persist();sR();showNextInvite();return;}
+    if(!dj||['cancelled','done','never_done'].includes(dj.status)||(Array.isArray(dj.targetIds)&&!dj.targetIds.includes(A.myId))){dropOpenJobLocal(inv.jid);notify('⚠️','Denne direkte foresporselen gjelder ikke lenger deg');persist();sR();showNextInvite();return;}
     doHelp(inv.jid,inv.creatorId);
     showNextInvite();
     return;
@@ -1454,7 +1454,16 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(isInvalidDirectJob(m.job)){if(D())console.log('[INV] blocked — invalid direct job',{jid:m.job.id,targetIds:m.job.targetIds,items:m.job.items?.length||0});break;}
     var _exJob=A.myJobs.find(j=>j.id===m.job.id);
     if(_exJob){if(D())console.log('[INV] blocked — in myJobs',{jid:m.job.id,status:_exJob.status});break;}
-    if(A.openJobs.has(m.job.id))break;
+    if(A.openJobs.has(m.job.id)){
+      if(m.job.visibility==='direct'){
+        const exj=A.openJobs.get(m.job.id);const upd={...exj,...m.job,isFromContact:true};
+        A.openJobs.set(m.job.id,upd);A._unreadJobs[m.job.id]=(A._unreadJobs[m.job.id]||0)+1;
+        if(A.screen!=='mine')A.unreadActivity++;queueDirectInvite(upd);
+        notify('📩 '+(m.job.creatorName||''),m.job.title?.substr(0,40),()=>go('jobDetail',{jobId:m.job.id}));
+        updateB();persist();sR();showNextInvite();
+      }
+      break;
+    }
     if(A.blocked.has(m.job.creatorId)||(m.job.expiresAt&&m.job.expiresAt!==0&&m.job.expiresAt<=now()))break;
     if(m.job.groupId&&!A.groups.find(g=>g.id===m.job.groupId))break;
     const rj={...m.job,isFromContact:true};
@@ -1473,6 +1482,7 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     if(D())console.log('[JR] received',{from,jid:m.jid,jobFound:!!j,jobStatus:j?.status,alreadyInInterests:j?.interests?.some(x=>x.id===from)});
     if(!j){if(D())console.log('[JR] ignored — job not found',{jid:m.jid});break;}
     if(!['open','accepting'].includes(j.status)){if(D())console.log('[JR] ignored — wrong status',{jid:m.jid,status:j.status});break;}
+    if(j.visibility==='direct'&&Array.isArray(j.targetIds)&&j.targetIds[0]&&j.targetIds[0]!==from){if(D())console.log('[JR] ignored — wrong direct target',{jid:m.jid,expected:j.targetIds[0],from});break;}
     if(!j.interests)j.interests=[];var _existInt=j.interests.find(x=>x.id===from);
     if(_existInt){_existInt.msg=m.message||'';_existInt.audioUrl=m.audioUrl||null;_existInt.audioDur=m.audioDur||0;_existInt.points=Array.isArray(m.points)?m.points.slice():[];_existInt.ts=now();}
     else j.interests.push({id:from,name:m.name,msg:m.message||'',audioUrl:m.audioUrl||null,audioDur:m.audioDur||0,points:Array.isArray(m.points)?m.points.slice():[],ts:now()});
@@ -1687,8 +1697,21 @@ function queueDirectInvite(job){if(!job?.id||job.visibility!=='direct')return fa
   if(A._pendingInvites.find(x=>(x.kind||'point')==='direct'&&x.jid===job.id))return false;
   A._pendingInvites.push({kind:'direct',jid:job.id,title:job.title||'',creatorId:job.creatorId,creatorName:job.creatorName||'',recipientId:A.myId,status:'pending',ts:job.ts||now()});
   return true;}
+function clearDirectInviteQueue(jid){
+  if(!jid)return;
+  A._pendingInvites=A._pendingInvites.filter(x=>!((x.kind||'point')==='direct'&&x.jid===jid));
+  if((A._showingInvite?.kind||'point')==='direct'&&A._showingInvite?.jid===jid){
+    document.getElementById('invite-modal')?.remove();
+    A._showingInvite=null;
+    showNextInvite();
+  }}
+function pruneDirectOpenJobs(remotePosts){
+  var keep=new Set((remotePosts||[]).map(p=>p.id));var removed=0;
+  [...A.openJobs.entries()].forEach(([jid,j])=>{if(j?.visibility==='direct'&&j.creatorId!==A.myId&&!keep.has(jid)){clearDirectInviteQueue(jid);if(dropOpenJobLocal(jid))removed++;}});
+  return removed;}
 function dropOpenJobLocal(jid){var oj=A.openJobs.get(jid);if(!oj)return false;
   if(oj.visibility==='direct'&&(A._unreadJobs[jid]||0)&&A.unreadActivity>0)A.unreadActivity=Math.max(0,A.unreadActivity-1);
+  if(oj.visibility==='direct')clearDirectInviteQueue(jid);
   delete A._unreadJobs[jid];A.openJobs.delete(jid);return true;}
 
 // ═══ ROUTER ═══
@@ -1813,12 +1836,12 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
   let jobs=[...A.openJobs.values()].filter(j=>j.visibility!=='direct'&&(!j.expiresAt||j.expiresAt===0||j.expiresAt>now())&&!['cancelled','done','never_done'].includes(j.status)&&(cIds.has(j.creatorId)||j.isFromContact||j.isPublic||(j.groupId&&gids.has(j.groupId))));
   const ff=A.feedFilter;
   if(ff.type)jobs=jobs.filter(j=>j.type===ff.type);
-  if(!ff.allNorway){if(ff.by)jobs=jobs.filter(j=>j.visibility==='direct'||j.by===ff.by);else if(ff.fylke)jobs=jobs.filter(j=>j.visibility==='direct'||j.fylke===ff.fylke);else if(A.myFylke)jobs=jobs.filter(j=>j.visibility==='direct'||j.fylke===A.myFylke);}
+  if(!ff.allNorway){if(ff.by)jobs=jobs.filter(j=>j.by===ff.by);else if(ff.fylke)jobs=jobs.filter(j=>j.fylke===ff.fylke);else if(A.myFylke)jobs=jobs.filter(j=>j.fylke===A.myFylke);}
   // Sort: private group posts first, then open group, then rest, within each by time
   const gPriv=new Set(A.groups.filter(g=>g.private).map(g=>g.id));
   const gPub=new Set(A.groups.filter(g=>!g.private).map(g=>g.id));
-  jobs.sort((a,b)=>{const ap=a.visibility==='direct'?0:a.groupId&&gPriv.has(a.groupId)?1:a.groupId&&gPub.has(a.groupId)?2:3;
-    const bp=b.visibility==='direct'?0:b.groupId&&gPriv.has(b.groupId)?1:b.groupId&&gPub.has(b.groupId)?2:3;
+  jobs.sort((a,b)=>{const ap=a.groupId&&gPriv.has(a.groupId)?1:a.groupId&&gPub.has(a.groupId)?2:3;
+    const bp=b.groupId&&gPriv.has(b.groupId)?1:b.groupId&&gPub.has(b.groupId)?2:3;
     return ap!==bp?ap-bp:b.ts-a.ts;});
   const ic=A.myJobs.filter(j=>j.creatorId===A.myId&&j.status==='accepting'&&j.interests?.length).length;const noC=!A.contacts.length;
   const myAct=A.myJobs.filter(j=>j.creatorId===A.myId&&['open','accepting','active'].includes(j.status));
@@ -2097,6 +2120,12 @@ function fsRefreshDetailOpenJob(jid){
       return;
     }
     var fs=doc.data();
+    if(oj.visibility==='direct'&&Array.isArray(fs.targetIds)&&!fs.targetIds.includes(A.myId)){
+      dropOpenJobLocal(jid);persist();updateB();
+      if(A.screen==='jobDetail'&&A.params.jobId===jid){notify('ℹ️','Denne direkte foresporselen gjelder ikke lenger deg');go('mine');}
+      else sR();
+      return;
+    }
     if(['done','cancelled','never_done','declined'].includes(fs.status)){
       dropOpenJobLocal(jid);persist();updateB();
       if(A.screen==='jobDetail'&&A.params.jobId===jid){notify('ℹ️','Innlegget er ikke lenger tilgjengelig');go(oj.groupId?'groupDetail':'feed',oj.groupId?{gid:oj.groupId}:undefined);}
@@ -2119,6 +2148,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   if(!j)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('feed')">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Fant ikke innlegget.</div></div></div>`;
   if(!A.myJobs.find(x=>x.id===jid)&&A.openJobs.has(jid))fsRefreshDetailOpenJob(jid);
   const isO=j.creatorId===A.myId,isH=j.isHelper,ints=j.interests||[],pr=avgR(j.creatorId),rated=A.rated.has(j.id);
+  const directPid=j.visibility==='direct'?(j.targetIds||[])[0]:null,directName=directPid?dn(directPid,directPid.substr(0,8)):'';
   const typeMap={help:['🤝','Jobb','bg1'],service:['💼','Tilbyr','bp1']};
   const[tIco,tName,tCls]=typeMap[j.type]||['📋','Innlegg','bg1'];
   let b='';
@@ -2143,8 +2173,13 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
     ${it.audioUrl?`<div style="font-size:11px;color:var(--t3)">Trykk ▶ for å høre (${esc(it.duration)}s)</div>`:''}</div></div>`;}).join('')}</div>`:''}${imgSrc&&imgSrc!=='[img]'?`<img src="${esc(imgSrc)}" style="width:100%;max-height:250px;object-fit:contain;background:var(--s2);display:block;border-radius:12px;margin:0 0 12px 0;cursor:pointer" onclick="showImg('${escA(imgSrc)}')">`:''}
   <div class="dv"></div>
   ${[['Lagt ut av',esc(j.creatorName)+(pr?' · ⭐'+pr:'')],j.reward?['Tilbud',esc(j.reward)]:null,j.by||j.fylke||j.location?['Sted','📍 '+esc([j.by,FYLKER.find(f=>f.id===j.fylke)?.name,j.location].filter(Boolean).join(', '))]:null,j.groupName?['Gruppe','🏘️ '+esc(j.groupName)]:null,
-  j.jobDate?['Når',fmtDate(j.jobDate,j.jobTime)]:null,j.helperName?['Hjelper',esc(j.helperName)]:null,['Status',esc({open:'Åpent',accepting:'Venter',pending:'Venter svar',active:'Pågår',pending_review:'Ferdigmeldt',done:'✅ Fullført',declined:'Avslått',never_done:'❌ Aldri gjort',cancelled:'Kansellert'}[j.status]||j.status)]
+  directPid&&isO&&['open','accepting'].includes(j.status)&&!ints.length?['Invitert til',esc(directName)]:null,
+  j.jobDate?['Når',fmtDate(j.jobDate,j.jobTime)]:null,j.helperName?['Hjelper',esc(j.helperName)]:null,['Status',esc(isO&&j.visibility==='direct'&&j.status==='open'&&!ints.length?'Venter på svar':({open:'Åpent',accepting:'Venter',pending:'Venter svar',active:'Pågår',pending_review:'Ferdigmeldt',done:'✅ Fullført',declined:'Avslått',never_done:'❌ Aldri gjort',cancelled:'Kansellert'}[j.status]||j.status))]
   ].filter(Boolean).map(([k,v])=>`<div class="drow"><span>${k}</span><span class="dval">${v}</span></div>`).join('')}</div>`;
+  if(isO&&j.visibility==='direct'&&['open','accepting'].includes(j.status)&&!ints.length)b+=`<div class="cd" style="margin-bottom:10px"><div style="font-size:14px;font-weight:700;margin-bottom:6px">📩 Direkte foresporsel sendt</div>
+  <div style="font-size:12px;color:var(--t2);margin-bottom:10px">Venter på svar fra <strong>${esc(directName||'valgt person')}</strong>.</div>
+  <div class="brow"><button class="btn bs bsm" style="flex:1" onclick="reinviteDirect('${escA(j.id)}')">↻ Inviter på nytt</button>
+  <button class="btn bp bsm" style="flex:1" onclick="pickDirectTarget('${escA(j.id)}')">👤 Velg annen</button></div></div>`;
   if(isO&&j.status==='accepting'&&ints.length)b+=`<div class="cd cdt" onclick="go('interests',{jobId:'${escA(j.id)}'})" style="background:var(--yb);border-color:#FDE68A"><div style="font-size:14px;font-weight:700;color:#92400E">⚡ ${ints.length} vil hjelpe → velg</div></div>`;
   if(isO&&['open','accepting'].includes(j.status))b+=`<button class="btn br" style="margin-bottom:10px" onclick="showConfirm('Kansellere?','Vil du kansellere innlegget?','Ja, kanseller',()=>cancelMyJob('${escA(j.id)}'))">🗑 Kanseller</button>`;
   if(isO&&['active','pending_review'].includes(j.status))b+=`<button class="btn br" style="margin-bottom:10px" onclick="showConfirm('Kansellere?','Du har allerede en hjelper. Er du sikker på at du vil kansellere?','Ja, kanseller',()=>cancelMyJob('${escA(j.id)}'))">🗑 Kanseller</button>`;
@@ -2262,8 +2297,11 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
     </div></div>`}`;}
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go(A.prevScreen||'feed')">Tilbake</button><div class="pgt">Detaljer</div></div>${b}</div>`;}
 
-window.doHelp=(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A.openJobs.get(jid);const msg=$('jmsg')?.value?.trim()||'';
+window.doHelp=async(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A.openJobs.get(jid);const msg=$('jmsg')?.value?.trim()||'';
   if(D())console.log('[doHelp]',{jid,cid,isContact:!!A.contacts.find(c=>c.id===cid),connOpen:!!A.conns.get(cid)?.open,hasAudio:!!window._helpAudio});
+  if(oj?.visibility==='direct'&&hasFS()){try{var _dj=await fbDb.collection('posts').doc(jid).get();
+      if(!_dj.exists||!Array.isArray(_dj.data()?.targetIds)||!_dj.data().targetIds.includes(A.myId)||['cancelled','done','never_done','declined'].includes(_dj.data()?.status)){dropOpenJobLocal(jid);persist();updateB();sR();notify('⚠️','Denne direkte foresporselen gjelder ikke lenger deg');return;}
+    }catch(e){}}
   const ha=window._helpAudio;window._helpAudio=null;
   if(!A.contacts.find(c=>c.id===cid)){A.tempConns.set(jid,{peerId:cid,name:oj?.creatorName||'',ts:now()});tryC(cid);}
   dropOpenJobLocal(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
@@ -2272,6 +2310,37 @@ window.doHelp=(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A.open
   send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0});
   if(hasFS()){try{fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId).set({id:A.myId,name:A.myName,msg:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,ts:Date.now()}).catch(e=>console.warn('[FS] interest write',e));}catch(e){}}
   persist();go('mine');notify('✅','Interesse sendt!');};
+window.reinviteDirect=async function(jobId){
+  var j=A.myJobs.find(x=>x.id===jobId);
+  if(!j||j.creatorId!==A.myId||j.visibility!=='direct'){notify('⚠️','Fant ikke direktejobben');return;}
+  if(j.items?.length){notify('⚠️','Direktejobber kan ikke bruke punkter');return;}
+  if(j.interests?.length||j.helperId||!['open','accepting'].includes(j.status)){notify('ℹ️','Denne jobben er allerede i gang');return;}
+  var pid=(j.targetIds||[])[0];if(!pid){notify('⚠️','Velg en person først');return;}
+  j.status='open';j.interests=[];j.helperId=null;j.helperName=null;j.helperDone=false;
+  await fsMirrorPost(j);
+  send(pid,{t:'INV',job:{...stripJobForSend(j),fromContact:true}});
+  persist();render();notify('📩','Invitasjon sendt på nytt til '+dn(pid));};
+window.pickDirectTarget=function(jobId){
+  var j=A.myJobs.find(x=>x.id===jobId);
+  if(!j||j.creatorId!==A.myId||j.visibility!=='direct'){notify('⚠️','Fant ikke direktejobben');return;}
+  if(j.items?.length){notify('⚠️','Direktejobber kan ikke bruke punkter');return;}
+  if(j.interests?.length||j.helperId||!['open','accepting'].includes(j.status)){notify('ℹ️','Denne jobben er allerede i gang');return;}
+  var cur=(j.targetIds||[])[0]||'';var list=A.contacts.filter(c=>c.id!==cur);
+  var bg=document.createElement('div');bg.className='modal-bg';bg.id='direct-target-modal';
+  bg.innerHTML=`<div class="modal"><div style="font-size:16px;font-weight:800;margin-bottom:8px">👤 Velg ny person</div>
+    <div style="font-size:13px;color:var(--t2);margin-bottom:12px">Na sendes jobben til en annen person. Den gamle mottakeren forsvinner ved neste sync.</div>
+    ${list.length?list.map(c=>`<button class="btn bs" style="margin-bottom:8px;text-align:left;display:flex;align-items:center;gap:10px" onclick="setDirectTarget('${escA(jobId)}','${escA(c.id)}')">${avHtml(c.id,c.alias||c.name,28)}<span>${esc(c.alias||c.name)}</span></button>`).join(''):'<div style="font-size:13px;color:var(--t3);margin-bottom:12px">Ingen andre venner tilgjengelig.</div>'}
+    <button class="btn bs" id="_dt-close">Lukk</button></div>`;
+  document.body.appendChild(bg);
+  bg.querySelector('#_dt-close').onclick=()=>document.getElementById('direct-target-modal')?.remove();};
+window.setDirectTarget=async function(jobId,pid){
+  var j=A.myJobs.find(x=>x.id===jobId);
+  document.getElementById('direct-target-modal')?.remove();
+  if(!j||j.creatorId!==A.myId||j.visibility!=='direct')return;
+  j.targetIds=[pid];j.status='open';j.interests=[];j.helperId=null;j.helperName=null;j.helperDone=false;
+  await fsMirrorPost(j);
+  send(pid,{t:'INV',job:{...stripJobForSend(j),fromContact:true}});
+  persist();render();notify('📩','Invitasjon sendt til '+dn(pid));};
 window.togglePointInterest=(jid,idx)=>{if(!A._pointPick[jid])A._pointPick[jid]=[];
   var arr=A._pointPick[jid];var i=arr.indexOf(idx);
   if(i>=0)arr.splice(i,1);else{
@@ -2420,7 +2489,7 @@ function vMine(){
   if(mf==='active')filtered=A.myJobs.filter(j=>['open','accepting','pending','active','pending_review'].includes(j.status));
   else filtered=A.myJobs.filter(j=>j.status==='done');
   filtered.sort((a,b)=>b.ts-a.ts);
-  const mc=j=>{const isO=j.creatorId===A.myId;let[lbl,cls]=sm[j.status]||['—','bgr'];if(!isO&&j.status==='accepting'){lbl='Venter svar';cls='by1';}const sD=['done','declined','never_done','cancelled'].includes(j.status);
+  const mc=j=>{const isO=j.creatorId===A.myId;const _dp=j.visibility==='direct'?(j.targetIds||[])[0]:null;let[lbl,cls]=sm[j.status]||['—','bgr'];if(!isO&&j.status==='accepting'){lbl='Venter svar';cls='by1';}if(isO&&j.visibility==='direct'&&j.status==='open'&&!(j.interests?.length)){lbl='Venter svar';cls='by1';}const sD=['done','declined','never_done','cancelled'].includes(j.status);
     const tIco=j.type==='help'?'🤝':j.type==='service'?'💼':'📋';
     const visIco=j.visibility==='public'?'🌐 Offentlig':j.visibility==='direct'?'📩 Direkte':j.groupName?'🏘️ '+esc(j.groupName):'👥 Venner';
     const expDays=j.expiresAt&&j.expiresAt>0?Math.max(0,Math.ceil((j.expiresAt-now())/864e5)):0;const _ju=A._unreadJobs[j.id]||0;
@@ -2433,6 +2502,7 @@ function vMine(){
     ${j.jobDate?`<div style="font-size:12px;color:var(--pr);font-weight:600;margin-bottom:4px">${fmtDate(j.jobDate,j.jobTime)}</div>`:''}
     ${j.reward?`<div style="font-size:12px;color:var(--g2);font-weight:600;margin-bottom:4px">🎁 ${esc(j.reward)}</div>`:''}
     ${isO&&j.status==='accepting'&&j.interests?.length?`<div style="font-size:12px;color:var(--pr);font-weight:600;margin-bottom:4px">⚡ ${j.interests.length} interesserte</div>`:''}
+    ${isO&&j.visibility==='direct'&&['open','accepting'].includes(j.status)&&!(j.interests?.length)&&_dp?`<div style="font-size:12px;color:var(--t2);margin-bottom:4px">📩 Sendt til ${esc(dn(_dp,_dp.substr(0,8)))}</div>`:''}
     ${j.helperName&&['active','pending_review'].includes(j.status)?`<div style="font-size:12px;color:var(--t2);margin-bottom:4px">🤝 Hjelper: ${esc(j.helperName)}</div>`:''}
     ${expDays>0&&expDays<=30&&!sD?`<div style="font-size:11px;color:var(--t3)">Utløper om ${expDays} ${expDays===1?'dag':'dager'}</div>`:''}
     ${sD?`<button class="btn bs bsm" style="margin-top:6px;padding:6px;font-size:11px" onclick="event.stopPropagation();removeTerminalJob('${escA(j.id)}')">🗑 Fjern</button>`:''}</div>${_imgSrc?`<img src="${esc(_imgSrc)}" style="width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0">`:''}
@@ -3140,7 +3210,8 @@ async function boot(){
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
     fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'friends posts');});
     fsLoadDirectPosts().then(posts=>{var added=0,_new=[];posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});A._unreadJobs[p.id]=(A._unreadJobs[p.id]||0)+1;queueDirectInvite(p);added++;_new.push(p);}});
-      if(added>0){if(A.screen!=='mine')A.unreadActivity+=added;updateB();persist();sR();showNextInvite();_new.slice(0,3).forEach(p=>notify('📩 '+(p.creatorName||''),(p.title||'').substr(0,40),()=>go('jobDetail',{jobId:p.id})));}
+      var removed=pruneDirectOpenJobs(posts);
+      if(added>0||removed>0){if(added>0&&A.screen!=='mine')A.unreadActivity+=added;updateB();persist();sR();if(added>0)showNextInvite();if(added>0)_new.slice(0,3).forEach(p=>notify('📩 '+(p.creatorName||''),(p.title||'').substr(0,40),()=>go('jobDetail',{jobId:p.id})));}
       if(D())console.log('[FS] loaded',added,'direct posts');});
     fsCheckInterests();fsCheckJobChats();fsCheckMyJobChatAcks();fsCheckMyDMs();fsCheckMyDMAcks();fsCheckRatings();fsCheckJobStatus();fsCheckPointUpdates();fsCleanupOrphanedGroups();fsSyncMyPosts();fsCheckMyInvitations();fsCheckMyGroupRequests();fsCheckMyGroups();fsCheckAdminGroupRequests();
     // Load group posts from Firestore
@@ -3175,7 +3246,8 @@ async function boot(){
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
     fsLoadFriendsPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});added++;}});if(added>0){if(A.screen!=='feed')A.unreadFeed+=added;updateB();persist();sR();}}).catch(()=>{});
     fsLoadDirectPosts().then(posts=>{var added=0,_new=[];posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});A._unreadJobs[p.id]=(A._unreadJobs[p.id]||0)+1;queueDirectInvite(p);added++;_new.push(p);}});
-      if(added>0){if(A.screen!=='mine')A.unreadActivity+=added;updateB();persist();sR();showNextInvite();_new.slice(0,2).forEach(p=>notify('📩 '+(p.creatorName||''),(p.title||'').substr(0,40),()=>go('jobDetail',{jobId:p.id})));}}).catch(()=>{});
+      var removed=pruneDirectOpenJobs(posts);
+      if(added>0||removed>0){if(added>0&&A.screen!=='mine')A.unreadActivity+=added;updateB();persist();sR();if(added>0)showNextInvite();if(added>0)_new.slice(0,2).forEach(p=>notify('📩 '+(p.creatorName||''),(p.title||'').substr(0,40),()=>go('jobDetail',{jobId:p.id})));}}).catch(()=>{});
     fsCheckInterests();fsCheckMyDMs();fsCheckMyDMAcks();
     fsCheckJobStatus();fsCheckMyInvitations();fsCheckMyGroupRequests();fsCheckMyGroups();fsCheckAdminGroupRequests();
     // EVERY 2nd round: job chats + public groups + group posts + group orphan cleanup + point updates
