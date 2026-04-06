@@ -2818,6 +2818,34 @@ window.inviteToGroup=(gid,gname,pid)=>{if(D())console.log('[inviteToGroup]',{gid
   if(g&&!g.private&&g.invitePolicy==='admin'&&g.creatorId!==A.myId){notify('🔒','Kun admin kan invitere i denne gruppen');return;}
   send(pid,{t:'GI',gid,gname,gdesc:g?.desc||'',gprivate:g?.private||false,fromName:A.myName});
   notify('✅','Invitasjon sendt!');};
+function groupInvitableContacts(gid){const g=A.groups.find(x=>x.id===gid);if(!g)return[];
+  const memberIds=new Set(g._members||[]);memberIds.add(A.myId);
+  A.peers.forEach((p,pid)=>{if(p.gids?.includes(gid))memberIds.add(pid);});
+  return A.contacts.filter(c=>!memberIds.has(c.id)&&!(A.peers.get(c.id)?.gids?.includes(gid)));}
+window.openGroupInvite=(gid,gname)=>{const g=A.groups.find(x=>x.id===gid);
+  if(!g){notify('⚠️','Fant ikke gruppen');return;}
+  const canInvite=g.creatorId===A.myId||!(!g.private&&g.invitePolicy==='admin');
+  if(!canInvite){notify('🔒','Kun admin kan invitere i denne gruppen');return;}
+  const invitable=groupInvitableContacts(gid);
+  document.getElementById('group-invite-modal')?.remove();
+  const bg=document.createElement('div');bg.className='modal-bg';bg.id='group-invite-modal';
+  bg.innerHTML=`<div class="modal" style="max-width:380px">
+    <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:12px">
+      <div style="width:42px;height:42px;border-radius:21px;background:var(--pb);border:1px solid var(--pbb);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">👤➕</div>
+      <div><div style="font-size:17px;font-weight:800">Inviter medlemmer</div>
+      <div style="font-size:13px;color:var(--t2);line-height:1.5;margin-top:2px">Inviter venner direkte til <strong>${esc(gname||g.name||'gruppen')}</strong>, eller søk etter flere folk.</div></div>
+    </div>
+    ${invitable.length?`<div style="display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto;margin-bottom:12px">${invitable.map(c=>`<div class="gi-row" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--s2)">
+      ${avHtml(c.id,c.alias||c.name,36)}
+      <div style="flex:1;font-size:14px;font-weight:600">${esc(c.alias||c.name)}</div>
+      <button class="btn bp bsm" style="width:auto;padding:8px 14px;font-size:12px" onclick="inviteToGroup('${escA(g.id)}','${escA(g.name)}','${escA(c.id)}');this.closest('.gi-row')?.remove()">Inviter</button></div>`).join('')}</div>`
+      :`<div style="font-size:13px;color:var(--t3);background:var(--s2);border-radius:12px;padding:12px 14px;margin-bottom:12px">Ingen direkte venner å invitere akkurat nå. Du kan fortsatt søke etter folk nedenfor.</div>`}
+    <div class="fld" style="margin-bottom:10px"><input class="fi" id="grp-inv-search" placeholder="Søk etter folk..." oninput="searchGroupInvite(this.value,'${escA(g.id)}','${escA(g.name)}')" autocomplete="off"></div>
+    <div id="grp-inv-results" style="max-height:180px;overflow-y:auto"></div>
+    <button class="btn bs" id="_gi-close" style="margin-top:12px">Lukk</button></div>`;
+  document.body.appendChild(bg);
+  bg.querySelector('#_gi-close').onclick=()=>document.getElementById('group-invite-modal')?.remove();
+  bg.onclick=e=>{if(e.target===bg)bg.remove();};};
 window.joinKnownGroup=async id=>{if(D())console.log('[joinKnownGroup]',{id});if(!/^g[a-zA-Z0-9]{1,20}$/.test(id))return;
   if(A.groups.find(g=>g.id===id)){notify('⚠️','Allerede medlem');return;}
   // Verify group exists in Firestore before local join
@@ -2942,6 +2970,8 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
   // Background hydration: load pending requests for admin
   if(isAdmin&&hasFS()&&(!A._groupRequestsTs[gid]||now()-A._groupRequestsTs[gid]>30000)){A._groupRequestsTs[gid]=now();fsLoadGroupRequests(gid).then(reqs=>{A._groupRequests[gid]=reqs;sR();});}
   const gReqs=isAdmin?(A._groupRequests[gid]||[]):[];
+  const canInvite=isAdmin||!(!g.private&&g.invitePolicy==='admin');
+  const inviteCount=groupInvitableContacts(gid).length;
   // Combine posts from myJobs + openJobs, dedup, filter
   const seen=new Set();const allP=[];
   const _gterm=['cancelled','never_done','declined','done'];
@@ -2969,9 +2999,19 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
     <div><div style="font-size:20px;font-weight:800;color:var(--pr)">🔄 ${_sActive}</div><div style="font-size:10px;color:var(--t3);font-weight:600">Pågår</div></div>
     <div><div style="font-size:20px;font-weight:800;color:var(--bl)">📋 ${_sOpen}</div><div style="font-size:10px;color:var(--t3);font-weight:600">Åpne</div></div>
   </div></div>
-  <div style="display:flex;gap:8px;margin-bottom:14px">
-    <button class="btn bp bsm" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'help'};go('create')">🤝 Jobb</button>
-    <button class="btn bs bsm" style="flex:1" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}',type:'service'};go('create')">💼 Tilby noe</button></div>
+  <div class="cd" style="margin-bottom:12px;background:var(--pb);border-color:var(--pbb)">
+    <div style="font-size:15px;font-weight:800;margin-bottom:6px">✨ Lag innlegg i gruppen</div>
+    <div style="font-size:13px;color:var(--t2);line-height:1.55;margin-bottom:10px">Lag et nytt gruppeinnlegg. I neste steg velger du selv om det er en jobb du trenger hjelp til eller noe du vil tilby.</div>
+    <button class="btn bp" style="min-height:48px" onclick="A.nb={vis:'group',groupId:'${escA(g.id)}',groupName:'${escA(g.name)}'};go('create')">📝 Lag jobb eller tilbud</button>
+  </div>
+  ${canInvite?`<div class="cd" style="margin-bottom:12px;background:var(--gb);border-color:var(--gbb)">
+    <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px">
+      <div style="width:42px;height:42px;border-radius:21px;background:var(--sf);border:1px solid var(--gbb);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">👤➕</div>
+      <div><div style="font-size:15px;font-weight:800">Inviter medlemmer</div>
+      <div style="font-size:13px;color:var(--t2);line-height:1.5;margin-top:2px">Inviter venner direkte inn i gruppen, eller søk etter flere folk.</div></div>
+    </div>
+    <button class="btn bs" style="min-height:48px;border-color:var(--gbb)" onclick="openGroupInvite('${escA(g.id)}','${escA(g.name)}')">👤➕ Inviter medlemmer${inviteCount?` (${inviteCount})`:''}</button>
+  </div>`:''}
   ${gReqs.length?`<div class="slbl">📬 MEDLEMSFORESPØRSLER (${gReqs.length})</div>${gReqs.map(r=>{
     const rLoc=[r.by,r.fylke?FYLKER.find(f=>f.id===r.fylke)?.name:''].filter(Boolean).join(', ');
     return`<div class="cd" style="margin-bottom:8px;padding:10px 14px">
@@ -3031,23 +3071,13 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
     `<div style="text-align:center;flex-shrink:0;width:56px;cursor:pointer" onclick="go('repProfile',{uid:'${escA(p.id)}',name:'${escA(p.name)}'})">
     ${avHtml(p.id,p.name,36)}<div style="font-size:9px;font-weight:600;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name||'?')}</div>
     ${!A.contacts.find(c=>c.id===p.id)?'<div style="font-size:8px;color:var(--pr);font-weight:700">+ Legg til</div>':''}</div>`).join('')}</div>`:''}
-  <details style="margin-top:16px;margin-bottom:12px"><summary class="slbl" style="cursor:pointer">⚙️ GRUPPEVERKTØY</summary>
-  ${(()=>{const canInvite=isAdmin||!(!g.private&&g.invitePolicy==='admin');
-    if(!canInvite)return'<div style="font-size:12px;color:var(--t3);margin-bottom:8px">Kun admin kan invitere nye medlemmer.</div>';
-    const memberIds=new Set(onlineMembers.map(p=>p.id));memberIds.add(A.myId);
-    const invitable=A.contacts.filter(c=>{const p=A.peers.get(c.id);return!memberIds.has(c.id)&&(!p||!p.gids?.includes(gid));});
-    return invitable.length?`<details style="margin:8px 0"><summary style="font-size:12px;color:var(--t3);cursor:pointer">📤 Inviter venner (${invitable.length})</summary>
-    ${invitable.map(c=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--s2)">
-      ${avHtml(c.id,c.alias||c.name,32)}
-      <div style="flex:1;font-size:13px;font-weight:600">${esc(c.alias||c.name)}</div>
-      <button class="btn bp bsm" style="width:auto;padding:6px 12px;font-size:11px" onclick="inviteToGroup('${escA(g.id)}','${escA(g.name)}','${escA(c.id)}')">Inviter</button></div>`).join('')}
-    <div class="fld" style="margin-top:8px"><input class="fi" id="grp-inv-search" placeholder="Søk etter folk..." oninput="searchGroupInvite(this.value,'${escA(g.id)}','${escA(g.name)}')" autocomplete="off"></div>
-    <div id="grp-inv-results"></div></details>`:'';})()}
-  <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
-    <button class="btn bs bsm" onclick="go('groupMembers',{gid:'${escA(g.id)}'})">👥 Medlemmer (${totalMembers})</button>
-    <div style="display:flex;align-items:center;gap:8px"><button class="btn bs bsm" style="flex:1" onclick="copyGid('${escA(g.id)}')">📋 Kopier ${g.private?'kode':'ID'}</button></div>
+  <details style="margin-top:16px;margin-bottom:12px"><summary style="font-size:14px;font-weight:800;letter-spacing:.6px;color:var(--tx);cursor:pointer;padding:6px 2px">⚙️ Gruppeverktøy</summary>
+  <div class="cd" style="margin-top:10px;padding:18px">
+  <div style="display:flex;flex-direction:column;gap:10px">
+    <button class="btn bs" style="min-height:46px" onclick="go('groupMembers',{gid:'${escA(g.id)}'})">👥 Medlemmer (${totalMembers})</button>
+    <div style="display:flex;align-items:center;gap:8px"><button class="btn bs" style="flex:1;min-height:46px" onclick="copyGid('${escA(g.id)}')">📋 Kopier ${g.private?'kode':'ID'}</button></div>
     <div style="font-size:11px;color:var(--t3);margin-top:-4px">${g.private?'Intern kode. Nye medlemmer må inviteres direkte.':'Del denne ID-en så andre kan finne og søke om å bli med.'}</div>
-    ${isAdmin?`<button class="btn bs bsm" onclick="A._editGroup=!A._editGroup;A._pendingGroupImg=null;render()">✏️ ${A._editGroup?'Avbryt redigering':'Rediger gruppe'}</button>`:''}
+    ${isAdmin?`<button class="btn bs" style="min-height:46px" onclick="A._editGroup=!A._editGroup;A._pendingGroupImg=null;render()">✏️ ${A._editGroup?'Avbryt redigering':'Rediger gruppe'}</button>`:''}
     ${A._editGroup&&isAdmin?`<div class="cd" style="border-color:var(--pbb)"><div class="slbl">REDIGER GRUPPE</div>
     <div class="fld"><label class="fl">Beskrivelse</label><textarea class="fi" id="gedit-desc" rows="3" maxlength="200">${esc(g.desc||'')}</textarea></div>
     <div class="fld"><label class="fl">Gruppebilde</label>
@@ -3062,10 +3092,10 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
     ${g.private?`<details style="margin-top:4px"><summary style="font-size:12px;color:var(--t3);cursor:pointer">📋 Intern gruppekode</summary>
     <div style="font-size:13px;color:var(--t2);margin:8px 0">Nye medlemmer må inviteres direkte. Koden alene gir ikke tilgang.</div>
     <div class="idd">${g.id}</div>
-    <button class="btn bs bsm" style="margin-top:6px" onclick="copyGid('${escA(g.id)}')">📋 Kopier kode</button></details>`:''}
-    ${isAdmin?`<button class="btn br bsm" style="margin-top:8px" onclick="showConfirm('Slett gruppen?','Du er admin. Gruppen og alle innlegg slettes for alle.','Ja, slett',()=>{deleteGroup('${escA(g.id)}');})">🗑️ Slett</button>`
-      :`<button class="btn br bsm" style="margin-top:8px" onclick="showConfirm('Forlate gruppen?','${g.private?'Du må bli invitert igjen for å komme tilbake.':'Du kan sende ny forespørsel senere.'}','Ja, forlat',()=>leaveGroup('${escA(g.id)}'))">Forlat</button>`}
-  </div></details></div>`;}
+    <button class="btn bs" style="margin-top:6px;min-height:44px" onclick="copyGid('${escA(g.id)}')">📋 Kopier kode</button></details>`:''}
+    ${isAdmin?`<button class="btn br" style="margin-top:8px;min-height:46px" onclick="showConfirm('Slett gruppen?','Du er admin. Gruppen og alle innlegg slettes for alle.','Ja, slett',()=>{deleteGroup('${escA(g.id)}');})">🗑️ Slett</button>`
+      :`<button class="btn br" style="margin-top:8px;min-height:46px" onclick="showConfirm('Forlate gruppen?','${g.private?'Du må bli invitert igjen for å komme tilbake.':'Du kan sende ny forespørsel senere.'}','Ja, forlat',()=>leaveGroup('${escA(g.id)}'))">Forlat</button>`}
+  </div></div></details></div>`;}
 function vGroupMembers(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===gid);
   if(!g)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groupDetail',{gid:'${escA(gid)}'})">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Gruppe ikke funnet.</div></div></div>`;
   const mids=g._members||[];const allIds=new Set(mids);allIds.add(A.myId);
