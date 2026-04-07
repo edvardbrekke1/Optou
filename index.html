@@ -2117,11 +2117,9 @@ window.removeTerminalJob=function(jobId){
   var j=A.myJobs.find(x=>x.id===jobId);
   if(D())console.log('[removeTerminalJob]',{jobId,found:!!j,status:j?.status,isOwner:j?.creatorId===A.myId});
   if(!j)return;
-  var doIt=()=>{A._deadJobs.add(jobId);if(j.creatorId===A.myId)fsDeletePost(jobId);
-    A.myJobs=A.myJobs.filter(x=>x.id!==jobId);delete A.jobChats[jobId];delete A._unreadJobs[jobId];
-    dbDel('images',jobId).catch(function(){});persist();render();};
-  if(j.creatorId===A.myId)showConfirm('Fjerne?','Innlegget fjernes permanent.','Ja, fjern',doIt);
-  else doIt();};
+  // Phase 1: local archive only — no hard delete, no removal from myJobs
+  j.archivedForMeAt=now();delete A._unreadJobs[jobId];
+  persist();render();notify('📦','Flyttet til Avsluttet');};
 function fsRefreshDetailOpenJob(jid){
   if(!hasFS()||!jid)return;
   window._detailFsCheck=window._detailFsCheck||{};
@@ -2248,7 +2246,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   if(isH&&j.status==='active'&&j.helperDone===false)b+=`<div class="wbox">Eieren mener det ikke er helt ferdig ennå. Dere kan snakke sammen i chatten.</div>`;
   if(j.status==='never_done')b+=`<div style="background:var(--rb);border:2px solid var(--rd);border-radius:12px;padding:12px;font-size:13px;color:var(--rd);font-weight:700;margin-bottom:12px">❌ Aldri gjort opp — permanent merke</div>`;
   if(j.status==='declined')b+=`<div class="ibox">Noen andre ble valgt denne gangen.</div>`;
-  if(j.status==='cancelled')b+=`<div class="ibox">Kansellert av eieren.</div><button class="btn bs" style="margin-bottom:10px" onclick="removeTerminalJob('${escA(j.id)}');go('mine')">🗑 Fjern fra listen</button>`;
+  if(j.status==='cancelled')b+=`<div class="ibox">Kansellert av eieren.</div><button class="btn bs" style="margin-bottom:10px" onclick="A._mineFilter='ended';go('mine')">📦 Se i Avsluttet</button>`;
   const _mjEntry=A.myJobs.find(x=>x.id===jid);
   const _hasOpenPts=j.items?.some(it=>(it.status||'open')==='open'&&!it.assignedTo);
   const _canReApply=!isO&&_mjEntry&&((_mjEntry.isPointApplicant||_mjEntry.isPointHelper)&&_hasOpenPts);
@@ -2503,12 +2501,14 @@ if(!A._mineFilter)A._mineFilter='active';
 function vMine(){
   const directInvites=[...A.openJobs.values()].filter(j=>j.visibility==='direct'&&j.creatorId!==A.myId&&!['cancelled','done','never_done','declined'].includes(j.status)).sort((a,b)=>(b.ts||0)-(a.ts||0));
   const nActive=A.myJobs.filter(j=>['open','accepting','pending','active','pending_review'].includes(j.status)).length+directInvites.length;
-  const nDone=A.myJobs.filter(j=>j.status==='done').length;
+  const nDone=A.myJobs.filter(j=>j.status==='done'&&!j.archivedForMeAt).length;
+  const nEnded=A.myJobs.filter(j=>['cancelled','declined','never_done'].includes(j.status)||(j.status==='done'&&j.archivedForMeAt)).length;
   const mf=A._mineFilter||'active';
   const sm={open:['Åpent','bg1'],accepting:['Noen vil hjelpe!','by1'],pending:['Venter svar','by1'],active:['Pågår','bb1'],pending_review:['Ferdigmeldt','bp1'],done:['✅ Fullført','bg1'],declined:['Avslått','bgr'],never_done:['❌ Aldri gjort','br1'],cancelled:['Kansellert','bgr']};
   let filtered=[];
   if(mf==='active')filtered=A.myJobs.filter(j=>['open','accepting','pending','active','pending_review'].includes(j.status));
-  else filtered=A.myJobs.filter(j=>j.status==='done');
+  else if(mf==='done')filtered=A.myJobs.filter(j=>j.status==='done'&&!j.archivedForMeAt);
+  else filtered=A.myJobs.filter(j=>['cancelled','declined','never_done'].includes(j.status)||(j.status==='done'&&j.archivedForMeAt));
   filtered.sort((a,b)=>b.ts-a.ts);
   const mc=j=>{const isO=j.creatorId===A.myId;const _dp=j.visibility==='direct'?(j.targetIds||[])[0]:null;let[lbl,cls]=sm[j.status]||['—','bgr'];if(!isO&&j.status==='accepting'){lbl='Venter svar';cls='by1';}if(isO&&j.visibility==='direct'&&['open','accepting'].includes(j.status)&&!(j.interests?.length)){lbl='Venter svar';cls='by1';}const sD=['done','declined','never_done','cancelled'].includes(j.status);
     const tIco=j.type==='help'?'🤝':j.type==='service'?'💼':'📋';
@@ -2526,7 +2526,7 @@ function vMine(){
     ${isO&&j.visibility==='direct'&&['open','accepting'].includes(j.status)&&!(j.interests?.length)&&_dp?`<div style="font-size:12px;color:var(--t2);margin-bottom:4px">📩 Sendt til ${esc(dn(_dp,_dp.substr(0,8)))}</div>`:''}
     ${j.helperName&&['active','pending_review'].includes(j.status)?`<div style="font-size:12px;color:var(--t2);margin-bottom:4px">🤝 Hjelper: ${esc(j.helperName)}</div>`:''}
     ${expDays>0&&expDays<=30&&!sD?`<div style="font-size:11px;color:var(--t3)">Utløper om ${expDays} ${expDays===1?'dag':'dager'}</div>`:''}
-    ${sD?`<button class="btn bs bsm" style="margin-top:6px;padding:6px;font-size:11px" onclick="event.stopPropagation();removeTerminalJob('${escA(j.id)}')">🗑 Fjern</button>`:''}</div>${_imgSrc?`<img src="${esc(_imgSrc)}" style="width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0">`:''}
+    ${sD&&mf!=='ended'?`<button class="btn bs bsm" style="margin-top:6px;padding:6px;font-size:11px" onclick="event.stopPropagation();removeTerminalJob('${escA(j.id)}')">📦 Flytt til Avsluttet</button>`:''}</div>${_imgSrc?`<img src="${esc(_imgSrc)}" style="width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0">`:''}
     </div></div>`;};
   const dc=j=>{const _ju=A._unreadJobs[j.id]||0;const _imgSrc=j.imageUrl||null;
     return`<div class="cd cdt" style="${_ju?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">
@@ -2540,7 +2540,7 @@ function vMine(){
     </div></div>`;};
   const tabS=(k,n,c,l)=>`<div class="stat" style="cursor:pointer;${mf===k?'border-color:var(--pr);border-width:2px':'border-color:var(--s3)'}" onclick="A._mineFilter='${k}';render()"><div class="stn" style="color:${c}">${n}</div><div class="stl">${l}</div></div>`;
   return`<div class="scr"><div style="font-size:22px;font-weight:800;margin-bottom:14px">Aktiviteter</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">${tabS('active',nActive,'var(--pr)','Aktive')}${tabS('done',nDone,'var(--g2)','Fullført')}</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">${tabS('active',nActive,'var(--pr)','Aktive')}${tabS('done',nDone,'var(--g2)','Fullført')}${tabS('ended',nEnded,'var(--t3)','Avsluttet')}</div>
   ${(()=>{const mine=filtered.filter(j=>j.creatorId===A.myId);const helping=filtered.filter(j=>j.isHelper);
     const hasAnyMine=A.myJobs.some(j=>j.creatorId===A.myId);const hasAnyHelp=A.myJobs.some(j=>j.isHelper);
     if(!A.myJobs.length&&!directInvites.length)return`<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Du har ingen oppgaver ennå.</div>
@@ -2555,7 +2555,7 @@ function vMine(){
     if(hasAnyHelp){h+=`<span class="slbl" style="margin-top:14px;display:block">JEG HJELPER (${helping.length})</span>`;
       h+=helping.length?helping.map(mc).join(''):'<div style="font-size:13px;color:var(--t3);margin-bottom:14px">Ingen her.</div>';}
     return h||'<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Ingen her.</div></div>';})()}
-  ${mf==='done'&&filtered.length?`<button class="btn bs bsm" style="margin-top:8px" onclick="showConfirm('Rydde opp?','Fjerner alle fullførte fra listen.','Rydd opp',()=>{A.myJobs.filter(j=>j.status==='done').forEach(j=>{A._deadJobs.add(j.id);if(j.creatorId===A.myId)fsDeletePost(j.id);delete A.jobChats[j.id];delete A._unreadJobs[j.id];});A.myJobs=A.myJobs.filter(j=>j.status!=='done');persist();render();notify('✅','Ryddet opp!');})">🧹 Rydd opp</button>`:''}</div>`;}
+  ${mf==='done'&&filtered.length?`<button class="btn bs bsm" style="margin-top:8px" onclick="showConfirm('Rydde opp?','Flytter alle fullførte til Avsluttet.','Rydd opp',()=>{var _n=now();A.myJobs.filter(j=>j.status==='done'&&!j.archivedForMeAt).forEach(j=>{j.archivedForMeAt=_n;delete A._unreadJobs[j.id];});persist();render();notify('✅','Flyttet til Avsluttet');})">🧹 Rydd opp</button>`:''}</div>`;}
 
 // ═══ CHAT HUB ═══
 function vChatHub(){const dl=Object.keys(A.dms).filter(id=>A.dms[id]?.length);
@@ -2781,8 +2781,8 @@ function vSettings(){
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">📱 LAGRING</div>
   <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:6px">Du bruker ${A.openJobs.size+countActivePosts()} innlegg og ${countActiveChats()} samtaler.</div>
-  <div style="font-size:11px;color:var(--t3);line-height:1.5;margin-bottom:12px">Rydd opp fjerner avsluttede innlegg eldre enn 30 dager og samtaler eldre enn 60 dager. Aktive jobber og venner beholdes.</div>
-  <button class="btn bs" onclick="showConfirm('Rydd opp?','Sletter innlegg eldre enn 30 dager og samtaler eldre enn 60 dager. Frigjør plass.','Rydd opp',()=>{var n=now();var d30=n-30*864e5,d60=n-60*864e5;A.openJobs.forEach((j,id)=>{if(j.ts<d30)dropOpenJobLocal(id);});A.myJobs.filter(j=>j.ts<d30&&!['open','accepting','active','pending_review'].includes(j.status)&&j.creatorId===A.myId).forEach(j=>fsDeletePost(j.id));A.myJobs=A.myJobs.filter(j=>j.ts>d30||['open','accepting','active','pending_review'].includes(j.status));Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)&&(!A.jobChats[k].length||A.jobChats[k][A.jobChats[k].length-1].ts<d60))delete A.jobChats[k];});Object.keys(A.dms).forEach(k=>{if(!A.dms[k].length||A.dms[k][A.dms[k].length-1].ts<d60)delete A.dms[k];});persist();notify('✅','Ryddet opp!');render();})">🧹 Rydd opp</button>
+  <div style="font-size:11px;color:var(--t3);line-height:1.5;margin-bottom:12px">Rydd opp fjerner gamle innlegg fra feeden og samtaler eldre enn 60 dager. Dine egne jobber beholdes under Aktiviteter.</div>
+  <button class="btn bs" onclick="showConfirm('Rydd opp?','Fjerner gamle feed-innlegg og samtaler. Dine egne jobber beholdes.','Rydd opp',()=>{var n=now();var d30=n-30*864e5,d60=n-60*864e5;A.openJobs.forEach((j,id)=>{if(j.ts<d30)dropOpenJobLocal(id);});Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)&&(!A.jobChats[k].length||A.jobChats[k][A.jobChats[k].length-1].ts<d60))delete A.jobChats[k];});Object.keys(A.dms).forEach(k=>{if(!A.dms[k].length||A.dms[k][A.dms[k].length-1].ts<d60)delete A.dms[k];});persist();notify('✅','Ryddet opp!');render();})">🧹 Rydd opp</button>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">${t('lang').toUpperCase()}</div>
   <div style="display:flex;gap:8px;margin-bottom:16px">${[['no','Norsk'],['en','English']].map(([v,l])=>
