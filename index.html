@@ -2249,8 +2249,9 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   if(j.status==='cancelled')b+=`<div class="ibox">Kansellert av eieren.</div>${A._mineFilter!=='ended'?`<button class="btn bs" style="margin-bottom:10px" onclick="A._mineFilter='ended';go('mine')">📦 Se i Avsluttet</button>`:''}`;
   const _mjEntry=A.myJobs.find(x=>x.id===jid);
   const _hasOpenPts=j.items?.some(it=>(it.status||'open')==='open'&&!it.assignedTo);
-  const _canReApply=!isO&&_mjEntry&&((_mjEntry.isPointApplicant||_mjEntry.isPointHelper)&&_hasOpenPts);
-  if(!isO&&((_canReApply&&_hasOpenPts)||(!isH&&!_mjEntry&&['open','accepting'].includes(j.status)))){
+  const _terminal=['cancelled','declined','never_done'].includes(j.status);
+  const _canReApply=!isO&&!_terminal&&_mjEntry&&((_mjEntry.isPointApplicant||_mjEntry.isPointHelper)&&_hasOpenPts);
+  if(!_terminal&&!isO&&((_canReApply&&_hasOpenPts)||(!isH&&!_mjEntry&&['open','accepting'].includes(j.status)))){
     const isContact=A.contacts.find(c=>c.id===j.creatorId);
     if(j.isPublic&&!isContact)b+=`<div style="font-size:12px;color:var(--t2);margin-bottom:8px">🌐 Offentlig — du trenger ikke bli venn. Tilknytningen varer kun for denne oppgaven.</div>`;
     if(j.items?.length){
@@ -2311,7 +2312,9 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
     </div></div>`}`;}
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go(A.prevScreen||'feed')">Tilbake</button><div class="pgt">Detaljer</div></div>${b}</div>`;}
 
-window.doHelp=async(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A.openJobs.get(jid);const msg=$('jmsg')?.value?.trim()||'';
+window.doHelp=async(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A.openJobs.get(jid);
+  if(oj&&!['open','accepting'].includes(oj.status)){notify('⚠️','Denne jobben tar ikke imot søknader');return;}
+  const msg=$('jmsg')?.value?.trim()||'';
   if(D())console.log('[doHelp]',{jid,cid,isContact:!!A.contacts.find(c=>c.id===cid),connOpen:!!A.conns.get(cid)?.open,hasAudio:!!window._helpAudio});
   if(oj?.visibility==='direct'&&hasFS()){try{var _dj=await fbDb.collection('posts').doc(jid).get();
       if(!_dj.exists||!Array.isArray(_dj.data()?.targetIds)||!_dj.data().targetIds.includes(A.myId)||['cancelled','done','never_done','declined'].includes(_dj.data()?.status)){dropOpenJobLocal(jid);persist();updateB();sR();notify('⚠️','Denne direkte foresporselen gjelder ikke lenger deg');return;}
@@ -2363,7 +2366,9 @@ window.togglePointInterest=(jid,idx)=>{if(!A._pointPick[jid])A._pointPick[jid]=[
     if(!it||(it.status||'open')!=='open'||it.assignedTo)return;
     arr.push(idx);}render();};
 window.doHelpPoints=(jid,cid)=>{var existing=A.myJobs.find(x=>x.id===jid);
-  var oj=A.openJobs.get(jid)||existing;var pts=A._pointPick[jid]||[];
+  var oj=A.openJobs.get(jid)||existing;
+  if(oj&&['cancelled','declined','never_done'].includes(oj.status)){notify('⚠️','Denne jobben er avsluttet');return;}
+  var pts=A._pointPick[jid]||[];
   if(isInvalidDirectPointJob(oj)){notify('⚠️','Direkte oppgaver kan ikke bruke punkter');delete A._pointPick[jid];return;}
   if(!pts.length){notify('⚠️','Velg minst ett punkt');return;}
   var msg=$('jmsg')?.value?.trim()||'';var ha=window._helpAudio;window._helpAudio=null;
