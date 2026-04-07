@@ -834,6 +834,50 @@ async function fsDeleteGroupRequestArtifacts(gid){if(!hasFS()||!gid)return 0;try
 async function fsDeleteUserSubcollectionDocs(uid,sub){if(!hasFS()||!uid||!sub)return 0;try{var snap=await fbDb.collection('users').doc(uid).collection(sub).get();
   var n=0;for(var d of snap.docs){try{await d.ref.delete();n++;}catch(e){}}if(D()&&n)console.log('[purge] cleaned users/'+uid+'/'+sub,{deleted:n});return n;}catch(e){if(D())console.warn('[purge] subcollection cleanup error',uid,sub,e);return 0;}}
 async function fsDeleteUserProfileImage(uid){if(!uid||!fbStorage)return;try{await fbStorage.ref().child('profiles/'+uid+'.webp').delete();if(D())console.log('[purge] deleted profile image',uid);}catch(e){if(e.code==='storage/object-not-found'){if(D())console.log('[purge] profile image already missing',uid);}else if(D())console.warn('[purge] profile image delete error',uid,e);}}
+async function fsDeleteOwnedGroupsForUser(uid){if(!hasFS()||!uid)return 0;try{var snap=await fbDb.collection('groups').where('creatorId','==',uid).get();
+  var n=0;for(var d of snap.docs){try{await fsDeleteGroup(d.id);await fsDeleteGroupRequestArtifacts(d.id);n++;}catch(e){if(D())console.warn('[purge] owned group delete error',d.id,e);}}
+  if(D())console.log('[purge] deleted owned groups for',uid,{count:n});return n;}catch(e){if(D())console.warn('[purge] owned groups query error',uid,e);return 0;}}
+async function fsDeleteOwnedStandalonePostsForUser(uid){if(!hasFS()||!uid)return 0;try{var snap=await fbDb.collection('posts').where('creatorId','==',uid).get();
+  var n=0;for(var d of snap.docs){var p=d.data();if(p.groupId)continue;try{await fsDeletePost(d.id);n++;}catch(e){if(D())console.warn('[purge] standalone post delete error',d.id,e);}}
+  if(D())console.log('[purge] deleted standalone posts for',uid,{count:n});return n;}catch(e){if(D())console.warn('[purge] standalone posts query error',uid,e);return 0;}}
+async function fsRemoveUserFromNonOwnedGroups(uid){if(!hasFS()||!uid)return 0;try{var snap=await fbDb.collection('groups').where('members','array-contains',uid).get();
+  var n=0;for(var d of snap.docs){if(d.data().creatorId===uid)continue;try{await d.ref.update({members:firebase.firestore.FieldValue.arrayRemove(uid)});n++;}catch(e){if(D())console.warn('[purge] group membership remove error',d.id,e);}}
+  if(D())console.log('[purge] removed from non-owned groups',uid,{count:n});return n;}catch(e){if(D())console.warn('[purge] non-owned groups query error',uid,e);return 0;}}
+async function fsDeleteUserRoot(uid){if(!hasFS()||!uid)return;try{await fbDb.collection('users').doc(uid).delete();if(D())console.log('[purge] deleted user root',uid);}catch(e){if(D())console.warn('[purge] user root delete error',uid,e);}}
+async function fsExecuteAccountPurge(uid){if(!hasFS()||!uid)return{ok:false};var r={};try{
+  r.ownedGroups=await fsDeleteOwnedGroupsForUser(uid);
+  r.standalonePosts=await fsDeleteOwnedStandalonePostsForUser(uid);
+  r.ratings=await fsDeleteUserSubcollectionDocs(uid,'ratings');
+  r.invitations=await fsDeleteUserSubcollectionDocs(uid,'invitations');
+  r.groupRequests=await fsDeleteUserSubcollectionDocs(uid,'groupRequests');
+  r.dms=await fsDeleteUserSubcollectionDocs(uid,'dms');
+  r.dmAcks=await fsDeleteUserSubcollectionDocs(uid,'dmAcks');
+  r.jobChatAcks=await fsDeleteUserSubcollectionDocs(uid,'jobChatAcks');
+  r.jobRefs=await fsDeleteUserSubcollectionDocs(uid,'jobRefs');
+  r.dmRefs=await fsDeleteUserSubcollectionDocs(uid,'dmRefs');
+  r.groupRefs=await fsDeleteUserSubcollectionDocs(uid,'groupRefs');
+  r.nonOwnedGroups=await fsRemoveUserFromNonOwnedGroups(uid);
+  await fsDeleteUserProfileImage(uid);r.profileImage=true;
+  await fsDeleteUserRoot(uid);r.userRoot=true;
+  r.ok=true;if(D())console.log('[purge] account purge complete',uid,r);return r;
+}catch(e){r.ok=false;r.error=e.message;if(D())console.warn('[purge] account purge error',uid,e);return r;}}
+async function fsRunOneAccountPurgeIntent(){if(!hasFS()){notify('⚠️','Firestore utilgjengelig');return;}
+  var doc,d,_processing=false;
+  try{var snap=await fbDb.collection('purgeQueue').where('status','==','pending').where('type','==','account').orderBy('requestedAt').limit(1).get();
+    if(!snap.docs.length){notify('ℹ️','Ingen ventende account-purge');return;}
+    doc=snap.docs[0];d=doc.data();
+    if(D())console.log('[purge-account] found',{targetId:d.targetId,requestedBy:d.requestedBy});
+    if(d.requestedBy!==d.targetId||d.requestedBy!==A.myId){notify('⚠️','Ikke din account-purge — hopper over');return;}
+    var uDoc=await fbDb.collection('users').doc(d.targetId).get();
+    if(!uDoc.exists){await doc.ref.update({status:'done',processedAt:Date.now(),error:null});
+      notify('✅','Konto allerede slettet — markert ferdig');return;}
+    await doc.ref.update({status:'processing'});_processing=true;
+    var r=await fsExecuteAccountPurge(d.targetId);
+    if(r.ok){await doc.ref.update({status:'done',processedAt:Date.now(),error:null});notify('✅','Account purge fullført: '+d.targetId);}
+    else{await doc.ref.update({status:'failed',error:r.error||'fsExecuteAccountPurge failed'});notify('⚠️','Account purge feilet');}
+  }catch(e){console.warn('[purge-account] error',e);
+    if(doc&&_processing)try{await doc.ref.update({status:'failed',error:e.message||'unknown'});}catch(e2){}
+    notify('⚠️','Account purge-feil: '+e.message);}}
 async function fsRunOnePurgeIntent(){if(!hasFS()){notify('⚠️','Firestore utilgjengelig');return;}
   var doc,d,_processing=false;
   try{var snap=await fbDb.collection('purgeQueue').where('status','==','pending').where('type','==','group').orderBy('requestedAt').limit(1).get();
@@ -2878,7 +2922,8 @@ function vSettings(){
   ${D()?`<div class="dv" style="margin:12px 0"></div>
   <div class="slbl">PURGE (DEV)</div>
   <button class="btn bs bsm" style="margin-bottom:8px" onclick="fsRunOnePurgeIntent()">🧪 Kjør én purge</button>
-  <div style="font-size:10px;color:var(--t3);margin-bottom:12px">Kjører én ventende gruppe-purge fra purgeQueue.</div>`:''}
+  <button class="btn bs bsm" style="margin-bottom:8px" onclick="fsRunOneAccountPurgeIntent()">🧪 Kjør én account-purge</button>
+  <div style="font-size:10px;color:var(--t3);margin-bottom:12px">Kjører én ventende purge-oppgave fra purgeQueue.</div>`:''}
   <div class="dv" style="margin:20px 0"></div>
   <div class="slbl" style="color:var(--rd)">FARLIG SONE</div>
   <div class="wbox">⚠️ Slett alt og start på nytt. Du mister alle jobber, venner, meldinger og vurderinger permanent. Du får en helt ny profil.</div>
