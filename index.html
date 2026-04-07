@@ -2246,7 +2246,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   if(isH&&j.status==='active'&&j.helperDone===false)b+=`<div class="wbox">Eieren mener det ikke er helt ferdig ennå. Dere kan snakke sammen i chatten.</div>`;
   if(j.status==='never_done')b+=`<div style="background:var(--rb);border:2px solid var(--rd);border-radius:12px;padding:12px;font-size:13px;color:var(--rd);font-weight:700;margin-bottom:12px">❌ Aldri gjort opp — permanent merke</div>`;
   if(j.status==='declined')b+=`<div class="ibox">Noen andre ble valgt denne gangen.</div>`;
-  if(j.status==='cancelled')b+=`<div class="ibox">Kansellert av eieren.</div><button class="btn bs" style="margin-bottom:10px" onclick="A._mineFilter='ended';go('mine')">📦 Se i Avsluttet</button>`;
+  if(j.status==='cancelled')b+=`<div class="ibox">Kansellert av eieren.</div>${A._mineFilter!=='ended'?`<button class="btn bs" style="margin-bottom:10px" onclick="A._mineFilter='ended';go('mine')">📦 Se i Avsluttet</button>`:''}`;
   const _mjEntry=A.myJobs.find(x=>x.id===jid);
   const _hasOpenPts=j.items?.some(it=>(it.status||'open')==='open'&&!it.assignedTo);
   const _canReApply=!isO&&_mjEntry&&((_mjEntry.isPointApplicant||_mjEntry.isPointHelper)&&_hasOpenPts);
