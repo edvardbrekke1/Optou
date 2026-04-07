@@ -549,7 +549,7 @@ window.assignItem=(idx,pid,name)=>{if(!A.nb.items?.[idx])return;A.nb.items[idx].
 window.clearAssign=idx=>{if(!A.nb.items?.[idx])return;A.nb.items[idx].assignedTo=null;A.nb.items[idx].assignedName=null;A.nb.items[idx].assignedStatus=null;
   document.getElementById('assign-modal')?.remove();render();};
 window.ownerAssignPoint=(jid,idx)=>{var j=A.myJobs.find(x=>x.id===jid);if(!j||j.creatorId!==A.myId||!j.items?.[idx])return;
-  if(['cancelled','declined','never_done'].includes(j.status))return;
+  if(['cancelled','declined','never_done'].includes(j.status)||j.archivedForMeAt)return;
   var it=j.items[idx];if((it.status||'open')!=='open'||it.assignedTo)return;
   var candidates=A.contacts.slice();
   if(j.groupId){var g=A.groups.find(x=>x.id===j.groupId);if(g?._members){var mSet=new Set(g._members);candidates=candidates.filter(c=>mSet.has(c.id));}}
@@ -565,7 +565,7 @@ window.ownerAssignPoint=(jid,idx)=>{var j=A.myJobs.find(x=>x.id===jid);if(!j||j.
   document.body.appendChild(bg);bg.onclick=e=>{if(e.target===bg)bg.remove();};};
 window.doOwnerAssign=async(jid,idx,pid,name)=>{document.getElementById('owner-assign-modal')?.remove();
   var j=A.myJobs.find(x=>x.id===jid);if(!j||!j.items?.[idx])return;
-  if(['cancelled','declined','never_done'].includes(j.status))return;
+  if(['cancelled','declined','never_done'].includes(j.status)||j.archivedForMeAt)return;
   var it=j.items[idx];if((it.status||'open')!=='open'||it.assignedTo)return;
   it.assignedTo=pid;it.assignedName=name;it.assignedStatus='pending';
   // Cleanup other applicants who had this point in their application
@@ -591,7 +591,7 @@ window.doOwnerAssign=async(jid,idx,pid,name)=>{document.getElementById('owner-as
   notify('✅','Punkt tildelt '+name);persist();render();};
 window.ownerReleasePendingPoint=async(jid,idx)=>{var j=A.myJobs.find(x=>x.id===jid);
   if(!j||j.creatorId!==A.myId||!j.items?.[idx])return;
-  if(['cancelled','declined','never_done'].includes(j.status))return;
+  if(['cancelled','declined','never_done'].includes(j.status)||j.archivedForMeAt)return;
   var it=j.items[idx];if(it.assignedStatus!=='pending')return;
   var pid=it.assignedTo;
   it.assignedTo=null;it.assignedName=null;it.assignedStatus=null;it.status='open';
@@ -621,7 +621,7 @@ function canTogglePoint(j,idx){var it=j?.items?.[idx];if(!j||!it)return false;
   var s=it.status||'open';return s==='taken'||s==='done';}
 window.updatePointStatus=function(jobId,idx){if(D())console.log('[updatePointStatus]',{jobId,idx});
   var j=A.myJobs.find(x=>x.id===jobId);if(!j)return;
-  if(['cancelled','declined','never_done'].includes(j.status))return;
+  if(['cancelled','declined','never_done'].includes(j.status)||j.archivedForMeAt)return;
   // Point-mode: only assignedTo can toggle taken↔done
   if(j.items?.[idx]?.assignedTo){
     if(!canTogglePoint(j,idx)){if(D())console.log('[updatePointStatus] blocked — not assignedTo',{jobId,idx});return;}
@@ -2171,6 +2171,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   const[tIco,tName,tCls]=typeMap[j.type]||['📋','Innlegg','bg1'];
   let b='';
   const _terminal=['cancelled','declined','never_done'].includes(j.status);
+  const _ended=_terminal||(j.status==='done'&&!!j.archivedForMeAt)||(A._mineFilter==='ended');
   const imgSrc=j.imageUrl||j.imageData;
   b+=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer" onclick="go('repProfile',{uid:'${escA(j.creatorId)}',name:'${escA(j.creatorName)}'})">
   ${avHtml(j.creatorId,j.creatorName,44)}<div><div style="font-size:15px;font-weight:700">${esc(j.creatorName)}</div>
@@ -2179,7 +2180,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   <div class="cd" style="margin-bottom:16px"><div style="font-size:18px;font-weight:800;line-height:1.4;margin-bottom:10px">${esc(j.title)}</div>
   <div style="font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:12px">${esc(j.desc||'')}</div>
   ${j.items?.length?`${(()=>{var dn3=j.items.filter(it=>(it.status||'open')==='done').length;return dn3?`<div style="font-size:13px;color:var(--g2);font-weight:600;margin-bottom:8px">✅ ${dn3}/${j.items.length} punkter fullført</div>`:''})()}
-  <div style="margin-bottom:12px">${j.items.map((it,idx)=>{var ps=it.status||'open';var _canTog=!_terminal&&canTogglePoint(j,idx);var psIco=ps==='done'?'☑':'☐';var psIcoO=ps==='done'?'✅':'○';var psCol=ps==='done'?'var(--g2)':'var(--t3)';
+  <div style="margin-bottom:12px">${j.items.map((it,idx)=>{var ps=it.status||'open';var _canTog=!_ended&&canTogglePoint(j,idx);var psIco=ps==='done'?'☑':'☐';var psIcoO=ps==='done'?'✅':'○';var psCol=ps==='done'?'var(--g2)':'var(--t3)';
     return`<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--s2)">
     ${_canTog?`<button style="width:40px;height:40px;background:none;border:none;font-size:20px;cursor:pointer;flex-shrink:0;color:${psCol}" onclick="updatePointStatus('${escA(j.id)}',${idx})">${psIco}</button>`
       :isO?`<span style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;color:${psCol}">${psIcoO}</span>`
@@ -2187,8 +2188,8 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
       :`<span style="width:28px;height:28px;border-radius:14px;background:${(it.mode||'list')==='image'?'var(--pr)':'var(--s3)'};color:${(it.mode||'list')==='image'?'#fff':'var(--t2)'};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">${idx+1}</span>`}
     ${it.audioUrl?`<button style="width:32px;height:32px;border-radius:16px;background:var(--pr);color:#fff;font-size:12px;flex-shrink:0;display:flex;align-items:center;justify-content:center" onclick="playBullet('${escA(j.id)}',${idx})">${_playingId===j.id+'_'+idx?'⏸':'▶'}</button>`:''}
     <div style="flex:1"><div style="font-size:14px;font-weight:600;${ps==='done'?'text-decoration:line-through;color:var(--t3)':''}">${esc(it.text||'Punkt '+(idx+1))}</div>
-    ${it.assignedTo?`<div style="font-size:11px;color:${it.assignedTo===A.myId?'var(--g2)':'var(--t3)'};margin-top:2px">${it.assignedTo===A.myId?'✅ Din oppgave':'👤 '+esc(it.assignedName||'')}${it.assignedStatus==='pending'?' (venter svar)':it.assignedStatus==='declined'?' (takket nei — åpent)':''}${isO&&!_terminal&&it.assignedStatus==='pending'?` <button style="font-size:10px;color:var(--rd);font-weight:600;background:none;border:none;cursor:pointer;padding:1px 4px" onclick="event.stopPropagation();ownerReleasePendingPoint('${escA(j.id)}',${idx})">Frigi</button>`:''}</div>`
-    :`<div style="display:flex;align-items:center;gap:6px;margin-top:2px"><span style="display:flex;align-items:center;gap:5px;color:var(--t3)"><span style="font-size:15px;line-height:1">○</span><span style="font-size:11px">Ledig</span></span>${isO&&!_terminal&&(ps==='open')?`<button style="font-size:12px;color:var(--pr);font-weight:600;background:var(--pb);border:1px solid var(--pbb);border-radius:8px;cursor:pointer;padding:4px 10px" onclick="event.stopPropagation();ownerAssignPoint('${escA(j.id)}',${idx})">👤 Tildel</button>`:''}</div>`}
+    ${it.assignedTo?`<div style="font-size:11px;color:${it.assignedTo===A.myId?'var(--g2)':'var(--t3)'};margin-top:2px">${it.assignedTo===A.myId?'✅ Din oppgave':'👤 '+esc(it.assignedName||'')}${it.assignedStatus==='pending'?' (venter svar)':it.assignedStatus==='declined'?' (takket nei — åpent)':''}${isO&&!_ended&&it.assignedStatus==='pending'?` <button style="font-size:10px;color:var(--rd);font-weight:600;background:none;border:none;cursor:pointer;padding:1px 4px" onclick="event.stopPropagation();ownerReleasePendingPoint('${escA(j.id)}',${idx})">Frigi</button>`:''}</div>`
+    :`<div style="display:flex;align-items:center;gap:6px;margin-top:2px"><span style="display:flex;align-items:center;gap:5px;color:var(--t3)"><span style="font-size:15px;line-height:1">○</span><span style="font-size:11px">Ledig</span></span>${isO&&!_ended&&(ps==='open')?`<button style="font-size:12px;color:var(--pr);font-weight:600;background:var(--pb);border:1px solid var(--pbb);border-radius:8px;cursor:pointer;padding:4px 10px" onclick="event.stopPropagation();ownerAssignPoint('${escA(j.id)}',${idx})">👤 Tildel</button>`:''}</div>`}
     ${it.audioUrl?`<div style="font-size:11px;color:var(--t3)">Trykk ▶ for å høre (${esc(it.duration)}s)</div>`:''}</div></div>`;}).join('')}</div>`:''}${imgSrc&&imgSrc!=='[img]'?`<img src="${esc(imgSrc)}" style="width:100%;max-height:250px;object-fit:contain;background:var(--s2);display:block;border-radius:12px;margin:0 0 12px 0;cursor:pointer" onclick="showImg('${escA(imgSrc)}')">`:''}
   <div class="dv"></div>
   ${[['Lagt ut av',esc(j.creatorName)+(pr?' · ⭐'+pr:'')],j.reward?['Tilbud',esc(j.reward)]:null,j.by||j.fylke||j.location?['Sted','📍 '+esc([j.by,FYLKER.find(f=>f.id===j.fylke)?.name,j.location].filter(Boolean).join(', '))]:null,j.groupName?['Gruppe','🏘️ '+esc(j.groupName)]:null,
@@ -2254,8 +2255,8 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   if(j.status==='cancelled')b+=`<div class="ibox">Kansellert av eieren.</div>${A._mineFilter!=='ended'?`<button class="btn bs" style="margin-bottom:10px" onclick="A._mineFilter='ended';go('mine')">📦 Se i Avsluttet</button>`:''}`;
   const _mjEntry=A.myJobs.find(x=>x.id===jid);
   const _hasOpenPts=j.items?.some(it=>(it.status||'open')==='open'&&!it.assignedTo);
-  const _canReApply=!isO&&!_terminal&&_mjEntry&&((_mjEntry.isPointApplicant||_mjEntry.isPointHelper)&&_hasOpenPts);
-  if(!_terminal&&!isO&&((_canReApply&&_hasOpenPts)||(!isH&&!_mjEntry&&['open','accepting'].includes(j.status)))){
+  const _canReApply=!isO&&!_ended&&_mjEntry&&((_mjEntry.isPointApplicant||_mjEntry.isPointHelper)&&_hasOpenPts);
+  if(!_ended&&!isO&&((_canReApply&&_hasOpenPts)||(!isH&&!_mjEntry&&['open','accepting'].includes(j.status)))){
     const isContact=A.contacts.find(c=>c.id===j.creatorId);
     if(j.isPublic&&!isContact)b+=`<div style="font-size:12px;color:var(--t2);margin-bottom:8px">🌐 Offentlig — du trenger ikke bli venn. Tilknytningen varer kun for denne oppgaven.</div>`;
     if(j.items?.length){
