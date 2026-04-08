@@ -452,7 +452,7 @@ window.addRating=function(targetId,rating){
 };
 function avgR(u){const r=(A.ratings[u]||[]).filter(x=>!x.nd);if(!r.length)return null;return Math.round(r.reduce((s,x)=>s+x.score,0)/r.length*10)/10;}
 function npC(u){return(A.ratings[u]||[]).filter(x=>x.nd).length;}
-function avHtml(id,name,size){const sz=size||40;const av=id===A.myId?ls('oAvatar'):(A.peers.get(id)?.avatar||null);
+function avHtml(id,name,size){const sz=size||40;const av=id===A.myId?ls('oAvatar'):(A.peers.get(id)?.avatar||A.contacts.find(c=>c.id===id)?.avatar||null);
   if(av)return`<img src="${esc(av)}" style="width:${sz}px;height:${sz}px;border-radius:${sz/2}px;object-fit:cover;flex-shrink:0;border:2px solid var(--pbb)">`;
   return`<div class="av" style="width:${sz}px;height:${sz}px;border-radius:${sz/2}px;font-size:${Math.round(sz*.38)}px">${((name||'?')[0]||'?').toUpperCase()}</div>`;}
 function countActivePosts(){return A.myJobs.filter(j=>!['cancelled','declined','never_done'].includes(j.status)).length;}
@@ -662,7 +662,8 @@ window.sendChatAudio=(type,id1,id2)=>{if(!window._pendingAudio)return;const{url,
   if(type==='jc'){const msg={from:A.myId,name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,ts:now(),_mid:uid(),_status:'sent'};
     addJMsg(id1,msg);fsWriteJobChat(id1,msg);var _aj=A.myJobs.find(x=>x.id===id1);var _at=_aj?jobParticipants(_aj):(id2?[id2]:[]);
     _at.forEach(pid=>send(pid,{t:'BM',jid:id1,name:A.myName,text:msg.text,audioUrl:url,duration:dur,ts:msg.ts,_mid:msg._mid}));}
-  else if(type==='dm'){var dmaid=uid();var dts=now();var dmsg={t:'DM',name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,enc:false,ts:dts,_mid:dmaid,senderPub:A.pubB64||'',senderEpub:A.ecdhPubB64||'',senderEsig:A.ecdhSig||''};
+  else if(type==='dm'){if(!url||url.startsWith('data:')){notify('⚠️','Lydopplasting feilet — prøv igjen');render();return;}
+    var dmaid=uid();var dts=now();var dmsg={t:'DM',name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,enc:false,ts:dts,_mid:dmaid,senderPub:A.pubB64||'',senderEpub:A.ecdhPubB64||'',senderEsig:A.ecdhSig||''};
     addDM(id1,{from:A.myId,name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,ts:dts,_mid:dmaid,_status:'sent'});
     send(id1,dmsg);fsWriteDM(id1,dmsg);
     fsWriteDMRef(A.myId,id1,{peerName:dn(id1,A.peers.get(id1)?.name),lastTs:dts,unread:0,visibility:'active'});}
@@ -1062,6 +1063,7 @@ async function hydratePeerCryptoFromFs(pid,fallbackName){if(!hasFS()||!pid)retur
   var doc=await fbDb.collection('users').doc(pid).get();if(!doc.exists)return null;var data=doc.data()||{};
   if(!data.pub||!data.epub||!data.esig)return null;var ok=await verifyECDHSig(data.pub,data.epub,data.esig);if(!ok)return null;
   var prev=A.peers.get(pid)||{};A.peers.set(pid,{...prev,id:pid,name:prev.name||data.name||fallbackName||pid.substr(0,8),pub:data.pub,epub:data.epub,esig:data.esig,epubV:true,ts:Math.max(prev.ts||0,now()),online:!!prev.online,avatar:data.avatar||prev.avatar||''});
+  {const _av=data.avatar||prev.avatar;if(_av){const _ec=A.contacts.find(c=>c.id===pid);if(_ec&&_ec.avatar!==_av){_ec.avatar=_av;qPersist();}}}
   return data.epub;
 }catch(e){if(D())console.log('[hydratePeerCryptoFromFs] error',pid,e.message);return null;}}
 async function resolveDmEpub(pid,m){var peer=A.peers.get(pid);
@@ -1385,7 +1387,7 @@ async function fsWriteJobChatAck(userId,jid,mid){if(!hasFS()||!userId||!jid||!mi
     if(D())console.log('[FS] writeJobChatAck',userId,jid,mid);return true;
   }catch(e){if(D())console.log('[FS] writeJobChatAck error',userId,jid,e.message);return false;}}
 async function fsCheckJobChats(){if(!hasFS())return;
-  var active=A.myJobs.filter(j=>['active','pending_review','done'].includes(j.status)&&(j.helperId||j.creatorId||j.items?.some(it=>it.assignedTo)));
+  var active=A.myJobs.filter(j=>(['active','pending_review','done'].includes(j.status)||hasAssignedPointParticipants(j))&&(j.helperId||j.creatorId||j.items?.some(it=>it.assignedTo)));
   for(var j of active){try{var localMsgs=A.jobChats[j.id]||[];var localMids=new Set(localMsgs.map(m=>m._mid).filter(Boolean));
     var snap=await fbDb.collection('posts').doc(j.id).collection('chat').orderBy('ts','desc').limit(200).get();
     var docs=snap.docs.slice().sort((a,b)=>(a.data()?.ts||0)-(b.data()?.ts||0));
@@ -1570,6 +1572,7 @@ function onData(from,m){try{if(!m||A.blocked.has(from))return;
       if(A._removedContacts.has(from)){if(D())console.log('[HI] auto-add blocked — removedContacts',{from,name:m.name});}
       else{A.contacts.push({id:from,name:m.name||from.substr(0,12),alias:m.name||from.substr(0,12)});persist();}}
     if(m.name){const ec=A.contacts.find(c=>c.id===from);if(ec&&ec.name!==m.name&&(!ec.name||ec.name===from.substr(0,12)||ec.name.startsWith('o'))){ec.name=m.name;if(!ec.alias||ec.alias===ec.name||ec.alias.startsWith('o'))ec.alias=m.name;qPersist();}}
+    {const _av=m.avatar||ex.avatar;if(_av){const _ec=A.contacts.find(c=>c.id===from);if(_ec&&_ec.avatar!==_av){_ec.avatar=_av;qPersist();}}}
     if(!ex.name){try{A.conns.get(from)?.send({t:'HI',...myPres()});}catch(e){}
       // HI first-contact INV removed — post discovery via doPost direct INV + Firestore only
     }
@@ -2436,7 +2439,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
       <button class="btn bp" onclick="doHelp('${escA(j.id)}','${escA(j.creatorId)}')">🤝 Jeg kan hjelpe!</button>`;
     }}
   // Inline job chat for active/pending_review/done jobs where user is owner or helper
-  if((isO||isH)&&['active','pending_review','done'].includes(j.status)){
+  if((isO||isH)&&(['active','pending_review','done'].includes(j.status)||hasAssignedPointParticipants(j))){
     const _msgs=A.jobChats[jid]||[];const _oId=j.isHelper?j.creatorId:j.helperId;const _last20=_msgs.slice(-20);
     b+=`<div class="dv" style="margin:16px 0"></div><div class="slbl">💬 CHAT</div>
     <div style="max-height:300px;overflow-y:auto;margin-bottom:8px;display:flex;flex-direction:column;gap:6px" id="jd-chat">
@@ -2519,7 +2522,8 @@ window.togglePointInterest=(jid,idx)=>{if(!A._pointPick[jid])A._pointPick[jid]=[
     arr.push(idx);}render();};
 window.doHelpPoints=(jid,cid)=>{var existing=A.myJobs.find(x=>x.id===jid);
   var oj=A.openJobs.get(jid)||existing;
-  if(!oj||!['open','accepting'].includes(oj.status)){notify('⚠️','Denne jobben tar ikke imot søknader');return;}
+  var _canPointReapply=existing&&oj?.items?.length&&!['cancelled','declined','never_done','done'].includes(oj.status)&&oj.items.some(it=>!it.assignedTo);
+  if(!oj||(!['open','accepting'].includes(oj.status)&&!_canPointReapply)){notify('⚠️','Denne jobben tar ikke imot søknader');return;}
   var pts=A._pointPick[jid]||[];
   if(isInvalidDirectPointJob(oj)){notify('⚠️','Direkte oppgaver kan ikke bruke punkter');delete A._pointPick[jid];return;}
   if(!pts.length){notify('⚠️','Velg minst ett punkt');return;}
@@ -2624,6 +2628,7 @@ window.markParticipantNeverDone=async function(jid,pid){var j=A.myJobs.find(x=>x
   if(D())console.log('[markParticipantNeverDone]',{jid,pid,reopened:n,newStatus:ns});
   notify('⚠️',nm+' fikk permanent merke. '+n+' punkt åpnet igjen.');persist();updateB();render();};
 function hasPointAssignment(j,uid){return!!(j?.items?.some(it=>it.assignedTo===uid));}
+function hasAssignedPointParticipants(j){return!!(j?.items?.some(it=>it.assignedTo));}
 function reopenWithdrawnPoints(j,uid){var n=0;(j.items||[]).forEach(it=>{if(it.assignedTo===uid){it.assignedTo=null;it.assignedName=null;it.assignedStatus=null;it.status='open';n++;}});return n;}
 function pointOwnerStatus(j){var its=j.items||[];if(!its.length)return j.status||'open';
   var hasOpen=its.some(it=>(it.status||'open')==='open'&&!it.assignedTo);
