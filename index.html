@@ -199,7 +199,7 @@ const A={myId:'',myName:'',myBio:'',myCity:'',myFylke:'',myBy:'',pubB64:'',privK
   peer:null,ready:false,conns:new Map(),peers:new Map(),seen:new Set(),openJobs:new Map(),myJobs:[],jobChats:{},dms:{},
   contacts:[],blocked:new Set(),ratings:{},activity:[],offlineQ:[],relayQ:[],completedCount:0,
   screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,unreadActivity:0,unreadGroups:0,unreadFeed:0,_seenMids:new Set(),_seenAcks:new Set(),groups:[],
-  feedFilter:{type:'',fylke:'',by:'',allNorway:false},tempConns:new Map(),_publicGroups:[],_contactQ:'',_editGroup:false,_pendingGroupImg:null,
+  feedFilter:{type:'',fylke:'',by:'',allNorway:false},tempConns:new Map(),_publicGroups:[],_publicGroupsCursor:null,_publicGroupsHasMore:false,_publicGroupsLoading:false,_groupPostsHasMore:{},_groupPostsLoading:{},_publicPostsHasMore:false,_publicPostsLoading:false,_friendsPostsHasMore:false,_friendsPostsLoading:false,_contactQ:'',_editGroup:false,_pendingGroupImg:null,
   _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{},_groupRequests:{},_groupRequestsTs:{},_myGroupRequests:{}};
 
 async function loadState(){
@@ -812,14 +812,30 @@ async function fsDeleteGroup(gid){if(!hasFS())return;if(D())console.log('[-> fsD
     if(fbStorage)try{await fbStorage.ref().child('groups/'+gid+'.webp').delete();}catch(e){}
     if(D())console.log('[<- fsDeleteGroup] success',gid);return true;
   }catch(e){if(D())console.log('[fsDeleteGroup] error',gid,e.message);return false;}}
-async function fsLoadPublicGroups(){if(!hasFS())return[];if(D())console.log('[-> fsLoadPublicGroups]');
-  // NOTE: Requires Firestore index on groups(private) — see Firebase console
-  try{const snap=await fbDb.collection('groups').where('private','==',false).limit(50).get();
-    const r=snap.docs.map(d=>({...d.data(),id:d.id}));if(D())console.log('[<- fsLoadPublicGroups]',{count:r.length});return r;
-  }catch(e){if(D())console.log('[fsLoadPublicGroups] error',e.message);return[];}}
+// NOTE: Requires Firestore composite index on groups(private, createdAt) — see Firebase console
+async function fsLoadPublicGroupsPage(cursor,take){if(!hasFS())return{items:[],cursor:null,hasMore:false};
+  try{var q=fbDb.collection('groups').where('private','==',false).orderBy('createdAt','desc').limit(take||20);
+    if(cursor)q=q.startAfter(cursor);
+    var snap=await q.get();var items=snap.docs.map(d=>({...d.data(),id:d.id}));
+    var last=snap.docs.length?snap.docs[snap.docs.length-1]:null;
+    if(D())console.log('[fsLoadPublicGroupsPage]',{count:items.length,hasMore:snap.docs.length===(take||20)});
+    return{items,cursor:last,hasMore:snap.docs.length===(take||20)};
+  }catch(e){if(D())console.log('[fsLoadPublicGroupsPage] error',e.message);return{items:[],cursor:null,hasMore:false};}}
+async function fsLoadPublicGroups(){if(!hasFS())return[];
+  var r=await fsLoadPublicGroupsPage(null,20);
+  A._publicGroupsCursor=r.cursor;A._publicGroupsHasMore=r.hasMore;
+  if(D())console.log('[fsLoadPublicGroups] first page',{count:r.items.length,hasMore:r.hasMore});
+  return r.items;}
 let _pubGroupsTs=0;
 function fsRefreshPublicGroupsIfNeeded(){if(!hasFS()||now()-_pubGroupsTs<90000)return;_pubGroupsTs=now();
   fsLoadPublicGroups().then(gs=>{A._publicGroups=gs;sR();}).catch(()=>{});}
+window.loadMorePublicGroups=async()=>{if(A._publicGroupsLoading||!A._publicGroupsHasMore)return;
+  A._publicGroupsLoading=true;render();
+  var r=await fsLoadPublicGroupsPage(A._publicGroupsCursor,20);
+  var seen=new Set((A._publicGroups||[]).map(g=>g.id));
+  r.items.forEach(g=>{if(!seen.has(g.id)){A._publicGroups.push(g);seen.add(g.id);}});
+  A._publicGroupsCursor=r.cursor;A._publicGroupsHasMore=r.hasMore;A._publicGroupsLoading=false;
+  sR();};
 let _grpPostsTs=0;
 function fsRefreshGroupPostsIfNeeded(){if(!hasFS()||!A.groups.length||now()-_grpPostsTs<90000)return;_grpPostsTs=now();
   A.groups.forEach(g=>{fsLoadGroupPosts(g.id).then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});
@@ -1106,26 +1122,55 @@ async function fsCheckRatings(targetIds){if(!hasFS())return;var ids=[...new Set(
       snap.docs.forEach(doc=>{if(mergeRatingLocal(rid,{_rid:doc.id,...doc.data()}))changed=true;});
     }catch(e){if(D())console.log('[fsCheckRatings] error',rid,e.message);}}
   if(changed){persist();sR();}}
-async function fsLoadPublicPosts(){if(D())console.log('[-> fsLoadPublicPosts]');if(!hasFS())return[];try{var cutoff=now()-30*864e5,byId=new Map();
+async function fsLoadPublicPostsPage(olderThan,takePerStatus){if(!hasFS())return{items:[],hasMore:false};
+  var tk=takePerStatus||30;try{var cutoff=now()-30*864e5,byId=new Map(),anyFull=false;
   for(const st of DISCOVERABLE_POST_STATUSES){try{
-    var snap=await fbDb.collection('posts').where('visibility','==','public').where('status','==',st).where('ts','>',cutoff).orderBy('ts','desc').limit(100).get();
+    var q=fbDb.collection('posts').where('visibility','==','public').where('status','==',st).where('ts','>',cutoff).orderBy('ts','desc');
+    if(olderThan)q=q.where('ts','<',olderThan);
+    var snap=await q.limit(tk).get();
     snap.docs.forEach(d=>{if(!byId.has(d.id))byId.set(d.id,d.data());});
+    if(snap.docs.length===tk)anyFull=true;
   }catch(e){}}
-  var out=[...byId.values()].sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,100);
-  if(D())console.log('[<- fsLoadPublicPosts]',{count:out.length});return out;}catch(e){console.warn('[FS] loadPosts',e);return[];}}
-async function fsLoadFriendsPosts(){if(!hasFS()||!A.contacts.length)return[];if(D())console.log('[-> fsLoadFriendsPosts]');
-  try{var cutoff=now()-30*864e5;var cids=A.contacts.map(c=>c.id);var results=[];
-    // Firestore 'in' supports max 10 values per query — chunk
+  var items=[...byId.values()].sort((a,b)=>(b.ts||0)-(a.ts||0));
+  if(D())console.log('[fsLoadPublicPostsPage]',{count:items.length,hasMore:anyFull});
+  return{items,hasMore:anyFull};
+}catch(e){console.warn('[FS] loadPublicPostsPage',e);return{items:[],hasMore:false};}}
+async function fsLoadPublicPosts(){if(D())console.log('[-> fsLoadPublicPosts]');if(!hasFS())return[];
+  var r=await fsLoadPublicPostsPage(null,30);A._publicPostsHasMore=r.hasMore;
+  if(D())console.log('[<- fsLoadPublicPosts]',{count:r.items.length});return r.items;}
+window.loadMorePublicPosts=async()=>{if(A._publicPostsLoading||!A._publicPostsHasMore)return;
+  A._publicPostsLoading=true;render();
+  var oldest=Infinity;var _ds=new Set(DISCOVERABLE_POST_STATUSES);
+  A.openJobs.forEach(j=>{if(j.visibility==='public'&&_ds.has(j.status)&&typeof j.ts==='number'&&j.ts<oldest)oldest=j.ts;});
+  var r=await fsLoadPublicPostsPage(oldest===Infinity?null:oldest,30);
+  r.items.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId))A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});});
+  A._publicPostsHasMore=r.hasMore;A._publicPostsLoading=false;if(r.items.length)persist();sR();};
+async function fsLoadFriendsPostsPage(olderThan,takePerStatus){if(!hasFS()||!A.contacts.length)return{items:[],hasMore:false};
+  var tk=takePerStatus||20;try{var cutoff=now()-30*864e5;var cids=A.contacts.map(c=>c.id);var results=[];var anyFull=false;
     for(var i=0;i<cids.length;i+=10){var chunk=cids.slice(i,i+10);
       for(const st of DISCOVERABLE_POST_STATUSES){try{
-        var snap=await fbDb.collection('posts').where('creatorId','in',chunk).where('status','==',st).where('ts','>',cutoff).orderBy('ts','desc').limit(50).get();
+        var q=fbDb.collection('posts').where('creatorId','in',chunk).where('status','==',st).where('ts','>',cutoff).orderBy('ts','desc');
+        if(olderThan)q=q.where('ts','<',olderThan);
+        var snap=await q.limit(tk).get();
         snap.docs.forEach(d=>results.push(d.data()));
+        if(snap.docs.length===tk)anyFull=true;
       }catch(e){}}}
-    // Only return friends-visibility posts (public comes via fsLoadPublicPosts)
     results=results.filter(p=>p.visibility==='friends');
-    var byId=new Map();results.forEach(p=>{if(p?.id&&!byId.has(p.id))byId.set(p.id,p);});results=[...byId.values()].sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,100);
-    if(D())console.log('[<- fsLoadFriendsPosts]',{count:results.length});return results;
-  }catch(e){if(D())console.log('[fsLoadFriendsPosts] error',e.message);return[];}}
+    var byId=new Map();results.forEach(p=>{if(p?.id&&!byId.has(p.id))byId.set(p.id,p);});
+    var items=[...byId.values()].sort((a,b)=>(b.ts||0)-(a.ts||0));
+    if(D())console.log('[fsLoadFriendsPostsPage]',{count:items.length,hasMore:anyFull});
+    return{items,hasMore:anyFull};
+  }catch(e){if(D())console.log('[fsLoadFriendsPostsPage] error',e.message);return{items:[],hasMore:false};}}
+async function fsLoadFriendsPosts(){if(D())console.log('[-> fsLoadFriendsPosts]');if(!hasFS()||!A.contacts.length)return[];
+  var r=await fsLoadFriendsPostsPage(null,20);A._friendsPostsHasMore=r.hasMore;
+  if(D())console.log('[<- fsLoadFriendsPosts]',{count:r.items.length});return r.items;}
+window.loadMoreFriendsPosts=async()=>{if(A._friendsPostsLoading||!A._friendsPostsHasMore)return;
+  A._friendsPostsLoading=true;render();
+  var oldest=Infinity;var _ds=new Set(DISCOVERABLE_POST_STATUSES);
+  A.openJobs.forEach(j=>{if(j.visibility==='friends'&&_ds.has(j.status)&&typeof j.ts==='number'&&j.ts<oldest)oldest=j.ts;});
+  var r=await fsLoadFriendsPostsPage(oldest===Infinity?null:oldest,20);
+  r.items.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId))A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});});
+  A._friendsPostsHasMore=r.hasMore;A._friendsPostsLoading=false;if(r.items.length)persist();sR();};
 async function fsLoadDirectPosts(){if(!hasFS()||!A.myId)return[];if(D())console.log('[-> fsLoadDirectPosts]');
   try{var cutoff=now()-30*864e5,byId=new Map();
     for(const st of DISCOVERABLE_POST_STATUSES){try{
@@ -1135,13 +1180,31 @@ async function fsLoadDirectPosts(){if(!hasFS()||!A.myId)return[];if(D())console.
     var out=[...byId.values()].filter(p=>p.creatorId!==A.myId&&!isInvalidDirectJob(p)).sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,100);
     if(D())console.log('[<- fsLoadDirectPosts]',{count:out.length});return out;
   }catch(e){if(D())console.log('[fsLoadDirectPosts] error',e.message);return[];}}
-async function fsLoadGroupPosts(gid){if(!hasFS()||!gid)return[];try{var byId=new Map();
+async function fsLoadGroupPostsPage(gid,olderThan,takePerStatus){if(!hasFS()||!gid)return{items:[],hasMore:false};
+  var tk=takePerStatus||20;try{var byId=new Map();var anyFull=false;
   for(const st of DISCOVERABLE_POST_STATUSES){try{
-    var snap=await fbDb.collection('posts').where('groupId','==',gid).where('status','==',st).orderBy('ts','desc').limit(50).get();
+    var q=fbDb.collection('posts').where('groupId','==',gid).where('status','==',st).orderBy('ts','desc');
+    if(olderThan)q=q.where('ts','<',olderThan);
+    var snap=await q.limit(tk).get();
     snap.docs.forEach(d=>{if(!byId.has(d.id))byId.set(d.id,d.data());});
+    if(snap.docs.length===tk)anyFull=true;
   }catch(e){}}
-  return[...byId.values()].sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,50);
-}catch(e){if(D())console.log('[fsLoadGroupPosts] error',gid,e.message);return[];}}
+  var items=[...byId.values()].sort((a,b)=>(b.ts||0)-(a.ts||0));
+  if(D())console.log('[fsLoadGroupPostsPage]',{gid,count:items.length,hasMore:anyFull});
+  return{items,hasMore:anyFull};
+}catch(e){if(D())console.log('[fsLoadGroupPostsPage] error',gid,e.message);return{items:[],hasMore:false};}}
+async function fsLoadGroupPosts(gid){if(!hasFS()||!gid)return[];
+  var r=await fsLoadGroupPostsPage(gid,null,20);
+  A._groupPostsHasMore[gid]=r.hasMore;
+  return r.items;}
+window.loadMoreGroupPosts=async(gid)=>{if(!gid||A._groupPostsLoading[gid]||!A._groupPostsHasMore[gid])return;
+  A._groupPostsLoading[gid]=true;render();
+  var oldest=Infinity;var _ds=new Set(DISCOVERABLE_POST_STATUSES);
+  [...A.openJobs.values()].forEach(j=>{if(j.groupId===gid&&_ds.has(j.status)&&j.ts<oldest)oldest=j.ts;});
+  A.myJobs.forEach(j=>{if(j.groupId===gid&&_ds.has(j.status)&&j.ts<oldest)oldest=j.ts;});
+  var r=await fsLoadGroupPostsPage(gid,oldest===Infinity?null:oldest,20);
+  r.items.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId))A.openJobs.set(p.id,{...p,isFromContact:true});});
+  A._groupPostsHasMore[gid]=r.hasMore;A._groupPostsLoading[gid]=false;sR();};
 async function fsUpdatePostStatus(pid,status,extra){if(D())console.log('[-> fsUpdatePostStatus]',{jid:pid,status,extra});if(!hasFS())return false;try{const doc=await fbDb.collection('posts').doc(pid).get();if(!doc.exists)return false;
   var upd={status};if(extra)Object.assign(upd,extra);
   await fbDb.collection('posts').doc(pid).update(upd);if(D())console.log('[<- fsUpdatePostStatus] success',pid);return true;}catch(e){if(D())console.log('[FS] updatePost skip',pid);return false;}}
@@ -1407,6 +1470,7 @@ function buildIceServers(){var ice=[{urls:'stun:stun.l.google.com:19302'},{urls:
   if(TURN_URLS.length)TURN_URLS.forEach(u=>ice.push({urls:u,username:TURN_USERNAME,credential:TURN_CREDENTIAL}));return ice;}
 const _gr=new Map();function chkRate(p){const n=now();const r=_gr.get(p)||{c:0,r:n+1e4};if(n>r.r){r.c=0;r.r=n+1e4;}_gr.set(p,r);return++r.c<=30;}
 function myPres(){return{id:A.myId,name:A.myName,bio:A.myBio,fylke:A.myFylke,by:A.myBy,avatar:ls('oAvatar')||'',pub:A.pubB64,epub:A.ecdhPubB64,esig:A.ecdhSig,done:A.completedCount,ts:now(),pr:avgR(A.myId),cids:A.contacts.map(c=>c.id),gids:A.groups.map(g=>g.id)};}
+function myPresLean(){return{id:A.myId,name:A.myName,ts:now(),cids:A.contacts.map(c=>c.id),gids:A.groups.map(g=>g.id)};}
 const RBK=[2e3,5e3,15e3,3e4,6e4];
 function initPeer(){A._pg=(A._pg||0)+1;const gen=A._pg;
   const cfg=A._useFallback?PEER_FALLBACK:PEER_CONFIG;
@@ -1416,7 +1480,7 @@ function initPeer(){A._pg=(A._pg||0)+1;const gen=A._pg;
   A.peer=new Peer(A.myId,pOpts);
   A.peer.on('open',()=>{if(gen!==A._pg)return;A.ready=true;clearTimeout(A._rt2);A._rt2=null;A._rs=0;sR();
     A.contacts.forEach(c=>tryC(c.id));flushQ();
-    clearInterval(A._hi);A._hi=setInterval(()=>{if(A.conns.size)bcast({t:'HI',...myPres()});A.contacts.forEach(c=>tryC(c.id));flushQ();},25e3);});
+    clearInterval(A._hi);A._hi=setInterval(()=>{if(A.conns.size)bcast({t:'HI',...myPresLean()});A.contacts.forEach(c=>tryC(c.id));flushQ();},25e3);});
   A.peer.on('error',e=>{if(gen!==A._pg)return;
     if(e.type==='unavailable-id'){A._ir=(A._ir||1)*2;setTimeout(()=>{try{A.peer.destroy();}catch(x){}initPeer();},Math.min(A._ir*1e3,6e4));return;}
     if(e.type==='peer-unavailable')return;A.ready=false;schRec();});
@@ -2005,6 +2069,8 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
       ${j.jobDate?`<div style="font-size:12px;color:var(--pr);font-weight:600;margin-bottom:4px">${fmtDate(j.jobDate,j.jobTime)}</div>`:''}
       ${j.reward?`<div style="font-size:13px;color:var(--g2);font-weight:700;margin-bottom:6px">🎁 ${esc(j.reward)}</div>`:''}
       <div style="font-size:11px;color:var(--t3);padding-top:8px;border-top:1px solid var(--s2)">${esc([j.by,fNm].filter(Boolean).join(', ')||j.location||'')}</div></div>`;}).join('')}
+    ${jobs.length||A._publicPostsHasMore?A._publicPostsHasMore?`<button class="btn bs bsm" style="margin-top:8px;margin-bottom:12px" onclick="loadMorePublicPosts()">${A._publicPostsLoading?'Laster...':'Last inn flere innlegg'}</button>`:'':''}
+    ${jobs.length||A._friendsPostsHasMore?A._friendsPostsHasMore?`<button class="btn bs bsm" style="margin-top:8px;margin-bottom:12px" onclick="loadMoreFriendsPosts()">${A._friendsPostsLoading?'Laster...':'Last inn flere fra venner'}</button>`:'':''}
     ${(()=>{const _ev=[];const _14d=now()-14*864e5;
       const _gids=new Set(A.groups.map(g=>g.id));
       const _gname=gid=>{const g=A.groups.find(x=>x.id===gid);return g?g.name:null;};
@@ -3096,13 +3162,14 @@ function vGroups(){
     const explore=(A._publicGroups||[]).filter(g=>!myGids.has(g.id));
     return(priv.length?`<span class="slbl">🔒 PRIVATE</span>${priv.map(gc).join('')}`:'')
       +(pub.length?`<span class="slbl" style="margin-top:14px;display:block">🔓 ÅPNE</span>${pub.map(gc).join('')}`:'')
-      +(explore.length?`<span class="slbl" style="margin-top:18px;display:block">🌍 UTFORSK GRUPPER</span>${explore.slice(0,10).map(eg=>
+      +(explore.length||A._publicGroupsHasMore?`<span class="slbl" style="margin-top:18px;display:block">🌍 UTFORSK GRUPPER</span>${explore.map(eg=>
         `<div class="cd" style="margin-bottom:8px;padding:10px 14px;display:flex;align-items:center;gap:10px">
         ${eg.imageUrl?`<img src="${esc(eg.imageUrl)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:1px solid var(--s3);flex-shrink:0">`
         :`<div style="width:36px;height:36px;border-radius:50%;background:#F5F3FF;border:1px solid #DDD6FE;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">🌐</div>`}
         <div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(eg.name)}</div>
         <div style="font-size:11px;color:var(--t3)">${eg.members?.length||'?'} medlemmer${eg.fylke?' · '+esc(FYLKER.find(f=>f.id===eg.fylke)?.name||''):''}</div></div>
-        <button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="requestGroupJoin('${escA(eg.id)}','${escA(eg.name)}')">Bli med</button></div>`).join('')}`:'');})()}</div>`;}
+        <button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="requestGroupJoin('${escA(eg.id)}','${escA(eg.name)}')">Bli med</button></div>`).join('')}
+        ${A._publicGroupsHasMore?`<button class="btn bs bsm" style="margin-top:8px" onclick="loadMorePublicGroups()">${A._publicGroupsLoading?'Laster...':'Last inn flere grupper'}</button>`:''}`:'');})()}</div>`;}
 function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===gid);
   if(!g)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groups')">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Gruppe ikke funnet.</div></div></div>`;
   const isAdmin=!!(g.creatorId&&g.creatorId===A.myId);
@@ -3202,6 +3269,7 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
     ${j.jobDate?`<div style="font-size:12px;color:var(--pr);font-weight:600;margin-bottom:4px">${fmtDate(j.jobDate,j.jobTime)}</div>`:''}
     ${j.reward?`<div style="font-size:13px;color:var(--g2);font-weight:700;margin-bottom:6px">🎁 ${esc(j.reward)}</div>`:''}</div>`;}).join('')
     :`<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Ingen innlegg i gruppen ennå.</div></div>`}
+  ${A._groupPostsHasMore[gid]?`<button class="btn bs bsm" style="margin-top:8px;margin-bottom:12px" onclick="loadMoreGroupPosts('${escA(gid)}')">${A._groupPostsLoading[gid]?'Laster...':'Last inn flere innlegg'}</button>`:''}
   ${(()=>{const doneP=_allGJ.filter(j=>j.status==='done').sort((a,b)=>b.ts-a.ts).slice(0,5);
     if(!doneP.length)return'';
     return`<span class="slbl" style="margin-top:16px;display:block">✅ NYLIG FULLFØRT (${doneP.length})</span>${doneP.map(j=>{
