@@ -845,6 +845,15 @@ async function fsRegisterUser(){if(D())console.log('[-> fsRegisterUser]',{myId:A
 function fsWriteJobRef(uid,jid,fields){if(!hasFS()||!uid||!jid)return;try{fbDb.collection('users').doc(uid).collection('jobRefs').doc(jid).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] jobRef write',e);});}catch(e){}}
 function fsWriteDMRef(uid,peerId,fields){if(!hasFS()||!uid||!peerId)return;try{fbDb.collection('users').doc(uid).collection('dmRefs').doc(peerId).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] dmRef write',e);});}catch(e){}}
 function fsWriteGroupRef(uid,gid,fields){if(!hasFS()||!uid||!gid)return;try{fbDb.collection('users').doc(uid).collection('groupRefs').doc(gid).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] groupRef write',e);});}catch(e){}}
+async function fsRecoverArchivedJobsFromRefs(){if(!hasFS()||!A.myId)return;
+  var candidates=A.myJobs.filter(j=>j.status==='done'&&!j.archivedForMeAt);
+  if(!candidates.length)return;var recovered=0;
+  for(var j of candidates){try{
+    var doc=await fbDb.collection('users').doc(A.myId).collection('jobRefs').doc(j.id).get();
+    if(!doc.exists)continue;var ref=doc.data();
+    if(ref?.visibility==='archived'){j.archivedForMeAt=ref.archivedAt||ref.updatedAt||now();delete A._unreadJobs[j.id];recovered++;}
+  }catch(e){}}
+  if(recovered){persist();if(D())console.log('[fsRecoverArchivedJobsFromRefs]',{recovered});}}
 async function fsEnqueuePurgeIntent(type,targetId,extra){if(!hasFS()||!type||!targetId)return;try{await fbDb.collection('purgeQueue').add({type,targetId,requestedBy:A.myId,requestedAt:Date.now(),status:'pending',...(extra||{})});if(D())console.log('[FS] purgeIntent queued',{type,targetId});}catch(e){if(D())console.warn('[FS] purgeIntent write',e);}}
 async function fsDeleteGroupRequestArtifacts(gid){if(!hasFS()||!gid)return 0;try{var snap=await fbDb.collectionGroup('groupRequests').where('gid','==',gid).get();
   var n=0;for(var d of snap.docs){try{await d.ref.delete();n++;}catch(e){}}if(D()&&n)console.log('[purge] cleaned groupRequests',{gid,deleted:n});return n;}catch(e){if(D())console.warn('[purge] groupRequests cleanup error',gid,e);return 0;}}
@@ -3432,6 +3441,7 @@ async function fsBootReconcile(){
   try{await fsCheckJobStatus();}catch(e){}
   try{await fsCheckPointUpdates();}catch(e){}
   try{await fsSyncMyPosts();}catch(e){}
+  try{await fsRecoverArchivedJobsFromRefs();}catch(e){}
   try{await fsCleanupOrphanedJobs(true);}catch(e){}
 }
 async function boot(){
