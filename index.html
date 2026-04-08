@@ -621,7 +621,7 @@ function canTogglePoint(j,idx){var it=j?.items?.[idx];if(!j||!it)return false;
   var s=it.status||'open';return s==='taken'||s==='done';}
 window.updatePointStatus=function(jobId,idx){if(D())console.log('[updatePointStatus]',{jobId,idx});
   var j=A.myJobs.find(x=>x.id===jobId);if(!j)return;
-  if(['cancelled','declined','never_done'].includes(j.status)||j.archivedForMeAt)return;
+  if(['cancelled','declined','never_done','done'].includes(j.status)||j.archivedForMeAt)return;
   // Point-mode: only assignedTo can toggle taken↔done
   if(j.items?.[idx]?.assignedTo){
     if(!canTogglePoint(j,idx)){if(D())console.log('[updatePointStatus] blocked — not assignedTo',{jobId,idx});return;}
@@ -1627,7 +1627,8 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
   case 'JR':{const j=A.myJobs.find(x=>x.id===m.jid);
     if(D())console.log('[JR] received',{from,jid:m.jid,jobFound:!!j,jobStatus:j?.status,alreadyInInterests:j?.interests?.some(x=>x.id===from)});
     if(!j){if(D())console.log('[JR] ignored — job not found',{jid:m.jid});break;}
-    if(!['open','accepting'].includes(j.status)){if(D())console.log('[JR] ignored — wrong status',{jid:m.jid,status:j.status});break;}
+    var _canAcceptPointJR=!!(j.creatorId===A.myId&&j.items?.length&&!['cancelled','declined','never_done','done'].includes(j.status)&&(j.items||[]).some(it=>(it.status||'open')==='open'&&!it.assignedTo));
+    if(!(['open','accepting'].includes(j.status)||_canAcceptPointJR)){if(D())console.log('[JR] ignored — wrong status',{jid:m.jid,status:j.status,canAcceptPointJR:_canAcceptPointJR});break;}
     if(j.visibility==='direct'&&Array.isArray(j.targetIds)&&j.targetIds[0]&&j.targetIds[0]!==from){if(D())console.log('[JR] ignored — wrong direct target',{jid:m.jid,expected:j.targetIds[0],from});break;}
     if(!j.interests)j.interests=[];var _existInt=j.interests.find(x=>x.id===from);
     if(_existInt){_existInt.msg=m.message||'';_existInt.audioUrl=m.audioUrl||null;_existInt.audioDur=m.audioDur||0;_existInt.points=Array.isArray(m.points)?m.points.slice():[];_existInt.ts=now();}
@@ -2232,7 +2233,9 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
   const toSend=stripJobForSend(lj||job);
   // Route based on visibility (P2P for speed, Firestore for reliability)
   if(job.visibility==='direct'){var _directId=(job.targetIds||[])[0];if(_directId)send(_directId,{t:'INV',job:{...toSend,fromContact:true}});}
-  else if(job.visibility==='group'){const gid=job.groupId;A.contacts.forEach(c=>{const p=A.peers.get(c.id);if(!gid||p?.gids?.includes(gid))send(c.id,{t:'INV',job:{...toSend,fromContact:true}});});}
+  else if(job.visibility==='group'){const gid=job.groupId;const _gm=new Set((A.groups.find(g=>g.id===gid)?._members||[]).filter(id=>id!==A.myId));
+    A.contacts.forEach(c=>{if(_gm.has(c.id)||(gid&&A.peers.get(c.id)?.gids?.includes(gid)))send(c.id,{t:'INV',job:{...toSend,fromContact:true}});});
+    _gm.forEach(mid=>{if(!A.contacts.find(c=>c.id===mid)&&A.conns.get(mid)?.open)send(mid,{t:'INV',job:{...toSend,fromContact:true}});});}
   else if(job.visibility==='public'){A.contacts.forEach(c=>send(c.id,{t:'INV',job:{...toSend,fromContact:true}}));}
   else{A.contacts.forEach(c=>send(c.id,{t:'INV',job:{...toSend,fromContact:true}}));}
   // Send point invitations for assigned items
@@ -2743,7 +2746,7 @@ function vMine(){
     if(hasAnyHelp){h+=`<span class="slbl" style="margin-top:14px;display:block">JEG HJELPER (${helping.length})</span>`;
       h+=helping.length?helping.map(mc).join(''):'<div style="font-size:13px;color:var(--t3);margin-bottom:14px">Ingen her.</div>';}
     return h||'<div class="emp"><div class="emp-i">📋</div><div class="emp-t">Ingen her.</div></div>';})()}
-  ${mf==='done'&&filtered.length?`<button class="btn bs bsm" style="margin-top:8px" onclick="showConfirm('Rydde opp?','Flytter alle fullførte til Avsluttet.','Rydd opp',()=>{var _n=now();A.myJobs.filter(j=>j.status==='done'&&!j.archivedForMeAt).forEach(j=>{j.archivedForMeAt=_n;delete A._unreadJobs[j.id];fsWriteJobRef(A.myId,j.id,{status:j.status,visibility:'archived',archivedAt:_n});});persist();render();notify('✅','Flyttet til Avsluttet');})">🧹 Rydd opp</button>`:''}</div>`;}
+  ${mf==='done'&&filtered.length?`<button class="btn bs bsm" style="margin-top:8px" onclick="showConfirm('Flytt til Avsluttet?','Flytter alle fullførte til Avsluttet.','Flytt',()=>{var _n=now();A.myJobs.filter(j=>j.status==='done'&&!j.archivedForMeAt).forEach(j=>{j.archivedForMeAt=_n;delete A._unreadJobs[j.id];fsWriteJobRef(A.myId,j.id,{status:j.status,visibility:'archived',archivedAt:_n});});persist();render();notify('✅','Flyttet til Avsluttet');})">📦 Flytt alt til Avsluttet</button>`:''}</div>`;}
 
 // ═══ CHAT HUB ═══
 function vChatHub(){const dl=Object.keys(A.dms).filter(id=>A.dms[id]?.length);
