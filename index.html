@@ -13,6 +13,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#FAF9F6;--sf:#FFF;--s2:#F2F0EC;--s3:#E5E2DC;--b:#D4D0C8;--tx:#1A1814;--t2:#5C5A55;--t3:#8A8880;--mt:#B0ADA6;
@@ -702,6 +703,15 @@ function initFB(){
     try{fbDb=firebase.firestore();console.log('[FB] Init OK — Storage + Firestore');}catch(e2){console.log('[FB] Init OK — Storage only');}}
   catch(e){console.warn('[FB]',e);}}
 function hasFS(){return!!fbDb;}
+async function ensureFirebaseAuthSession(){try{if(!firebase?.auth)return null;
+  var auth=firebase.auth();
+  var user=await new Promise(function(resolve){var unsub;var timer=setTimeout(function(){if(unsub)unsub();resolve(null);},5000);
+    unsub=auth.onAuthStateChanged(function(u){clearTimeout(timer);unsub();resolve(u);});});
+  if(user){ss('oFbUid',user.uid);if(D())console.log('[auth] reused session',{uid:user.uid});return user.uid;}
+  var cred=await auth.signInAnonymously();var uid=cred?.user?.uid||null;
+  if(uid)ss('oFbUid',uid);else{localStorage.removeItem('oFbUid');}
+  if(D())console.log('[auth] anonymous session',{uid});return uid;
+}catch(e){console.warn('[auth] bootstrap failed',e);return null;}}
 function dropMissingGroup(gid,reason,quiet){if(D())console.log('[dropMissingGroup]',{gid,reason});
   var changed=false;
   var _beforeGroups=A.groups.length;
@@ -841,7 +851,7 @@ let _grpPostsTs=0;
 function fsRefreshGroupPostsIfNeeded(){if(!hasFS()||!A.groups.length||now()-_grpPostsTs<90000)return;_grpPostsTs=now();
   A.groups.forEach(g=>{fsLoadGroupPosts(g.id).then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});
     if(added>0){if(A.screen!=='groups')A.unreadGroups+=added;if(!(A.screen==='groupDetail'&&A.params.gid===g.id))A._unreadGroupPosts[g.id]=(A._unreadGroupPosts[g.id]||0)+added;updateB();persist();sR();}}).catch(()=>{});});}
-async function fsRegisterUser(){if(D())console.log('[-> fsRegisterUser]',{myId:A.myId,myName:A.myName});if(!hasFS()||!A.myId||!A.myName)return;try{await fbDb.collection('users').doc(A.myId).set({name:A.myName,nameLower:A.myName.toLowerCase(),fylke:A.myFylke||'',by:A.myBy||'',avatar:ls('oAvatar')||'',pub:A.pubB64||'',epub:A.ecdhPubB64||'',esig:A.ecdhSig||'',updatedAt:Date.now()},{merge:true});if(D())console.log('[<- fsRegisterUser] success');}catch(e){console.warn('[FS] registerUser',e);}}
+async function fsRegisterUser(){if(D())console.log('[-> fsRegisterUser]',{myId:A.myId,myName:A.myName});if(!hasFS()||!A.myId||!A.myName)return;try{await fbDb.collection('users').doc(A.myId).set({name:A.myName,nameLower:A.myName.toLowerCase(),fylke:A.myFylke||'',by:A.myBy||'',avatar:ls('oAvatar')||'',pub:A.pubB64||'',epub:A.ecdhPubB64||'',esig:A.ecdhSig||'',firebaseUid:ls('oFbUid')||'',updatedAt:Date.now()},{merge:true});if(D())console.log('[<- fsRegisterUser] success');}catch(e){console.warn('[FS] registerUser',e);}}
 function fsWriteJobRef(uid,jid,fields){if(!hasFS()||!uid||!jid)return;try{fbDb.collection('users').doc(uid).collection('jobRefs').doc(jid).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] jobRef write',e);});}catch(e){}}
 function fsWriteDMRef(uid,peerId,fields){if(!hasFS()||!uid||!peerId)return;try{fbDb.collection('users').doc(uid).collection('dmRefs').doc(peerId).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] dmRef write',e);});}catch(e){}}
 function fsWriteGroupRef(uid,gid,fields){if(!hasFS()||!uid||!gid)return;try{fbDb.collection('users').doc(uid).collection('groupRefs').doc(gid).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] groupRef write',e);});}catch(e){}}
@@ -3450,6 +3460,7 @@ async function boot(){
   try{await openDB();if(D())console.log('[boot] phase:db-open');}catch(e){console.warn('[DB] IndexedDB unavailable, using fallback');}
   await loadState();if(D())console.log('[boot] phase:state-loaded');
   initFB();if(D())console.log('[boot] phase:firebase-init');
+  try{await ensureFirebaseAuthSession();}catch(e){}if(D())console.log('[boot] phase:firebase-auth');
   if(typeof Notification!=='undefined'&&Notification.permission==='default')try{Notification.requestPermission();}catch(e){}
   if(A.myName){if(D())console.log('[boot] phase:crypto');try{await initCrypto();}catch(e){console.error(e);}
     // Migration: fix jobs corrupted by old BS bug (owner's status overwritten to 'pending')
