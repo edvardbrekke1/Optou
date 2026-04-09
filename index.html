@@ -14,6 +14,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#FAF9F6;--sf:#FFF;--s2:#F2F0EC;--s3:#E5E2DC;--b:#D4D0C8;--tx:#1A1814;--t2:#5C5A55;--t3:#8A8880;--mt:#B0ADA6;
@@ -448,7 +449,7 @@ window.addRating=function(targetId,rating){
   if(!targetId||!rating)return false;
   var rr={...rating,_rid:rating._rid||uid(),raterId:rating.raterId||A.myId};
   var added=mergeRatingLocal(targetId,rr);
-  if(added){fsWriteRating(targetId,rr);gossip({t:'RAT',uid:targetId,ratings:A.ratings[targetId]});}
+  if(added){fsWriteRatingCallable(targetId,rr);gossip({t:'RAT',uid:targetId,ratings:A.ratings[targetId]});}
   return added;
 };
 function avgR(u){const r=(A.ratings[u]||[]).filter(x=>!x.nd);if(!r.length)return null;return Math.round(r.reduce((s,x)=>s+x.score,0)/r.length*10)/10;}
@@ -586,7 +587,7 @@ window.doOwnerAssign=async(jid,idx,pid,name)=>{document.getElementById('owner-as
   await fsUpdatePostItems(jid,j.items);
   var _piMid='pi:'+jid+':'+idx+':'+uid();
   send(pid,{t:'PI',jid,idx,title:j.title,itemText:it.text||'Punkt '+(idx+1),creatorId:A.myId,creatorName:A.myName,_mid:_piMid});
-  fsWritePointInvitation(pid,{jid,idx,creatorId:A.myId,creatorName:A.myName,title:j.title,itemText:it.text||'Punkt '+(idx+1),recipientId:pid,recipientName:name,status:'pending',ts:now(),updatedAt:now()});
+  fsAssignPointCallable(jid,idx,pid,name);
   var ns=pointOwnerStatus(j);if(ns!==j.status){j.status=ns;fsUpdatePostStatus(jid,ns);}
   if(D())console.log('[ownerAssignPoint]',{jid,idx,pid,name});
   notify('✅','Punkt tildelt '+name);persist();render();};
@@ -666,7 +667,7 @@ window.sendChatAudio=(type,id1,id2)=>{if(!window._pendingAudio)return;const{url,
   else if(type==='dm'){if(!url||url.startsWith('data:')){notify('⚠️','Lydopplasting feilet — prøv igjen');render();return;}
     var dmaid=uid();var dts=now();var dmsg={t:'DM',name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,enc:false,ts:dts,_mid:dmaid,senderPub:A.pubB64||'',senderEpub:A.ecdhPubB64||'',senderEsig:A.ecdhSig||''};
     addDM(id1,{from:A.myId,name:A.myName,text:'🎙️ Lydmelding',audioUrl:url,duration:dur,ts:dts,_mid:dmaid,_status:'sent'});
-    send(id1,dmsg);fsWriteDM(id1,dmsg);
+    send(id1,dmsg);fsSendDMCallable(id1,dmsg);
     fsWriteDMRef(A.myId,id1,{peerName:dn(id1,A.peers.get(id1)?.name),lastTs:dts,unread:0,visibility:'active'});}
   persist();render();setTimeout(()=>{const m=$('ch-m')||$('jd-chat');if(m)m.scrollTop=m.scrollHeight;},50);};
 window.playChatAudio=url=>{if(_audio){_audio.pause();if(_audio.src===url){_audio=null;return;}}
@@ -691,7 +692,7 @@ window.sendChatImg=async()=>{if(!window._pendingImg)return;var pi=window._pendin
     _it.forEach(pid=>send(pid,{t:'BM',jid:pi.id1,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:msg.ts,_mid:mid}));}
   else if(pi.type==='dm'){var its=now();var imsg={t:'DM',name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,enc:false,ts:its,_mid:mid,senderPub:A.pubB64||'',senderEpub:A.ecdhPubB64||'',senderEsig:A.ecdhSig||''};
     addDM(pi.id1,{from:A.myId,name:A.myName,text:'📷 Bilde',imageUrl:imgUrl,ts:its,_mid:mid,_status:'sent'});
-    send(pi.id1,imsg);fsWriteDM(pi.id1,imsg);
+    send(pi.id1,imsg);fsSendDMCallable(pi.id1,imsg);
     fsWriteDMRef(A.myId,pi.id1,{peerName:dn(pi.id1,A.peers.get(pi.id1)?.name),lastTs:its,unread:0,visibility:'active'});}
   persist();render();setTimeout(()=>{var m=$('ch-m')||$('jd-chat');if(m)m.scrollTop=m.scrollHeight;},50);};
 
@@ -703,15 +704,30 @@ function initFB(){
     try{fbDb=firebase.firestore();console.log('[FB] Init OK — Storage + Firestore');}catch(e2){console.log('[FB] Init OK — Storage only');}}
   catch(e){console.warn('[FB]',e);}}
 function hasFS(){return!!fbDb;}
-async function ensureFirebaseAuthSession(){try{if(!firebase?.auth)return null;
+async function ensureFirebaseAuthSession(opts){try{if(!firebase?.auth)return null;opts=opts||{};
   var auth=firebase.auth();
   var user=await new Promise(function(resolve){var unsub;var timer=setTimeout(function(){if(unsub)unsub();resolve(null);},5000);
     unsub=auth.onAuthStateChanged(function(u){clearTimeout(timer);unsub();resolve(u);});});
-  if(user){ss('oFbUid',user.uid);if(D())console.log('[auth] reused session',{uid:user.uid});return user.uid;}
+  if(user&&opts.forceAnonymous&&!user.isAnonymous){try{await auth.signOut();}catch(_e){}user=null;localStorage.removeItem('oFbUid');if(D())console.log('[auth] cleared linked session for anonymous bootstrap');}
+  if(user){ss('oFbUid',user.uid);if(D())console.log('[auth] reused session',{uid:user.uid,isAnonymous:!!user.isAnonymous});return user.uid;}
   var cred=await auth.signInAnonymously();var uid=cred?.user?.uid||null;
   if(uid)ss('oFbUid',uid);else{localStorage.removeItem('oFbUid');}
   if(D())console.log('[auth] anonymous session',{uid});return uid;
 }catch(e){console.warn('[auth] bootstrap failed',e);return null;}}
+async function linkFirebaseIdentity(){try{
+  if(!firebase?.auth||!firebase?.functions||!A.myId||!A.pubB64||!A.privKey)return;
+  var auth=firebase.auth();if(!auth.currentUser){await ensureFirebaseAuthSession({forceAnonymous:true});auth=firebase.auth();}
+  if(auth.currentUser.uid===A.myId){if(D())console.log('[auth] already linked');return;}
+  if(!auth.currentUser?.isAnonymous){await ensureFirebaseAuthSession({forceAnonymous:true});auth=firebase.auth();}
+  if(!auth.currentUser||!auth.currentUser.isAnonymous){console.warn('[auth] no anonymous session available for link');return;}
+  var ts=Date.now();var payload={myId:A.myId,pubKey:A.pubB64,firebaseUid:ls('oFbUid'),ts:ts};
+  var sig=await signData(payload);if(!sig){console.warn('[auth] signData failed');return;}
+  var fn=firebase.functions().httpsCallable('linkIdentity');
+  var result=await fn({myId:A.myId,pubKey:A.pubB64,signature:sig,ts:ts});
+  var token=result?.data?.customToken;if(!token){console.warn('[auth] no customToken in response');return;}
+  await auth.signInWithCustomToken(token);ss('oFbUid',A.myId);
+  if(D())console.log('[auth] linked',{uid:A.myId});
+}catch(e){console.warn('[auth] linkFirebaseIdentity failed',e);}}
 function dropMissingGroup(gid,reason,quiet){if(D())console.log('[dropMissingGroup]',{gid,reason});
   var changed=false;
   var _beforeGroups=A.groups.length;
@@ -745,6 +761,26 @@ async function fsResolveGroupRequest(gid,peerId,adminId,status){if(!hasFS()||!gi
   if(adminId)await fbDb.collection('users').doc(adminId).collection('groupRequests').doc(groupRequestAdminDocId(gid,peerId)).set(patch,{merge:true});
   if(D())console.log('[fsResolveGroupRequest]',{gid,peerId,adminId,status});return true;
 }catch(e){console.warn('[FS] resolveGroupRequest',e);return false;}}
+async function fsRequestGroupJoinCallable(gid){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!gid)return{ok:false};
+  var fn=firebase.functions().httpsCallable('requestGroupJoin');
+  var result=await fn({gid:gid,ts:Date.now()});
+  if(D())console.log('[FS] requestGroupJoinCallable',gid,result?.data);
+  return result?.data?.ok?{ok:true,adminId:result.data.adminId||''}:{ok:false};
+}catch(e){
+  var msg=e?.message||'';
+  if(msg.includes('Cannot request own group'))notify('⚠️','Du eier denne gruppen');
+  else if(msg.includes('Private group'))notify('⚠️','Denne gruppen er privat');
+  else if(msg.includes('Already a member')||msg.includes('already a member'))notify('⚠️','Allerede medlem');
+  else if(D())console.warn('[FS] requestGroupJoinCallable error',gid,msg);
+  return{ok:false};}}
+async function fsResolveGroupRequestCallable(gid,peerId,adminId,status){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!gid||!peerId)return false;
+  var fn=firebase.functions().httpsCallable('resolveGroupRequest');
+  var decision=status==='approved'?'approved':'declined';
+  await fn({gid:gid,seekerId:peerId,decision:decision});
+  if(D())console.log('[FS] resolveGroupRequestCallable',gid,peerId,decision);return true;
+}catch(e){if(D())console.warn('[FS] resolveGroupRequestCallable error',gid,peerId,e?.message);return false;}}
 function upsertLocalGroupFromFs(gid,data,fallbackName){
   if(!gid||!data)return false;
   var g=A.groups.find(x=>x.id===gid);
@@ -851,7 +887,7 @@ let _grpPostsTs=0;
 function fsRefreshGroupPostsIfNeeded(){if(!hasFS()||!A.groups.length||now()-_grpPostsTs<90000)return;_grpPostsTs=now();
   A.groups.forEach(g=>{fsLoadGroupPosts(g.id).then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});
     if(added>0){if(A.screen!=='groups')A.unreadGroups+=added;if(!(A.screen==='groupDetail'&&A.params.gid===g.id))A._unreadGroupPosts[g.id]=(A._unreadGroupPosts[g.id]||0)+added;updateB();persist();sR();}}).catch(()=>{});});}
-async function fsRegisterUser(){if(D())console.log('[-> fsRegisterUser]',{myId:A.myId,myName:A.myName});if(!hasFS()||!A.myId||!A.myName)return;try{await fbDb.collection('users').doc(A.myId).set({name:A.myName,nameLower:A.myName.toLowerCase(),fylke:A.myFylke||'',by:A.myBy||'',avatar:ls('oAvatar')||'',pub:A.pubB64||'',epub:A.ecdhPubB64||'',esig:A.ecdhSig||'',firebaseUid:ls('oFbUid')||'',updatedAt:Date.now()},{merge:true});if(D())console.log('[<- fsRegisterUser] success');}catch(e){console.warn('[FS] registerUser',e);}}
+async function fsRegisterUser(){if(D())console.log('[-> fsRegisterUser]',{myId:A.myId,myName:A.myName});if(!hasFS()||!A.myId||!A.myName)return;try{var authUid='';try{authUid=(firebase&&firebase.auth&&firebase.auth().currentUser&&firebase.auth().currentUser.uid)||'';}catch(_){}if(!authUid||authUid!==A.myId){if(D())console.warn('[FS] registerUser skipped until auth linked',{authUid:authUid||null,myId:A.myId});return;}ss('oFbUid',authUid);await fbDb.collection('users').doc(A.myId).set({name:A.myName,nameLower:A.myName.toLowerCase(),fylke:A.myFylke||'',by:A.myBy||'',avatar:ls('oAvatar')||'',pub:A.pubB64||'',epub:A.ecdhPubB64||'',esig:A.ecdhSig||'',firebaseUid:authUid,updatedAt:Date.now()},{merge:true});if(D())console.log('[<- fsRegisterUser] success');}catch(e){console.warn('[FS] registerUser',e);}}
 function fsWriteJobRef(uid,jid,fields){if(!hasFS()||!uid||!jid)return;try{fbDb.collection('users').doc(uid).collection('jobRefs').doc(jid).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] jobRef write',e);});}catch(e){}}
 function fsWriteDMRef(uid,peerId,fields){if(!hasFS()||!uid||!peerId)return;try{fbDb.collection('users').doc(uid).collection('dmRefs').doc(peerId).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] dmRef write',e);});}catch(e){}}
 function fsWriteGroupRef(uid,gid,fields){if(!hasFS()||!uid||!gid)return;try{fbDb.collection('users').doc(uid).collection('groupRefs').doc(gid).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] groupRef write',e);});}catch(e){}}
@@ -960,6 +996,12 @@ async function fsUpdatePostItems(pid,items){if(!hasFS())return false;try{await f
 async function fsWritePointInvitation(userId,inv){if(!hasFS())return;try{var invId=inv.jid+'_'+inv.idx;
   await fbDb.collection('users').doc(userId).collection('invitations').doc(invId).set(inv);
   if(D())console.log('[FS] writePointInvitation',userId,invId);}catch(e){if(D())console.log('[FS] writePointInvitation error',e.message);}}
+async function fsAssignPointCallable(jid,idx,assigneeId,assigneeName){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!jid||typeof idx!=='number'||!assigneeId)return false;
+  var fn=firebase.functions().httpsCallable('assignPoint');
+  await fn({jid:jid,idx:idx,assigneeId:assigneeId,assigneeName:assigneeName||'',ts:Date.now()});
+  if(D())console.log('[FS] assignPointCallable',jid,idx,assigneeId);return true;
+}catch(e){if(D())console.log('[FS] assignPointCallable error',jid,idx,e.message);return false;}}
 async function fsUpdatePointInvitation(userId,invId,patch){if(!hasFS())return;try{
   await fbDb.collection('users').doc(userId).collection('invitations').doc(invId).update({...patch,updatedAt:Date.now()});
   if(D())console.log('[FS] updatePointInvitation',userId,invId);}catch(e){if(D())console.log('[FS] updatePointInvitation error',e.message);}}
@@ -1106,17 +1148,31 @@ async function fsWriteDM(userId,msg){if(!hasFS()||!A.myId||!userId||!msg||!msg._
       ts:msg.ts||Date.now(),_mid:msg._mid,senderPub:A.pubB64||'',senderEpub:A.ecdhPubB64||'',senderEsig:A.ecdhSig||''});
     if(D())console.log('[FS] writeDM',userId,msg._mid);return true;
   }catch(e){if(D())console.log('[FS] writeDM error',userId,e.message);return false;}}
+async function fsSendDMCallable(userId,msg){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!userId||!msg?._mid)return false;
+  var fn=firebase.functions().httpsCallable('sendDM');
+  await fn({receiverId:userId,name:msg.name||A.myName,text:msg.text||'',enc:!!msg.enc,
+    audioUrl:msg.audioUrl||null,imageUrl:msg.imageUrl||null,duration:msg.duration||0,
+    _mid:msg._mid,ts:msg.ts||Date.now(),senderPub:A.pubB64||'',senderEpub:A.ecdhPubB64||'',senderEsig:A.ecdhSig||''});
+  if(D())console.log('[FS] sendDMCallable',userId,msg._mid);return true;
+}catch(e){if(D())console.log('[FS] sendDMCallable error',userId,e.message);return false;}}
 async function fsWriteDMAck(userId,mid){if(!hasFS()||!userId||!mid)return false;try{
     await fbDb.collection('users').doc(userId).collection('dmAcks').doc(mid).set({from:A.myId,ts:Date.now(),_mid:mid});
     if(D())console.log('[FS] writeDMAck',userId,mid);return true;
   }catch(e){if(D())console.log('[FS] writeDMAck error',userId,e.message);return false;}}
+async function fsSendDMAckCallable(userId,mid){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!userId||!mid)return false;
+  var fn=firebase.functions().httpsCallable('sendDMAck');
+  await fn({receiverId:userId,_mid:mid,ts:Date.now()});
+  if(D())console.log('[FS] sendDMAckCallable',userId,mid);return true;
+}catch(e){if(D())console.log('[FS] sendDMAckCallable error',userId,e.message);return false;}}
 async function fsCheckMyDMs(){if(!hasFS()||!A.myId)return;try{
   var snap=await fbDb.collection('users').doc(A.myId).collection('dms').orderBy('ts','desc').limit(120).get();if(!snap.docs.length)return;
   var docs=snap.docs.slice().sort((a,b)=>(a.data()?.ts||0)-(b.data()?.ts||0));
   var added=0,cleaned=0,deferred=0,changed=false;for(var doc of docs){var m={_mid:doc.id,...doc.data()};if(!m.from||A.blocked.has(m.from)){await doc.ref.delete().catch(function(){});cleaned++;continue;}
-    if(m._mid&&A._seenMids.has(m._mid)){send(m.from,{t:'MA',_mid:m._mid});fsWriteDMAck(m.from,m._mid);await doc.ref.delete().catch(function(){});cleaned++;continue;}
+    if(m._mid&&A._seenMids.has(m._mid)){send(m.from,{t:'MA',_mid:m._mid});fsSendDMAckCallable(m.from,m._mid);await doc.ref.delete().catch(function(){});cleaned++;continue;}
     var ok=await ingestDM(m.from,m,{deferPersist:true});if(!ok){deferred++;continue;}
-    if(m._mid){send(m.from,{t:'MA',_mid:m._mid});fsWriteDMAck(m.from,m._mid);}await doc.ref.delete().catch(function(){});added++;cleaned++;changed=true;}
+    if(m._mid){send(m.from,{t:'MA',_mid:m._mid});fsSendDMAckCallable(m.from,m._mid);}await doc.ref.delete().catch(function(){});added++;cleaned++;changed=true;}
   if(changed){persist();sR();}if(D()&&(added||cleaned||deferred))console.log('[fsCheckMyDMs]',{added,cleaned,deferred});
 }catch(e){if(D())console.log('[fsCheckMyDMs] error',e.message);}}
 async function fsCheckMyDMAcks(){if(!hasFS()||!A.myId)return;try{
@@ -1138,6 +1194,13 @@ async function fsWriteRating(userId,rating){if(!hasFS()||!userId||!rating||!rati
       _rid:rating._rid,score:Number(rating.score)||0,comment:rating.comment||'',jobId:rating.jobId||'',raterId:rating.raterId||A.myId,raterName:rating.raterName||'',ts:rating.ts||Date.now(),nd:!!rating.nd,updatedAt:Date.now()});
     if(D())console.log('[FS] writeRating',userId,rating._rid);return true;
   }catch(e){if(D())console.log('[FS] writeRating error',userId,e.message);return false;}}
+async function fsWriteRatingCallable(targetId,rating){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!targetId||!rating?._rid)return false;
+  var fn=firebase.functions().httpsCallable('writeRating');
+  await fn({targetId:targetId,_rid:rating._rid,score:Number(rating.score)||0,comment:rating.comment||'',
+    jobId:rating.jobId||'',raterName:rating.raterName||'',ts:rating.ts||Date.now(),nd:!!rating.nd});
+  if(D())console.log('[FS] writeRatingCallable',targetId,rating._rid);return true;
+}catch(e){if(D())console.log('[FS] writeRatingCallable error',targetId,e.message);return false;}}
 async function fsCheckRatings(targetIds){if(!hasFS())return;var ids=[...new Set((Array.isArray(targetIds)&&targetIds.length?targetIds:ratingSyncTargets()).filter(id=>id&&(id===A.myId||!A.blocked.has(id))))].slice(0,16);if(!ids.length)return;
   var changed=false;for(var rid of ids){try{var snap=await fbDb.collection('users').doc(rid).collection('ratings').orderBy('ts','desc').limit(20).get();
       snap.docs.forEach(doc=>{if(mergeRatingLocal(rid,{_rid:doc.id,...doc.data()}))changed=true;});
@@ -1405,20 +1468,39 @@ async function fsWriteJobChatAck(userId,jid,mid){if(!hasFS()||!userId||!jid||!mi
     await fbDb.collection('users').doc(userId).collection('jobChatAcks').doc(mid).set({from:A.myId,jid,ts:Date.now(),_mid:mid});
     if(D())console.log('[FS] writeJobChatAck',userId,jid,mid);return true;
   }catch(e){if(D())console.log('[FS] writeJobChatAck error',userId,jid,e.message);return false;}}
+async function fsSendJobChatAckCallable(userId,jid,mid){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!userId||!jid||!mid)return false;
+  var fn=firebase.functions().httpsCallable('sendJobChatAck');
+  await fn({receiverId:userId,jid:jid,_mid:mid,ts:Date.now()});
+  if(D())console.log('[FS] sendJobChatAckCallable',userId,jid,mid);return true;
+}catch(e){if(D())console.log('[FS] sendJobChatAckCallable error',userId,jid,e.message);return false;}}
 async function fsCheckJobChats(){if(!hasFS())return;
   var active=A.myJobs.filter(j=>(['active','pending_review','done'].includes(j.status)||hasAssignedPointParticipants(j))&&(j.helperId||j.creatorId||j.items?.some(it=>it.assignedTo)));
   for(var j of active){try{var localMsgs=A.jobChats[j.id]||[];var localMids=new Set(localMsgs.map(m=>m._mid).filter(Boolean));
     var snap=await fbDb.collection('posts').doc(j.id).collection('chat').orderBy('ts','desc').limit(200).get();
     var docs=snap.docs.slice().sort((a,b)=>(a.data()?.ts||0)-(b.data()?.ts||0));
     var added=0,ackMarked=false;docs.forEach(doc=>{var m=doc.data();if(m.from===A.myId)return;
-      if(m._mid&&(localMids.has(m._mid)||A._seenMids.has(m._mid))){var ak='jc:'+m._mid;if(!A._seenAcks.has(ak)){A._seenAcks.add(ak);send(m.from,{t:'MA',_mid:m._mid});fsWriteJobChatAck(m.from,j.id,m._mid);ackMarked=true;}return;}
+      if(m._mid&&(localMids.has(m._mid)||A._seenMids.has(m._mid))){var ak='jc:'+m._mid;if(!A._seenAcks.has(ak)){A._seenAcks.add(ak);send(m.from,{t:'MA',_mid:m._mid});fsSendJobChatAckCallable(m.from,j.id,m._mid);ackMarked=true;}return;}
       if(m._mid)A._seenMids.add(m._mid);
       addJMsg(j.id,{from:m.from,name:m.name||'?',text:m.text||'',audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||Date.now(),_mid:m._mid});
-      if(m._mid){var ak2='jc:'+m._mid;if(!A._seenAcks.has(ak2)){A._seenAcks.add(ak2);send(m.from,{t:'MA',_mid:m._mid});fsWriteJobChatAck(m.from,j.id,m._mid);ackMarked=true;}}added++;});
+      if(m._mid){var ak2='jc:'+m._mid;if(!A._seenAcks.has(ak2)){A._seenAcks.add(ak2);send(m.from,{t:'MA',_mid:m._mid});fsSendJobChatAckCallable(m.from,j.id,m._mid);ackMarked=true;}}added++;});
     if(added>0){if(!((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===j.id)){A.unreadActivity+=added;A._unreadJobs[j.id]=(A._unreadJobs[j.id]||0)+added;}
       if(D())console.log('[FS] checkJobChats',j.id,{added});updateB();persist();sR();}
     else if(ackMarked)persist();
   }catch(e){if(D())console.log('[FS] checkJobChats error',j.id,e.message);}}}
+var _activeJobChatUnsub=null;var _activeJobChatJid=null;
+function fsBindActiveJobChat(jid){fsUnbindActiveJobChat();if(!hasFS()||!jid)return;
+  _activeJobChatJid=jid;var localMsgs=A.jobChats[jid]||[];var localMids=new Set(localMsgs.map(m=>m._mid).filter(Boolean));
+  _activeJobChatUnsub=fbDb.collection('posts').doc(jid).collection('chat').orderBy('ts','desc').limit(50)
+    .onSnapshot(function(snap){if(!snap||_activeJobChatJid!==jid)return;
+      var added=0;snap.docChanges().forEach(function(ch){if(ch.type!=='added')return;var m=ch.doc.data();if(!m||m.from===A.myId)return;
+        if(m._mid&&(localMids.has(m._mid)||A._seenMids.has(m._mid))){var ak='jc:'+m._mid;if(!A._seenAcks.has(ak)){A._seenAcks.add(ak);send(m.from,{t:'MA',_mid:m._mid});fsSendJobChatAckCallable(m.from,jid,m._mid);}return;}
+        if(m._mid){A._seenMids.add(m._mid);localMids.add(m._mid);}
+        addJMsg(jid,{from:m.from,name:m.name||'?',text:m.text||'',audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||Date.now(),_mid:m._mid});
+        if(m._mid){var ak2='jc:'+m._mid;if(!A._seenAcks.has(ak2)){A._seenAcks.add(ak2);send(m.from,{t:'MA',_mid:m._mid});fsSendJobChatAckCallable(m.from,jid,m._mid);}}added++;});
+      if(added>0){if(!((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===jid)){A.unreadActivity+=added;A._unreadJobs[jid]=(A._unreadJobs[jid]||0)+added;}
+        updateB();persist();sR();}},function(e){if(D())console.log('[FS] activeJobChat error',jid,e.message);});}
+function fsUnbindActiveJobChat(){if(_activeJobChatUnsub){try{_activeJobChatUnsub();}catch(e){}_activeJobChatUnsub=null;}_activeJobChatJid=null;}
 async function fsCheckMyJobChatAcks(){if(!hasFS()||!A.myId)return;try{
   var snap=await fbDb.collection('users').doc(A.myId).collection('jobChatAcks').orderBy('ts','desc').limit(120).get();if(!snap.docs.length)return;
   var changed=false,cleaned=0;for(var doc of snap.docs){var a={_mid:doc.id,...doc.data()};if(!a._mid){await doc.ref.delete().catch(function(){});cleaned++;continue;}
@@ -1701,14 +1783,14 @@ function handleD(from,m){try{if(D()&&['HC','PC','JY','JR','NP','INV','GI','RJ','
     fsWriteJobRef(A.myId,m.jid,{status:'never_done',visibility:'active',archivedAt:null});
     if(hasFS())fsCheckRatings([A.myId]);
     if(A.screen!=='mine')A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;persist();updateB();sR();break;}
-  case 'BM':{if(!m.jid||!m.text)break;if(m._mid&&A._seenMids.has(m._mid)){var _bak='jc:'+m._mid;if(!A._seenAcks.has(_bak)){A._seenAcks.add(_bak);send(from,{t:'MA',_mid:m._mid});fsWriteJobChatAck(from,m.jid,m._mid);persist();}break;}
+  case 'BM':{if(!m.jid||!m.text)break;if(m._mid&&A._seenMids.has(m._mid)){var _bak='jc:'+m._mid;if(!A._seenAcks.has(_bak)){A._seenAcks.add(_bak);send(from,{t:'MA',_mid:m._mid});fsSendJobChatAckCallable(from,m.jid,m._mid);persist();}break;}
     if(m._mid)A._seenMids.add(m._mid);
     addJMsg(m.jid,{from,name:m.name||'?',text:m.text,audioUrl:m.audioUrl||null,imageUrl:m.imageUrl||null,duration:m.duration||0,ts:m.ts||now(),_mid:m._mid||null});
-    if(m._mid){var _bak2='jc:'+m._mid;if(!A._seenAcks.has(_bak2)){A._seenAcks.add(_bak2);send(from,{t:'MA',_mid:m._mid});fsWriteJobChatAck(from,m.jid,m._mid);}}
+    if(m._mid){var _bak2='jc:'+m._mid;if(!A._seenAcks.has(_bak2)){A._seenAcks.add(_bak2);send(from,{t:'MA',_mid:m._mid});fsSendJobChatAckCallable(from,m.jid,m._mid);}}
     if(!((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===m.jid)){A.unreadActivity++;A._unreadJobs[m.jid]=(A._unreadJobs[m.jid]||0)+1;notify('💬 '+(m.name||'?'),m.text?.substr(0,40),()=>go('jobDetail',{jobId:m.jid}));}
     persist();updateB();if((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===m.jid)sR();break;}
-  case 'DM':{if(m._mid&&A._seenMids.has(m._mid)){send(from,{t:'MA',_mid:m._mid});fsWriteDMAck(from,m._mid);break;}
-    ingestDM(from,m).then(ok=>{if(ok&&m._mid){send(from,{t:'MA',_mid:m._mid});fsWriteDMAck(from,m._mid);}});break;}
+  case 'DM':{if(m._mid&&A._seenMids.has(m._mid)){send(from,{t:'MA',_mid:m._mid});fsSendDMAckCallable(from,m._mid);break;}
+    ingestDM(from,m).then(ok=>{if(ok&&m._mid){send(from,{t:'MA',_mid:m._mid});fsSendDMAckCallable(from,m._mid);}});break;}
   case 'RR':{if(!m.to||!m.msg)break;
     if(m.to===A.myId){const rrFrom=m.originalFrom||m.from||from;const isDup=m.mid&&A._seenMids.has('r:'+m.mid);
       if(!isDup&&!A.blocked.has(rrFrom)){if(m.mid)A._seenMids.add('r:'+m.mid);handleD(rrFrom,m.msg);}
@@ -1922,6 +2004,8 @@ window.go=(s,p)=>{if(D())console.log('[go]',{from:A.screen,to:s,params:p});if(A.
     delete A._unreadJobs[p.jobId];
   }
   if(s==='groupDetail'&&p?.gid)delete A._unreadGroupPosts[p.gid];
+  if((s==='jobDetail'||s==='jobChat')&&p?.jobId)fsBindActiveJobChat(p.jobId);
+  else fsUnbindActiveJobChat();
   updateB();render();window.scrollTo(0,0);
   if(s==='groups'){fsRefreshPublicGroupsIfNeeded();fsRefreshGroupPostsIfNeeded();}
   if(s==='groupDetail')fsRefreshGroupPostsIfNeeded();};
@@ -2001,6 +2085,7 @@ window.obStep1=async()=>{if(window._obBusy)return;const n=$('sn')?.value?.trim()
   await initCrypto();
   if(A.nb._avatar&&hasFB()){const url=await fbUpload(A.nb._avatar,'profiles/'+A.myId+'.webp');if(url)ss('oAvatar',url);}
   else if(A.nb._avatar)ss('oAvatar',A.nb._avatar);
+  await linkFirebaseIdentity();
   initPeer();go('setup',{step:2});}catch(e){console.error('[obStep1]',e);notify('⚠️','Noe gikk galt. Prøv igjen.');}finally{window._obBusy=false;}};
 window.finishSetup=async()=>{
   // Create groups from step 3 selections
@@ -2014,9 +2099,10 @@ window.finishSetup=async()=>{
   if(wgn?.trim()){const raw=wgn.trim()+A.myId;const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(raw));
     const id='g'+ab64(h).replace(/[^a-zA-Z0-9]/g,'').substr(0,14);
     if(!A.groups.find(g=>g.id===id))A.groups.push({id,name:wgn.trim(),desc:'Jobbgruppe',creatorId:A.myId,createdTs:now(),isGroup:true,private:true,_members:[A.myId],hasPasscode:false,invitePolicy:'members'});}
+  await linkFirebaseIdentity();
   // Write groups + user to Firestore (best-effort)
   A.groups.forEach(g=>{fsWriteGroup(g.id,{name:g.name,nameLower:(g.name||'').toLowerCase(),desc:g.desc||'',private:g.private,creatorId:g.creatorId||A.myId,createdAt:Date.now(),members:[A.myId],hasPasscode:!!g.hasPasscode,invitePolicy:g.invitePolicy||'members'});});
-  fsRegisterUser();persist();if(!A.peer||A.peer.destroyed)initPeer();$('nav').style.display='block';A.nb={};go('feed');setTimeout(showInstallPopup,500);};
+  await fsRegisterUser();persist();if(!A.peer||A.peer.destroyed)initPeer();$('nav').style.display='block';A.nb={};go('feed');setTimeout(showInstallPopup,500);};
 
 // ═══ FEED ═══
 function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
@@ -2263,7 +2349,7 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
     it.assignedStatus='pending';_piSent++;
     var _piMid='pi:'+jobId+':'+i+':'+uid();
     send(it.assignedTo,{t:'PI',jid:jobId,idx:i,title:job.title,itemText:it.text||'Punkt '+(i+1),creatorId:A.myId,creatorName:A.myName,_mid:_piMid});
-    fsWritePointInvitation(it.assignedTo,{jid:jobId,idx:i,creatorId:A.myId,creatorName:A.myName,title:job.title,itemText:it.text||'Punkt '+(i+1),recipientId:it.assignedTo,recipientName:it.assignedName||'',status:'pending',ts:now(),updatedAt:now()});}});
+    fsAssignPointCallable(jobId,i,it.assignedTo,it.assignedName||'');}});
     if(_piSent>0){var _pns=pointOwnerStatus(lj);lj.status=_pns;job.status=_pns;fsUpdatePostItems(jobId,lj.items);fsUpdatePostStatus(jobId,_pns);if(D())console.log('[POST] sent',_piSent,'point invitations');}}
   if(!_fsPostOk)notify('📡','Lagret lokalt. Synkes til Firebase igjen senere.');
   if(D())console.log('[← POST] done',{jid:jobId});
@@ -2840,7 +2926,7 @@ window.dmS=async pid=>{const inp=$('dmi');if(!inp?.value.trim())return;const raw
   const peerNow=A.peers.get(pid)||peer;
   let enc=raw,isE=false;if(peerNow?.epub&&peerNow?.epubV!==false){try{const r=await encFor(raw,peerNow.epub);if(r){enc=r;isE=true;}}catch(e){}}else if(peerNow?.epub&&peerNow?.epubV===false){notify('⚠️','Krypteringsnøkkel ikke verifisert');}
   const dmid=uid();const dts=now();const dmsg={t:'DM',name:A.myName,text:enc,enc:isE,ts:dts,_mid:dmid,senderPub:A.pubB64||'',senderEpub:A.ecdhPubB64||'',senderEsig:A.ecdhSig||''};
-  addDM(pid,{from:A.myId,name:A.myName,text:raw,ts:dts,_mid:dmid,_status:'sent'});send(pid,dmsg);fsWriteDM(pid,dmsg);
+  addDM(pid,{from:A.myId,name:A.myName,text:raw,ts:dts,_mid:dmid,_status:'sent'});send(pid,dmsg);fsSendDMCallable(pid,dmsg);
   fsWriteDMRef(A.myId,pid,{peerName:dn(pid,A.peers.get(pid)?.name),lastTs:dts,unread:0,visibility:'active'});
   inp.value='';persist();render();setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},50);};
 
@@ -3097,10 +3183,9 @@ window.requestGroupJoin=(gid,gname)=>{if(A.groups.find(g=>g.id===gid)){notify('�
     var data=await fsReadGroup(gid);
     if(!data){notify('⚠️','Gruppen finnes ikke lenger');return;}
     if(data.private){notify('⚠️','Denne gruppen er privat');return;}
-    var adminId=data.creatorId||'';
-    var reqTs=Date.now();
-    var ok=await fsWriteGroupRequest(gid,{peerId:A.myId,name:A.myName,avatar:ls('oAvatar')||'',bio:A.myBio||'',fylke:A.myFylke||'',by:A.myBy||'',gname:data.name||gname||gid,adminId,ts:reqTs,status:'pending'});
-    if(ok){A._myGroupRequests[gid]={name:data.name||gname||'',ts:reqTs};persist();
+    var r=await fsRequestGroupJoinCallable(gid);
+    if(r.ok){var adminId=r.adminId||data.creatorId||'';var reqTs=Date.now();
+      A._myGroupRequests[gid]={name:data.name||gname||'',ts:reqTs};persist();
       if(adminId&&adminId!==A.myId){A.tempConns.set('greq:'+gid,{peerId:adminId,name:data.name||gname||'',ts:now()});send(adminId,{t:'GQ',gid,peerId:A.myId,name:A.myName,avatar:ls('oAvatar')||'',bio:A.myBio||'',fylke:A.myFylke||'',by:A.myBy||'',gname:data.name||gname||gid,ts:reqTs});}
       notify('✅','Forespørsel sendt!');}
     else notify('⚠️','Kunne ikke sende forespørsel');});};
@@ -3109,7 +3194,8 @@ window.approveGroupRequest=async(gid,peerId,name)=>{if(D())console.log('[approve
   var res=await fsJoinGroup(gid,peerId);
   if(res.missing){notify('⚠️','Gruppen finnes ikke lenger');return;}
   if(!res.ok){notify('⚠️','Kunne ikke legge til medlem');return;}
-  await fsResolveGroupRequest(gid,peerId,g.creatorId||A.myId,'approved');
+  var _rok=await fsResolveGroupRequestCallable(gid,peerId,g.creatorId||A.myId,'approved');
+  if(!_rok){notify('⚠️','Kunne ikke godkjenne forespørsel');return;}
   if(!Array.isArray(g._members))g._members=[A.myId];
   if(!g._members.includes(peerId))g._members.push(peerId);
   A._groupRequests[gid]=(A._groupRequests[gid]||[]).filter(r=>r.peerId!==peerId);
@@ -3118,7 +3204,8 @@ window.approveGroupRequest=async(gid,peerId,name)=>{if(D())console.log('[approve
   persist();notify('✅',(name||'Bruker')+' ble med i gruppen!');render();};
 window.denyGroupRequest=async(gid,peerId,name)=>{if(D())console.log('[denyGroupRequest]',{gid,peerId});
   const g=A.groups.find(x=>x.id===gid);
-  await fsResolveGroupRequest(gid,peerId,g?.creatorId||A.myId,'declined');
+  var _dok=await fsResolveGroupRequestCallable(gid,peerId,g?.creatorId||A.myId,'declined');
+  if(!_dok){notify('⚠️','Kunne ikke avvise forespørsel');return;}
   A._groupRequests[gid]=(A._groupRequests[gid]||[]).filter(r=>r.peerId!==peerId);
   A.tempConns.set('grr:'+gid+':'+peerId,{peerId,name:name||'',ts:now()});send(peerId,{t:'GR',gid,gname:g?.name||gid,status:'declined'});
   persist();notify('ℹ️',(name||'Forespørsel')+' ble avvist');render();};
@@ -3476,6 +3563,7 @@ async function boot(){
     // Migration: clean orphaned jobChats
     var _chatCleaned=0;Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)){delete A.jobChats[k];_chatCleaned++;}});
     if(_chatCleaned){console.log('[MIGRATE] Cleaned',_chatCleaned,'orphaned jobChats');persist();}
+    try{await linkFirebaseIdentity();}catch(e){}if(D())console.log('[boot] phase:firebase-link');
     if(D())console.log('[boot] phase:firestore-reconcile');
     await fsBootReconcile();
     if(D())console.log('[boot] phase:peer');initPeer();$('nav').style.display='block';go('feed');
