@@ -57,6 +57,25 @@ body{font-family:'Outfit',sans-serif;color:var(--tx);-webkit-tap-highlight-color
 @keyframes starGlow{0%,100%{transform:scale(1);filter:drop-shadow(0 2px 4px rgba(200,145,35,.3))}50%{transform:scale(1.12);filter:drop-shadow(0 4px 12px rgba(200,145,35,.6))}}
 @keyframes floatY{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
 @keyframes numPop{0%{transform:scale(.75);opacity:0}70%{transform:scale(1.06)}100%{transform:scale(1);opacity:1}}
+@keyframes celebPop{0%{transform:scale(0) rotate(-15deg);opacity:0}55%{transform:scale(1.25) rotate(5deg);opacity:1}75%{transform:scale(.92) rotate(-2deg)}100%{transform:scale(1) rotate(0deg);opacity:1}}
+@keyframes celebText{0%{transform:translateY(16px);opacity:0}60%{transform:translateY(-4px);opacity:1}100%{transform:translateY(0);opacity:1}}
+@keyframes pulseRing{0%{transform:scale(.9);opacity:1}100%{transform:scale(1.6);opacity:0}}
+@keyframes staggerIn{0%{transform:translateY(20px) scale(.95);opacity:0}60%{transform:translateY(-3px) scale(1.01);opacity:1}100%{transform:translateY(0) scale(1);opacity:1}}
+@keyframes checkBounce{0%{transform:scale(0);opacity:0}50%{transform:scale(1.3);opacity:1}75%{transform:scale(.9)}100%{transform:scale(1);opacity:1}}
+@keyframes badgePop{0%{transform:scale(0) rotate(-10deg);opacity:0}65%{transform:scale(1.15) rotate(2deg);opacity:1}100%{transform:scale(1) rotate(0deg);opacity:1}}
+@keyframes notiSlide{0%{transform:translateY(-20px) scale(.95);opacity:0}60%{transform:translateY(3px) scale(1.01);opacity:1}100%{transform:translateY(0) scale(1);opacity:1}}
+/* Stagger helpers */
+.s1{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .05s both}
+.s2{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .13s both}
+.s3{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .21s both}
+.s4{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .29s both}
+.s5{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .37s both}
+/* Done celebration classes */
+.cel-ico{display:inline-block;animation:celebPop .7s cubic-bezier(.34,1.56,.64,1) both}
+.cel-txt{display:inline-block;animation:celebText .6s cubic-bezier(.25,1.4,.5,1) .15s both}
+.cel-ring{position:absolute;width:80px;height:80px;border-radius:50%;border:3px solid rgba(74,124,89,.4);animation:pulseRing 1.4s ease-out infinite}
+/* Check animation */
+.chk-anim{animation:checkBounce .5s cubic-bezier(.34,1.56,.64,1) both}
 
 /* === BASE ELEMENTS === */
 button{cursor:pointer;border:none;font-family:inherit;background:none;color:inherit}
@@ -2295,10 +2314,10 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
       <div style="display:flex;gap:8px;margin-top:8px"><input class="fi" id="add-id" placeholder="ID (oXXX) eller gruppe (gXXX)" style="flex:1;padding:10px;font-size:13px">
       <button class="btn bp bsm" style="width:auto;padding:10px 16px" onclick="connectById()">Koble til</button></div></div>`:''}
     ${!jobs.length&&!noC&&!myAct.length?'<div class="emp"><div class="emp-i">👀</div><div class="emp-t">Ingen innlegg ennå.<br>Trykk + for å legge ut det første!</div></div>':''}
-    ${jobs.map(j=>{const pr=avgR(j.creatorId);const typeMap={help:['🤝','bg1'],service:['💼','bp1']};
+    ${jobs.map((j,_si)=>{const pr=avgR(j.creatorId);const typeMap={help:['🤝','bg1'],service:['💼','bp1']};
       const[ico,cls]=typeMap[j.type]||['📋','bg1'];
       const imgSrc=j.imageUrl||j.imageData;const fNm=j.fylke?FYLKER.find(f=>f.id===j.fylke)?.name:'';
-      return`<div class="cd cdt" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">
+      return`<div class="cd cdt s${(_si%5)+1}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">${avHtml(j.creatorId,j.creatorName,28)}
         <span style="font-size:13px;font-weight:600">${esc(j.creatorName)}</span>${pr?`<span style="font-size:11px;color:var(--yw)">⭐ ${pr}</span>`:''}
         <span style="font-size:11px;color:var(--t3);margin-left:auto">${ago(j.ts)}</span></div>
@@ -2621,7 +2640,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
     b+=`<div class="cd" style="border-color:var(--gbb);background:var(--gb)"><div style="font-size:14px;font-weight:700;color:var(--g2);margin-bottom:8px">${_pm?'Jobben er sendt til godkjenning':'Hjelper sier det er ferdig!'}</div>
     <div class="brow"><button class="btn bg" style="flex:1" onclick="ownerApprovePendingReview('${escA(j.id)}')">✅ Godkjenn</button>
     <button class="btn br" style="flex:1" onclick="ownerRejectPendingReview('${escA(j.id)}')">↩️ Ikke ferdig ennå</button></div></div>`;}
-  if(j.status==='done'){b+=`<div style="text-align:center;padding:20px 0"><div style="font-size:48px;margin-bottom:8px">🎉</div><div style="font-size:24px;font-weight:800">Fullført!</div></div>`;
+  if(j.status==='done'){b+=`<div style="text-align:center;padding:24px 0;position:relative;overflow:hidden"><div class="cel-ring" style="top:50%;left:50%;transform:translate(-50%,-50%)"></div><div class="cel-ico" style="font-size:56px;margin-bottom:10px">🎉</div><div class="cel-txt" style="font-size:26px;font-weight:800;color:var(--g2)">Fullført!</div></div>`;
     if(j.items?.length&&isO&&!j.helperId){
       // Multi-person rating for point-mode
       var _rpa=pointAssignees(j);
@@ -2946,7 +2965,7 @@ function vMine(){
     const visIco=j.visibility==='public'?'🌐 Offentlig':j.visibility==='direct'?'📩 Direkte':j.groupName?'🏘️ '+esc(j.groupName):'👥 Venner';
     const expDays=j.expiresAt&&j.expiresAt>0?Math.max(0,Math.ceil((j.expiresAt-now())/864e5)):0;const _ju=A._unreadJobs[j.id]||0;
     var _imgSrc=j.imageUrl||null;
-    return`<div class="cd cdt" style="${_ju?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'${mf==='ended'?",fromEnded:true":''}})">
+    return`<div class="cd cdt s1" style="${_ju?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'${mf==='ended'?",fromEnded:true":''}})">
     <div style="display:flex;align-items:start;gap:10px">
     <div style="flex:1"><div style="display:flex;align-items:center;font-size:14px;font-weight:700;line-height:1.4;margin-bottom:4px">${esc(j.title||'—')}${itemBadge(_ju)}</div>
     <div style="font-size:12px;color:var(--t3);margin-bottom:6px">${tIco} ${({help:'Jobb',service:'Tilbyr'})[j.type]||esc(j.type||'')} · ${isO?'Du posted':'Du hjelper '+esc(j.creatorName||'?')} · ${ago(j.ts)}</div>
@@ -2960,7 +2979,7 @@ function vMine(){
     ${sD&&mf!=='ended'?`<button class="btn bs bsm" style="margin-top:6px;padding:6px;font-size:11px" onclick="event.stopPropagation();removeTerminalJob('${escA(j.id)}')">📦 Flytt til Avsluttet</button>`:''}</div>${_imgSrc?`<img src="${esc(_imgSrc)}" style="width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0">`:''}
     </div></div>`;};
   const dc=j=>{const _ju=A._unreadJobs[j.id]||0;const _imgSrc=j.imageUrl||null;
-    return`<div class="cd cdt" style="${_ju?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'${mf==='ended'?",fromEnded:true":''}})">
+    return`<div class="cd cdt s2" style="${_ju?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'${mf==='ended'?",fromEnded:true":''}})">
     <div style="display:flex;align-items:start;gap:10px">
     <div style="flex:1"><div style="display:flex;align-items:center;font-size:14px;font-weight:700;line-height:1.4;margin-bottom:4px">${esc(j.title||'—')}${itemBadge(_ju)}</div>
     <div style="font-size:12px;color:var(--t3);margin-bottom:6px">📩 Direkte foresporsel fra ${esc(j.creatorName||'?')} · ${ago(j.ts)}</div>
