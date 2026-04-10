@@ -57,9 +57,14 @@ body{font-family:'Outfit',sans-serif;color:var(--tx);-webkit-tap-highlight-color
 @keyframes starGlow{0%,100%{transform:scale(1);filter:drop-shadow(0 2px 4px rgba(200,145,35,.3))}50%{transform:scale(1.12);filter:drop-shadow(0 4px 12px rgba(200,145,35,.6))}}
 @keyframes floatY{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
 @keyframes numPop{0%{transform:scale(.75);opacity:0}70%{transform:scale(1.06)}100%{transform:scale(1);opacity:1}}
-@keyframes celebPop{0%{transform:scale(0) rotate(-15deg);opacity:0}55%{transform:scale(1.25) rotate(5deg);opacity:1}75%{transform:scale(.92) rotate(-2deg)}100%{transform:scale(1) rotate(0deg);opacity:1}}
+@keyframes celebPop{0%{transform:scale(0) rotate(-15deg);opacity:0}55%{transform:scale(1.3) rotate(6deg);opacity:1}75%{transform:scale(.93) rotate(-2deg)}100%{transform:scale(1) rotate(0deg);opacity:1}}
 @keyframes celebText{0%{transform:translateY(16px);opacity:0}60%{transform:translateY(-4px);opacity:1}100%{transform:translateY(0);opacity:1}}
-@keyframes pulseRing{0%{transform:scale(.9);opacity:1}100%{transform:scale(1.6);opacity:0}}
+@keyframes confA{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(-45px,-70px) rotate(-340deg) scale(0);opacity:0}}
+@keyframes confB{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(50px,-85px) rotate(400deg) scale(0);opacity:0}}
+@keyframes confC{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(-20px,-100px) rotate(280deg) scale(0);opacity:0}}
+@keyframes confD{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(60px,-60px) rotate(-260deg) scale(0);opacity:0}}
+@keyframes confE{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(-60px,-50px) rotate(320deg) scale(0);opacity:0}}
+@keyframes confF{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(30px,-110px) rotate(-380deg) scale(0);opacity:0}}
 @keyframes staggerIn{0%{transform:translateY(20px) scale(.95);opacity:0}60%{transform:translateY(-3px) scale(1.01);opacity:1}100%{transform:translateY(0) scale(1);opacity:1}}
 @keyframes checkBounce{0%{transform:scale(0);opacity:0}50%{transform:scale(1.3);opacity:1}75%{transform:scale(.9)}100%{transform:scale(1);opacity:1}}
 @keyframes badgePop{0%{transform:scale(0) rotate(-10deg);opacity:0}65%{transform:scale(1.15) rotate(2deg);opacity:1}100%{transform:scale(1) rotate(0deg);opacity:1}}
@@ -70,10 +75,17 @@ body{font-family:'Outfit',sans-serif;color:var(--tx);-webkit-tap-highlight-color
 .s3{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .21s both}
 .s4{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .29s both}
 .s5{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .37s both}
-/* Done celebration classes */
-.cel-ico{display:inline-block;animation:celebPop .7s cubic-bezier(.34,1.56,.64,1) both}
-.cel-txt{display:inline-block;animation:celebText .6s cubic-bezier(.25,1.4,.5,1) .15s both}
-.cel-ring{position:absolute;width:80px;height:80px;border-radius:50%;border:3px solid rgba(74,124,89,.4);animation:pulseRing 1.4s ease-out infinite}
+/* Done celebration */
+.cel-wrap{position:relative;display:inline-block}
+.cel-ico{display:inline-block;animation:celebPop .75s cubic-bezier(.34,1.56,.64,1) both;font-size:56px;position:relative;z-index:1}
+.cel-txt{display:inline-block;animation:celebText .6s cubic-bezier(.25,1.4,.5,1) .2s both}
+.cel-p{position:absolute;width:10px;height:10px;border-radius:3px;top:50%;left:50%;animation-duration:.9s;animation-timing-function:cubic-bezier(.25,.46,.45,.94);animation-fill-mode:both}
+.cel-p1{background:var(--pr);animation-name:confA;animation-delay:.1s}
+.cel-p2{background:var(--gd);width:8px;height:8px;border-radius:50%;animation-name:confB;animation-delay:.05s}
+.cel-p3{background:var(--sg);animation-name:confC;animation-delay:.15s}
+.cel-p4{background:var(--pr3);width:12px;height:6px;animation-name:confD;animation-delay:.08s}
+.cel-p5{background:var(--gdl);width:7px;height:7px;border-radius:50%;animation-name:confE;animation-delay:.12s}
+.cel-p6{background:var(--bl);animation-name:confF;animation-delay:.06s}
 /* Check animation */
 .chk-anim{animation:checkBounce .5s cubic-bezier(.34,1.56,.64,1) both}
 
@@ -116,7 +128,7 @@ input,textarea,select{font-family:inherit;outline:none;-webkit-appearance:none;b
 
 /* === CARDS === */
 .cd{background:linear-gradient(160deg,var(--sf) 0%,var(--bg2) 100%);border:1px solid var(--s3);border-radius:var(--R);padding:16px;margin-bottom:12px;position:relative;overflow:hidden;box-shadow:var(--sh)}
-.cd::after{content:'';position:absolute;top:0;left:0;width:30%;height:100%;background:linear-gradient(90deg,transparent,rgba(220,74,39,.06),transparent);animation:shimmer 7s ease-in-out infinite;pointer-events:none}
+.cd::after{content:'';position:absolute;top:0;left:0;width:25%;height:100%;background:linear-gradient(90deg,transparent,rgba(220,74,39,.025),transparent);animation:shimmer 12s ease-in-out infinite;pointer-events:none}
 .cdt{cursor:pointer;transition:transform .1s ease,border-color .12s,box-shadow .12s}
 .cdt:active{border-color:var(--pr3);box-shadow:var(--sh2);transform:scale(.985) translateY(1px)}
 
@@ -130,7 +142,7 @@ textarea.fi{resize:none;line-height:1.5}
 /* === BUTTONS === */
 .btn{padding:15px 18px;border-radius:var(--Rs);font-size:15px;font-weight:700;transition:transform .1s ease,box-shadow .1s ease;display:block;text-align:center;width:100%;position:relative;overflow:hidden}
 .btn:active:not(:disabled){transform:scale(.96) translateY(1px)}
-.btn::after{content:'';position:absolute;top:0;left:0;width:30%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent);animation:shimmer 3.5s ease-in-out infinite;pointer-events:none}
+.btn::after{content:'';position:absolute;top:0;left:0;width:25%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.15),transparent);animation:shimmer 6s ease-in-out infinite;pointer-events:none}
 .bp{background:linear-gradient(135deg,var(--pr4),var(--pr3),var(--pr),var(--pr2));background-size:300% 300%;color:#fff;box-shadow:var(--shp);animation:gradMove 5s ease-in-out infinite,shadowPulse 4s ease-in-out infinite}
 .bp:disabled{opacity:.35;animation:none}
 .bg{background:linear-gradient(135deg,var(--sgl),var(--sg),var(--sg2));background-size:200% 200%;color:#fff;box-shadow:var(--shg);animation:gradMove 5s ease-in-out infinite}
@@ -2640,7 +2652,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
     b+=`<div class="cd" style="border-color:var(--gbb);background:var(--gb)"><div style="font-size:14px;font-weight:700;color:var(--g2);margin-bottom:8px">${_pm?'Jobben er sendt til godkjenning':'Hjelper sier det er ferdig!'}</div>
     <div class="brow"><button class="btn bg" style="flex:1" onclick="ownerApprovePendingReview('${escA(j.id)}')">✅ Godkjenn</button>
     <button class="btn br" style="flex:1" onclick="ownerRejectPendingReview('${escA(j.id)}')">↩️ Ikke ferdig ennå</button></div></div>`;}
-  if(j.status==='done'){b+=`<div style="text-align:center;padding:24px 0;position:relative;overflow:hidden"><div class="cel-ring" style="top:50%;left:50%;transform:translate(-50%,-50%)"></div><div class="cel-ico" style="font-size:56px;margin-bottom:10px">🎉</div><div class="cel-txt" style="font-size:26px;font-weight:800;color:var(--g2)">Fullført!</div></div>`;
+  if(j.status==='done'){b+=`<div style="text-align:center;padding:24px 0"><div class="cel-wrap"><div class="cel-p cel-p1"></div><div class="cel-p cel-p2"></div><div class="cel-p cel-p3"></div><div class="cel-p cel-p4"></div><div class="cel-p cel-p5"></div><div class="cel-p cel-p6"></div><div class="cel-ico">🎉</div></div><div class="cel-txt" style="font-size:26px;font-weight:800;color:var(--g2);margin-top:10px">Fullført!</div></div>`;
     if(j.items?.length&&isO&&!j.helperId){
       // Multi-person rating for point-mode
       var _rpa=pointAssignees(j);
