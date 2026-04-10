@@ -15,252 +15,86 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800;9..144,900&family=Caveat:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
-/* ═══ CSS VARIABLES — v7 warm palette ═══ */
-:root{
-  --bg:#F5EFE3;--bg2:#FBF5E9;--sf:#FFFCF5;--s2:#EDE5D3;--s3:#DED4BD;--b:#C9BEA2;
-  --tx:#26201A;--t2:#58503F;--t3:#857A65;--mt:#B0A58C;
-  --pr:#DC4A27;--pr2:#A8351A;--pr3:#F47553;--pr4:#FF8F6D;
-  --pb:#FDE7DC;--pbb:#F5C2AF;
-  --gn:#4A7C59;--gb:#E6F0E9;--gbb:#B8D2BE;--g2:#3A6147;
-  --sg:#4A7C59;--sg2:#3A6147;--sgl:#80AE8C;--sgb:#E6F0E9;--sgbb:#B8D2BE;
-  --gd:#C89123;--gdl:#F2C95C;--gdb:#FBF2DA;--gdbb:#E8D194;
-  --bl:#4A6FA5;--bb:#EBF0F7;--bbb:#C4D1E5;
-  --rd:#9E3525;--rb:#F7E8E4;--rbb:#E8B8AC;
-  --yw:#C89123;--yb:#FBF2DA;
-  --sh:0 1px 2px rgba(38,32,26,.05),0 3px 8px rgba(38,32,26,.07),0 6px 16px rgba(38,32,26,.04);
-  --sh2:0 2px 4px rgba(38,32,26,.06),0 8px 20px rgba(38,32,26,.1),0 16px 40px rgba(38,32,26,.07);
-  --shp:0 2px 8px rgba(220,74,39,.22),0 8px 24px rgba(220,74,39,.34),0 16px 48px rgba(220,74,39,.18);
-  --shg:0 2px 6px rgba(74,124,89,.18),0 8px 24px rgba(74,124,89,.28);
-  --R:20px;--Rs:14px;--Rl:28px;--Rxl:36px;
-  --easeOut:cubic-bezier(.16,1,.3,1);
-  --spring:cubic-bezier(.34,1.56,.64,1);
-  --springSoft:cubic-bezier(.25,1.4,.5,1);
-}
-
-/* === BASE === */
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;background:var(--bg);overflow-x:hidden}
-body{font-family:'Outfit',sans-serif;color:var(--tx);-webkit-tap-highlight-color:transparent;overscroll-behavior:none;-webkit-font-smoothing:antialiased}
+:root{--bg:#FAF9F6;--sf:#FFF;--s2:#F2F0EC;--s3:#E5E2DC;--b:#D4D0C8;--tx:#1A1814;--t2:#5C5A55;--t3:#8A8880;--mt:#B0ADA6;
+--pr:#FF6B35;--pr2:#E85A28;--pb:#FFF4ED;--pbb:#FFD4BC;--gn:#22C55E;--gb:#ECFDF5;--gbb:#86EFAC;--g2:#16A34A;
+--bl:#3B82F6;--bb:#EFF6FF;--rd:#EF4444;--rb:#FEF2F2;--rbb:#FECACA;--yw:#F59E0B;--yb:#FFFBEB;
+--sh:0 1px 3px rgba(0,0,0,.06);--sh2:0 4px 20px rgba(0,0,0,.08);--R:16px}
+*{box-sizing:border-box;margin:0;padding:0}html,body{height:100%;background:var(--bg);overflow-x:hidden}
+body{font-family:'Outfit',sans-serif;color:var(--tx);-webkit-tap-highlight-color:transparent;overscroll-behavior:none}
 #app{max-width:430px;margin:0 auto;min-height:100vh;padding-bottom:84px}
 .scr{padding:20px 16px;animation:fi .2s ease}
-
-/* === ANIMATIONS === */
 @keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @keyframes pu{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
-@keyframes shimmer{0%{transform:translateX(-150%)}100%{transform:translateX(500%)}}
-@keyframes gradMove{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
-@keyframes springIn{0%{transform:translateY(24px) scale(.88);opacity:0}60%{transform:translateY(-4px) scale(1.02);opacity:1}100%{transform:translateY(0) scale(1)}}
-@keyframes dotPulse{0%,100%{opacity:1;transform:scale(1);box-shadow:0 0 0 0 rgba(74,124,89,.5)}50%{opacity:.85;transform:scale(1.1);box-shadow:0 0 0 5px rgba(74,124,89,0)}}
-@keyframes shadowPulse{0%,100%{box-shadow:0 2px 8px rgba(220,74,39,.2),0 8px 24px rgba(220,74,39,.32)}50%{box-shadow:0 4px 12px rgba(220,74,39,.3),0 14px 36px rgba(220,74,39,.44)}}
-@keyframes starGlow{0%,100%{transform:scale(1);filter:drop-shadow(0 2px 4px rgba(200,145,35,.3))}50%{transform:scale(1.12);filter:drop-shadow(0 4px 12px rgba(200,145,35,.6))}}
-@keyframes floatY{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
-@keyframes numPop{0%{transform:scale(.75);opacity:0}70%{transform:scale(1.06)}100%{transform:scale(1);opacity:1}}
-@keyframes celebPop{0%{transform:scale(0) rotate(-15deg);opacity:0}55%{transform:scale(1.3) rotate(6deg);opacity:1}75%{transform:scale(.93) rotate(-2deg)}100%{transform:scale(1) rotate(0deg);opacity:1}}
-@keyframes celebText{0%{transform:translateY(16px);opacity:0}60%{transform:translateY(-4px);opacity:1}100%{transform:translateY(0);opacity:1}}
-@keyframes confA{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(-45px,-70px) rotate(-340deg) scale(0);opacity:0}}
-@keyframes confB{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(50px,-85px) rotate(400deg) scale(0);opacity:0}}
-@keyframes confC{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(-20px,-100px) rotate(280deg) scale(0);opacity:0}}
-@keyframes confD{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(60px,-60px) rotate(-260deg) scale(0);opacity:0}}
-@keyframes confE{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(-60px,-50px) rotate(320deg) scale(0);opacity:0}}
-@keyframes confF{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(30px,-110px) rotate(-380deg) scale(0);opacity:0}}
-@keyframes staggerIn{0%{transform:translateY(20px) scale(.95);opacity:0}60%{transform:translateY(-3px) scale(1.01);opacity:1}100%{transform:translateY(0) scale(1);opacity:1}}
-@keyframes checkBounce{0%{transform:scale(0);opacity:0}50%{transform:scale(1.3);opacity:1}75%{transform:scale(.9)}100%{transform:scale(1);opacity:1}}
-@keyframes badgePop{0%{transform:scale(0) rotate(-10deg);opacity:0}65%{transform:scale(1.15) rotate(2deg);opacity:1}100%{transform:scale(1) rotate(0deg);opacity:1}}
-@keyframes notiSlide{0%{transform:translateY(-20px) scale(.95);opacity:0}60%{transform:translateY(3px) scale(1.01);opacity:1}100%{transform:translateY(0) scale(1);opacity:1}}
-/* Stagger helpers */
-.s1{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .05s both}
-.s2{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .13s both}
-.s3{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .21s both}
-.s4{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .29s both}
-.s5{animation:staggerIn .5s cubic-bezier(.25,1.4,.5,1) .37s both}
-/* Done celebration */
-.cel-wrap{position:relative;display:inline-block}
-.cel-ico{display:inline-block;animation:celebPop .75s cubic-bezier(.34,1.56,.64,1) both;font-size:56px;position:relative;z-index:1}
-.cel-txt{display:inline-block;animation:celebText .6s cubic-bezier(.25,1.4,.5,1) .2s both}
-.cel-p{position:absolute;width:10px;height:10px;border-radius:3px;top:50%;left:50%;animation-duration:.9s;animation-timing-function:cubic-bezier(.25,.46,.45,.94);animation-fill-mode:both}
-.cel-p1{background:var(--pr);animation-name:confA;animation-delay:.1s}
-.cel-p2{background:var(--gd);width:8px;height:8px;border-radius:50%;animation-name:confB;animation-delay:.05s}
-.cel-p3{background:var(--sg);animation-name:confC;animation-delay:.15s}
-.cel-p4{background:var(--pr3);width:12px;height:6px;animation-name:confD;animation-delay:.08s}
-.cel-p5{background:var(--gdl);width:7px;height:7px;border-radius:50%;animation-name:confE;animation-delay:.12s}
-.cel-p6{background:var(--bl);animation-name:confF;animation-delay:.06s}
-/* Check animation */
-.chk-anim{animation:checkBounce .5s cubic-bezier(.34,1.56,.64,1) both}
-
-/* === BASE ELEMENTS === */
 button{cursor:pointer;border:none;font-family:inherit;background:none;color:inherit}
 input,textarea,select{font-family:inherit;outline:none;-webkit-appearance:none;background:none}
 ::-webkit-scrollbar{width:0}
-
-/* === NAVIGATION === */
-#nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:linear-gradient(to top,var(--sf),var(--bg2));border-top:1px solid var(--s3);display:none;z-index:200;padding-bottom:env(safe-area-inset-bottom,0);box-shadow:0 -2px 20px rgba(38,32,26,.08)}
-.nr{display:flex;align-items:center}
-.nb{flex:1;padding:10px 4px 8px;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:9px;color:var(--t3);font-weight:700;letter-spacing:.5px;text-transform:uppercase;transition:color .15s,transform .1s ease;position:relative}
-.nb:active{transform:scale(.9)}
-.nb.act{color:var(--pr)}
-.ni{font-size:20px;line-height:1}
+#nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:var(--sf);border-top:1px solid var(--s3);display:none;z-index:200;padding-bottom:env(safe-area-inset-bottom,0)}
+.nr{display:flex;align-items:center}.nb{flex:1;padding:10px 4px 8px;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:9px;color:var(--t3);font-weight:700;letter-spacing:.5px;text-transform:uppercase;transition:.15s;position:relative}.nb.act{color:var(--pr)}.ni{font-size:20px;line-height:1}
 .nf{flex:1;padding:6px 4px 8px;display:flex;flex-direction:column;align-items:center;gap:2px}
-.fab{width:50px;height:50px;background:linear-gradient(135deg,var(--pr4),var(--pr),var(--pr2));background-size:200% 200%;border-radius:25px;display:flex;align-items:center;justify-content:center;font-size:24px;color:#fff;margin-top:-16px;box-shadow:var(--shp);font-weight:700;animation:gradMove 5s ease-in-out infinite;transition:transform .1s ease}
-.fab:active{transform:scale(.88) translateY(2px)}
+.fab{width:48px;height:48px;background:var(--pr);border-radius:24px;display:flex;align-items:center;justify-content:center;font-size:24px;color:#fff;margin-top:-14px;box-shadow:0 4px 16px rgba(255,107,53,.35);font-weight:700}.fab:active{transform:scale(.9)}
 .bdg{position:absolute;top:4px;right:calc(50% - 18px);background:var(--rd);color:#fff;font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center}
-
-/* === NOTIFICATIONS === */
 #ntf{position:fixed;top:env(safe-area-inset-top,0);left:50%;transform:translateX(-50%);width:100%;max-width:430px;z-index:300;pointer-events:none;padding:8px 14px 0}
-.noti{background:linear-gradient(135deg,var(--sf),var(--bg2));border:1px solid var(--s3);border-radius:var(--Rs);padding:12px 16px;margin-bottom:8px;display:flex;align-items:center;gap:12px;pointer-events:all;cursor:pointer;animation:springIn .4s var(--springSoft);box-shadow:var(--sh2)}
-
-/* === HEADER === */
+.noti{background:var(--sf);border:1px solid var(--s3);border-radius:14px;padding:12px 16px;margin-bottom:8px;display:flex;align-items:center;gap:12px;pointer-events:all;cursor:pointer;animation:fi .2s ease;box-shadow:var(--sh2)}
 .hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
-.logo{font-family:'Fraunces',serif;font-weight:900;font-size:32px;letter-spacing:-1.5px;line-height:1.1;color:var(--tx);overflow:visible}
-.logo em{font-style:italic;background:linear-gradient(135deg,var(--pr4),var(--pr3),var(--pr),var(--pr2),var(--pr));background-size:200% 200%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;color:transparent;animation:gradMove 5s ease-in-out infinite;display:inline-block;padding-bottom:2px}
-.conn{font-size:12px;padding:7px 13px 7px 11px;border-radius:22px;display:flex;align-items:center;gap:7px;font-weight:600;box-shadow:var(--sh)}
-.con{background:linear-gradient(135deg,var(--sgb),#D8E8DC);border:1px solid var(--sgbb);color:var(--sg)}
-.cof{background:linear-gradient(135deg,var(--s2),#E0D8C6);border:1px solid var(--b);color:var(--t3)}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--sg);animation:dotPulse 2.4s ease-in-out infinite;flex-shrink:0}
-
-/* === TOP BAR === */
+.logo{font-weight:900;font-size:28px;letter-spacing:-1px}.logo em{color:var(--pr);font-style:normal}
+.conn{font-size:12px;padding:5px 12px;border-radius:20px;display:flex;align-items:center;gap:6px;font-weight:600}
+.con{background:var(--gb);border:1px solid var(--gbb);color:var(--g2)}.cof{background:var(--s2);border:1px solid var(--b);color:var(--t3)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--gn);animation:pu 1.8s infinite;flex-shrink:0}
 .tbar{display:flex;align-items:center;gap:10px;margin-bottom:20px}
-.bk{display:flex;align-items:center;gap:5px;color:var(--tx);font-size:14px;font-weight:700;padding:10px 15px;background:linear-gradient(180deg,var(--sf),var(--s2));border:1px solid var(--s3);border-radius:var(--Rs);flex-shrink:0;box-shadow:var(--sh);transition:transform .1s ease,background .1s ease}
-.bk::before{content:'\2190';font-size:16px}
-.bk:active{background:var(--s2);transform:scale(.95) translateY(1px);box-shadow:none}
-.pgt{font-family:'Fraunces',serif;font-weight:800;font-size:20px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.4px}
-
-/* === CARDS === */
-.cd{background:linear-gradient(160deg,var(--sf) 0%,var(--bg2) 100%);border:1px solid var(--s3);border-radius:var(--R);padding:16px;margin-bottom:12px;position:relative;overflow:hidden;box-shadow:var(--sh)}
-.cd::after{content:'';position:absolute;top:0;left:0;width:25%;height:100%;background:linear-gradient(90deg,transparent,rgba(220,74,39,.025),transparent);animation:shimmer 12s ease-in-out infinite;pointer-events:none}
-.cdt{cursor:pointer;transition:transform .1s ease,border-color .12s,box-shadow .12s}
-.cdt:active{border-color:var(--pr3);box-shadow:var(--sh2);transform:scale(.985) translateY(1px)}
-
-/* === FIELDS === */
-.fld{margin-bottom:18px}
-.fl{font-size:11px;letter-spacing:1px;color:var(--t3);text-transform:uppercase;margin-bottom:8px;display:block;font-weight:700}
-.fi{width:100%;background:linear-gradient(180deg,var(--sf),var(--bg2));border:1.5px solid var(--s3);border-radius:var(--Rs);color:var(--tx);font-size:15px;padding:13px 15px;transition:.15s;box-shadow:var(--sh)}
-.fi:focus{border-color:var(--pr);box-shadow:0 0 0 3px rgba(220,74,39,.1)}
-textarea.fi{resize:none;line-height:1.5}
-
-/* === BUTTONS === */
-.btn{padding:15px 18px;border-radius:var(--Rs);font-size:15px;font-weight:700;transition:transform .1s ease,box-shadow .1s ease;display:block;text-align:center;width:100%;position:relative;overflow:hidden}
-.btn:active:not(:disabled){transform:scale(.96) translateY(1px)}
-.btn::after{content:'';position:absolute;top:0;left:0;width:25%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.15),transparent);animation:shimmer 6s ease-in-out infinite;pointer-events:none}
-.bp{background:linear-gradient(135deg,var(--pr4),var(--pr3),var(--pr),var(--pr2));background-size:300% 300%;color:#fff;box-shadow:var(--shp);animation:gradMove 5s ease-in-out infinite,shadowPulse 4s ease-in-out infinite}
-.bp:disabled{opacity:.35;animation:none}
-.bg{background:linear-gradient(135deg,var(--sgl),var(--sg),var(--sg2));background-size:200% 200%;color:#fff;box-shadow:var(--shg);animation:gradMove 5s ease-in-out infinite}
-.bs{background:linear-gradient(180deg,var(--sf),var(--s2));border:1px solid var(--s3);color:var(--tx);box-shadow:var(--sh)}
-.br{background:linear-gradient(135deg,var(--rb),#EDD4CF);border:1px solid var(--rbb);color:var(--rd)}
-.brow{display:flex;gap:8px;margin-top:10px}
-.bsm{padding:10px 14px;font-size:13px;border-radius:var(--Rs)}
-
-/* === BADGES === */
-.badge{font-size:10px;padding:5px 11px;border-radius:22px;font-weight:700;white-space:nowrap;border:1px solid}
-.bg1{background:linear-gradient(135deg,var(--sgb),#D8E8DC);border-color:var(--sgbb);color:var(--sg)}
-.bp1{background:linear-gradient(135deg,var(--pb),#F5D0BC);border-color:var(--pbb);color:var(--pr)}
-.bb1{background:linear-gradient(135deg,var(--bb),#D4DFF0);border-color:var(--bbb);color:var(--bl)}
-.br1{background:linear-gradient(135deg,var(--rb),#EDD4CF);border-color:var(--rbb);color:var(--rd)}
-.by1{background:linear-gradient(135deg,var(--gdb),#F2E0B0);border-color:var(--gdbb);color:var(--gd)}
-.bgr{background:linear-gradient(135deg,var(--s2),#E0D8C6);border-color:var(--b);color:var(--t3)}
-.bpu{background:linear-gradient(135deg,#F5F3FF,#EDE9FE);border-color:#DDD6FE;color:#7C3AED}
-
-/* === AVATAR === */
-.av{width:42px;height:42px;border-radius:21px;background:linear-gradient(135deg,var(--pb),#F5C2AF,#EDA995);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:var(--pr);flex-shrink:0;text-transform:uppercase;border:2px solid var(--pbb);box-shadow:0 3px 10px rgba(220,74,39,.16),inset 0 1px 2px rgba(255,255,255,.5)}
-
-/* === STARS === */
-.stars{display:flex;gap:6px;margin:8px 0}
-.star{font-size:28px;color:var(--s3);cursor:pointer;transition:.12s}
-.star.act{color:var(--gd);animation:starGlow 3s ease-in-out infinite}
-.star.act:nth-child(2){animation-delay:.3s}
-.star.act:nth-child(3){animation-delay:.6s}
-.star.act:nth-child(4){animation-delay:.9s}
-.star.act:nth-child(5){animation-delay:1.2s}
-.star:active{transform:scale(1.2)}
-
-/* === CHAT === */
+.bk{display:flex;align-items:center;gap:5px;color:var(--tx);font-size:14px;font-weight:600;padding:10px 14px;background:var(--sf);border:1px solid var(--s3);border-radius:12px;flex-shrink:0}.bk::before{content:'\2190';font-size:16px}.bk:active{background:var(--s2)}
+.pgt{font-weight:800;font-size:18px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cd{background:var(--sf);border:1px solid var(--s3);border-radius:var(--R);padding:16px;margin-bottom:10px;position:relative;overflow:hidden;box-shadow:var(--sh)}
+.cdt{cursor:pointer;transition:border-color .12s}.cdt:active{border-color:var(--b)}
+.fld{margin-bottom:18px}.fl{font-size:11px;letter-spacing:1px;color:var(--t3);text-transform:uppercase;margin-bottom:8px;display:block;font-weight:700}
+.fi{width:100%;background:var(--sf);border:1.5px solid var(--s3);border-radius:12px;color:var(--tx);font-size:15px;padding:13px 15px;transition:.15s}.fi:focus{border-color:var(--pr)}textarea.fi{resize:none;line-height:1.5}
+.btn{padding:14px 18px;border-radius:14px;font-size:15px;font-weight:700;transition:.12s;display:block;text-align:center;width:100%}.btn:active:not(:disabled){transform:scale(.97)}
+.bp{background:var(--pr);color:#fff}.bp:disabled{opacity:.3}.bg{background:var(--gn);color:#fff}.bs{background:var(--s2);border:1px solid var(--s3);color:var(--tx)}.br{background:var(--rb);border:1px solid var(--rbb);color:var(--rd)}
+.brow{display:flex;gap:8px;margin-top:10px}.bsm{padding:10px 14px;font-size:13px;border-radius:10px}
+.badge{font-size:10px;padding:4px 10px;border-radius:20px;font-weight:700;white-space:nowrap}
+.bg1{background:var(--gb);border:1px solid var(--gbb);color:var(--g2)}.bp1{background:var(--pb);border:1px solid var(--pbb);color:var(--pr)}.bb1{background:var(--bb);border:1px solid #BFDBFE;color:var(--bl)}.br1{background:var(--rb);border:1px solid var(--rbb);color:var(--rd)}.by1{background:var(--yb);border:1px solid #FDE68A;color:var(--yw)}.bgr{background:var(--s2);border:1px solid var(--b);color:var(--t3)}
+.bpu{background:#F5F3FF;border:1px solid #DDD6FE;color:#7C3AED}
+.av{width:40px;height:40px;border-radius:20px;background:var(--pb);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:var(--pr);flex-shrink:0;text-transform:uppercase;border:2px solid var(--pbb)}
+.stars{display:flex;gap:6px;margin:8px 0}.star{font-size:28px;color:var(--s3);cursor:pointer;transition:.1s}.star.act{color:var(--yw)}.star:active{transform:scale(1.2)}
 .chwp{display:flex;flex-direction:column;height:calc(100vh - 180px);min-height:300px}
 .chms{flex:1;overflow-y:auto;padding:4px 0;display:flex;flex-direction:column;gap:8px}
-.msg{max-width:80%;padding:10px 14px;border-radius:16px;font-size:14px;line-height:1.5}
-.mm{background:linear-gradient(135deg,var(--pr3),var(--pr),var(--pr2));color:#fff;align-self:flex-end;border-bottom-right-radius:4px;box-shadow:0 3px 10px rgba(220,74,39,.22)}
-.mo{background:linear-gradient(160deg,var(--sf),var(--bg2));border:1px solid var(--s3);align-self:flex-start;border-bottom-left-radius:4px;box-shadow:var(--sh)}
-.ms{background:none;border:1px dashed var(--b);color:var(--t3);align-self:center;font-size:12px;text-align:center;max-width:90%;padding:8px 14px}
-.mn{font-size:10px;font-weight:700;margin-bottom:3px;color:var(--t3)}
-.mt2{font-size:10px;opacity:.6;margin-top:3px;text-align:right}
+.msg{max-width:80%;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.5}.mm{background:var(--pr);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}.mo{background:var(--sf);border:1px solid var(--s3);align-self:flex-start;border-bottom-left-radius:4px}.ms{background:none;border:1px dashed var(--b);color:var(--t3);align-self:center;font-size:12px;text-align:center;max-width:90%;padding:8px 14px}
+.mn{font-size:10px;font-weight:700;margin-bottom:3px;color:var(--t3)}.mt2{font-size:10px;opacity:.6;margin-top:3px;text-align:right}
 .chbr{display:flex;gap:4px;padding:8px 0;border-top:1px solid var(--s3);margin-top:auto}
-.chi{flex:1;min-width:0;background:linear-gradient(180deg,var(--sf),var(--bg2));border:1.5px solid var(--s3);border-radius:22px;color:var(--tx);font-size:13px;padding:9px 13px;box-shadow:var(--sh)}
-.chi:focus{border-color:var(--pr)}
-.chsn{width:38px;height:38px;border-radius:19px;background:linear-gradient(135deg,var(--pr3),var(--pr),var(--pr2));color:#fff;font-size:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:var(--shp)}
-.chsn:active{opacity:.8;transform:scale(.92)}
-
-/* === LABELS & INFO === */
+.chi{flex:1;min-width:0;background:var(--s2);border:1.5px solid var(--s3);border-radius:20px;color:var(--tx);font-size:13px;padding:9px 12px}.chi:focus{border-color:var(--pr)}
+.chsn{width:36px;height:36px;border-radius:18px;background:var(--pr);color:#fff;font-size:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0}.chsn:active{opacity:.8}
 .slbl{font-size:11px;letter-spacing:1.5px;color:var(--t3);text-transform:uppercase;font-weight:700;margin-bottom:10px;display:block}
-.ibox{font-size:13px;color:var(--bl);line-height:1.7;background:linear-gradient(135deg,var(--bb),#D4DFF0);border:1px solid var(--bbb);border-radius:var(--Rs);padding:14px 16px;margin-bottom:12px}
-.wbox{font-size:13px;color:#6B4A0A;line-height:1.7;background:linear-gradient(135deg,var(--gdb),#F4E8C0);border:1px solid var(--gdbb);border-radius:var(--Rs);padding:14px 16px;margin-bottom:12px}
+.ibox{font-size:13px;color:var(--bl);line-height:1.7;background:var(--bb);border:1px solid #BFDBFE;border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.wbox{font-size:13px;color:#92400E;line-height:1.7;background:var(--yb);border:1px solid #FDE68A;border-radius:12px;padding:14px 16px;margin-bottom:12px}
 .dv{height:1px;background:var(--s3);margin:14px 0}
-.drow{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--s2);font-size:13px;color:var(--t2)}
-.drow:last-child{border-bottom:none}
-.drow .dval{color:var(--tx);font-weight:600;text-align:right;max-width:60%}
-
-/* === EMPTY STATE === */
-.emp{text-align:center;padding:40px 20px}
-.emp-i{font-size:40px;margin-bottom:12px;display:inline-block;animation:floatY 4s ease-in-out infinite}
-.emp-t{font-size:14px;color:var(--t3);line-height:1.7;font-family:'Caveat',cursive;font-size:17px;font-weight:500}
-
-/* === ID BOX === */
-.idd{background:var(--s2);border:1px solid var(--b);border-radius:var(--Rs);padding:14px;font-family:monospace;font-size:12px;color:var(--pr);letter-spacing:1px;word-break:break-all;text-align:center;margin-bottom:10px}
-
-/* === PROFILE CARD === */
-.pcard{background:linear-gradient(160deg,var(--sf) 0%,var(--bg2) 60%,#EEE6D4 100%);border:1px solid var(--s3);border-radius:var(--Rl);padding:26px 22px;margin-bottom:16px;text-align:center;box-shadow:var(--sh2);position:relative;overflow:hidden}
-.pav{width:78px;height:78px;border-radius:39px;background:linear-gradient(135deg,var(--pb),#F5C2AF,#EDA995);display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:800;color:var(--pr);margin:0 auto 14px;border:3px solid var(--pbb);box-shadow:0 10px 28px rgba(220,74,39,.22),inset 0 1px 3px rgba(255,255,255,.5);animation:floatY 5s ease-in-out infinite}
-.pnm{font-family:'Fraunces',serif;font-weight:800;font-size:26px;letter-spacing:-.7px;color:var(--tx)}
+.drow{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--s2);font-size:13px;color:var(--t2)}.drow:last-child{border-bottom:none}.drow .dval{color:var(--tx);font-weight:600;text-align:right;max-width:60%}
+.emp{text-align:center;padding:40px 20px}.emp-i{font-size:40px;margin-bottom:12px}.emp-t{font-size:14px;color:var(--t3);line-height:1.7}
+.idd{background:var(--s2);border:1px solid var(--b);border-radius:12px;padding:14px;font-family:monospace;font-size:12px;color:var(--pr);letter-spacing:1px;word-break:break-all;text-align:center;margin-bottom:10px}
+.pcard{background:var(--sf);border:1px solid var(--s3);border-radius:20px;padding:24px;margin-bottom:16px;text-align:center;box-shadow:var(--sh)}
+.pav{width:72px;height:72px;border-radius:36px;background:var(--pb);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:var(--pr);margin:0 auto 14px;border:3px solid var(--pbb)}
+.pnm{font-size:24px;font-weight:800}
 .psts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px}
-.ps{background:linear-gradient(160deg,var(--s2),#E3DBC5);border:1px solid var(--s3);border-radius:14px;padding:12px 8px;text-align:center}
-.psn{font-family:'Fraunces',serif;font-weight:800;font-size:21px;letter-spacing:-.4px;color:var(--tx);display:inline-block;animation:numPop .7s var(--spring)}
-.psl{font-size:10px;color:var(--t3);letter-spacing:1px;text-transform:uppercase;margin-top:2px;font-weight:700}
-
-/* === ONBOARDING === */
-.obw{padding:40px 24px 30px}
-.obl{font-family:'Fraunces',serif;font-weight:900;font-size:48px;letter-spacing:-2px;text-align:center;line-height:1;margin-bottom:6px}
+.ps{background:var(--s2);border-radius:12px;padding:12px 8px;text-align:center}.psn{font-weight:800;font-size:20px}.psl{font-size:10px;color:var(--t3);letter-spacing:1px;text-transform:uppercase;margin-top:2px;font-weight:700}
+.obw{padding:40px 24px 30px}.obl{font-weight:900;font-size:48px;letter-spacing:-2px;text-align:center;line-height:1;margin-bottom:6px}
 .obs{font-size:13px;letter-spacing:2px;color:var(--t3);text-align:center;margin-bottom:40px;font-weight:600;text-transform:uppercase}
-.obf{display:flex;align-items:flex-start;gap:14px;margin-bottom:20px}
-.ofi{font-size:24px;flex-shrink:0;margin-top:2px}
-.oft{font-size:15px;font-weight:700;margin-bottom:3px}
-.ofd{font-size:13px;color:var(--t2);line-height:1.5}
-
-/* === STATS === */
+.obf{display:flex;align-items:flex-start;gap:14px;margin-bottom:20px}.ofi{font-size:24px;flex-shrink:0;margin-top:2px}.oft{font-size:15px;font-weight:700;margin-bottom:3px}.ofd{font-size:13px;color:var(--t2);line-height:1.5}
 .stg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
-.stat{background:linear-gradient(160deg,var(--sf),var(--bg2));border:1px solid var(--s3);border-radius:var(--Rs);padding:14px 8px;text-align:center;box-shadow:var(--sh)}
-.stn{font-family:'Fraunces',serif;font-weight:800;font-size:22px;line-height:1.1;letter-spacing:-.3px}
-.stl{font-size:10px;color:var(--t3);margin-top:3px;letter-spacing:.5px;text-transform:uppercase;font-weight:700}
-
-/* === TASK TYPE SELECTOR === */
+.stat{background:var(--sf);border:1px solid var(--s3);border-radius:14px;padding:14px 8px;text-align:center;box-shadow:var(--sh)}.stn{font-weight:800;font-size:22px;line-height:1.1}.stl{font-size:10px;color:var(--t3);margin-top:3px;letter-spacing:.5px;text-transform:uppercase;font-weight:700}
 .ttypes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
-.ttype{padding:16px 12px;border-radius:var(--Rs);text-align:center;cursor:pointer;border:2px solid var(--s3);background:linear-gradient(160deg,var(--sf),var(--bg2));transition:.15s;box-shadow:var(--sh)}
-.ttype.act{border-color:var(--pr);background:linear-gradient(135deg,var(--pb),#F5D0BC);box-shadow:var(--shp)}
-.ttype-i{font-size:28px;margin-bottom:6px}
-.ttype-n{font-size:13px;font-weight:700}
-.ttype-d{font-size:11px;color:var(--t3);margin-top:2px}
-
-/* === FILTERS === */
-.flt{display:flex;gap:7px;overflow-x:auto;padding-bottom:8px;margin-bottom:12px;-webkit-overflow-scrolling:touch}
-.fc{padding:8px 15px;border-radius:22px;font-size:12px;font-weight:700;white-space:nowrap;border:1.5px solid var(--s3);background:linear-gradient(160deg,var(--sf),var(--bg2));color:var(--t2);flex-shrink:0;cursor:pointer;box-shadow:var(--sh);position:relative;overflow:hidden;transition:transform .1s ease}
-.fc:active{transform:scale(.94) translateY(1px)}
-.fc.act{background:linear-gradient(135deg,var(--pr4),var(--pr3),var(--pr),var(--pr2));background-size:300% 300%;color:#fff;border-color:var(--pr);box-shadow:var(--shp);animation:gradMove 4.5s ease-in-out infinite}
-
-/* === CHIPS === */
-.chips{display:flex;flex-wrap:wrap;gap:6px}
-.chip{padding:7px 14px;border-radius:20px;font-size:12px;font-weight:600;border:1.5px solid var(--s3);background:linear-gradient(160deg,var(--sf),var(--bg2));color:var(--t2);cursor:pointer;box-shadow:var(--sh)}
-.chip.act{background:linear-gradient(135deg,var(--pr3),var(--pr));color:#fff;border-color:var(--pr);box-shadow:var(--shp)}
-
-/* === ACTION CHIPS === */
-.ac{padding:7px 14px;border-radius:22px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid var(--pbb);background:linear-gradient(135deg,var(--pb),#F5D0BC);color:var(--pr);box-shadow:0 2px 6px rgba(220,74,39,.1);transition:transform .1s ease}
-.ac:active{opacity:.8;transform:scale(.94) translateY(1px)}
-.acg{padding:7px 14px;border-radius:22px;font-size:12px;font-weight:600;border:1.5px solid var(--s3);background:linear-gradient(160deg,var(--s2),#E0D8C6);color:var(--t3)}
-
-/* === MISC === */
+.ttype{padding:16px 12px;border-radius:14px;text-align:center;cursor:pointer;border:2px solid var(--s3);background:var(--sf);transition:.12s}
+.ttype.act{border-color:var(--pr);background:var(--pb)}
+.ttype-i{font-size:28px;margin-bottom:6px}.ttype-n{font-size:13px;font-weight:700}.ttype-d{font-size:11px;color:var(--t3);margin-top:2px}
+.flt{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:12px;-webkit-overflow-scrolling:touch}
+.fc{padding:7px 14px;border-radius:20px;font-size:12px;font-weight:600;white-space:nowrap;border:1.5px solid var(--s3);background:var(--sf);color:var(--t2);flex-shrink:0;cursor:pointer}
+.fc.act{background:var(--pr);color:#fff;border-color:var(--pr)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}.chip{padding:7px 14px;border-radius:20px;font-size:12px;font-weight:600;border:1.5px solid var(--s3);background:var(--sf);color:var(--t2);cursor:pointer}.chip.act{background:var(--pr);color:#fff;border-color:var(--pr)}
+.ac{padding:7px 14px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1.5px solid var(--pbb);background:var(--pb);color:var(--pr)}.ac:active{opacity:.7}
+.acg{padding:7px 14px;border-radius:20px;font-size:12px;font-weight:600;border:1.5px solid var(--s3);background:var(--s2);color:var(--t3)}
 .rec-pulse{animation:pu .8s infinite}
-.itm{background:linear-gradient(160deg,var(--sf),var(--bg2));border:1px solid var(--s3);border-radius:var(--Rs);padding:10px;margin-bottom:8px;display:flex;align-items:center;gap:8px;box-shadow:var(--sh)}
-
-/* === MODAL === */
-.modal-bg{position:fixed;inset:0;background:rgba(38,32,26,.5);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);z-index:400;display:flex;align-items:center;justify-content:center;padding:24px;animation:fi .2s ease}
-.modal{background:linear-gradient(160deg,var(--sf),var(--bg2));border-radius:var(--Rxl);padding:26px 22px;max-width:340px;width:100%;box-shadow:var(--sh2);border:1px solid var(--s3);animation:springIn .45s var(--springSoft)}
+.itm{background:var(--sf);border:1px solid var(--s3);border-radius:12px;padding:10px;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:400;display:flex;align-items:center;justify-content:center;padding:24px;animation:fi .15s ease}
+.modal{background:var(--sf);border-radius:20px;padding:24px;max-width:340px;width:100%;box-shadow:var(--sh2)}
 </style>
 </head>
 <body>
@@ -368,7 +202,7 @@ const A={myId:'',myName:'',myBio:'',myCity:'',myFylke:'',myBy:'',pubB64:'',privK
   contacts:[],blocked:new Set(),ratings:{},activity:[],offlineQ:[],relayQ:[],completedCount:0,
   screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,unreadActivity:0,unreadGroups:0,unreadFeed:0,_seenMids:new Set(),_seenAcks:new Set(),groups:[],
   feedFilter:{type:'',fylke:'',by:'',allNorway:false},tempConns:new Map(),_publicGroups:[],_publicGroupsCursor:null,_publicGroupsHasMore:false,_publicGroupsLoading:false,_groupPostsHasMore:{},_groupPostsLoading:{},_publicPostsHasMore:false,_publicPostsLoading:false,_friendsPostsHasMore:false,_friendsPostsLoading:false,_contactQ:'',_editGroup:false,_pendingGroupImg:null,
-  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{},_groupRequests:{},_groupRequestsTs:{},_myGroupRequests:{}};
+  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{},_groupRequests:{},_groupRequestsTs:{},_myGroupRequests:{},_friendRefs:{},_friendRequests:{}};
 
 async function loadState(){
   if(D())console.log('[-> loadState]');
@@ -393,6 +227,8 @@ async function loadState(){
   A._removedContacts=new Set((await dbGet('config','removedContacts'))||[]);
   A._deadJobs=new Set((await dbGet('config','deadJobs'))||[]);
   A._myGroupRequests=(await dbGet('config','myGroupRequests'))||{};
+  A._friendRefs=(await dbGet('config','friendRefs'))||{};
+  A._friendRequests=(await dbGet('config','friendRequests'))||{};
   const oj=(await dbGet('config','openJobs'))||[];
   A.openJobs=new Map(oj.filter(([,j])=>(!j.expiresAt||j.expiresAt===0||j.expiresAt>now())&&!isInvalidDirectJob(j)));
   if(D())console.log('[<- loadState]',{jobs:A.myJobs.length,contacts:A.contacts.length,openJobs:A.openJobs.size,groups:A.groups.length,offlineQ:A.offlineQ.length,relayQ:A.relayQ.length});
@@ -435,7 +271,9 @@ async function persist(){
     dbPut('config','tempConns',[...A.tempConns.entries()]),
     dbPut('config','removedContacts',[...A._removedContacts]),
     dbPut('config','deadJobs',[...A._deadJobs]),
-    dbPut('config','myGroupRequests',A._myGroupRequests)
+    dbPut('config','myGroupRequests',A._myGroupRequests),
+    dbPut('config','friendRefs',A._friendRefs),
+    dbPut('config','friendRequests',A._friendRequests)
   ]);
   checkRules();
 }
@@ -733,7 +571,7 @@ window.ownerAssignPoint=(jid,idx)=>{var j=A.myJobs.find(x=>x.id===jid);if(!j||j.
   document.body.appendChild(bg);bg.onclick=e=>{if(e.target===bg)bg.remove();};};
 window.doOwnerAssign=async(jid,idx,pid,name)=>{document.getElementById('owner-assign-modal')?.remove();
   var j=A.myJobs.find(x=>x.id===jid);if(!j||!j.items?.[idx])return;
-  if(['cancelled','declined','never_done'].includes(j.status)||j.archivedForMeAt)return;
+  if(['cancelled','declined','never_done','done'].includes(j.status)||j.archivedForMeAt)return;
   var it=j.items[idx];if((it.status||'open')!=='open'||it.assignedTo)return;
   it.assignedTo=pid;it.assignedName=name;it.assignedStatus='pending';
   // Cleanup other applicants who had this point in their application
@@ -870,6 +708,7 @@ function initFB(){
     try{fbDb=firebase.firestore();console.log('[FB] Init OK — Storage + Firestore');}catch(e2){console.log('[FB] Init OK — Storage only');}}
   catch(e){console.warn('[FB]',e);}}
 function hasFS(){return!!fbDb;}
+function isActiveFriend(id){return!!(A._friendRefs[id]&&A._friendRefs[id].status==='active');}
 async function ensureFirebaseAuthSession(opts){try{if(!firebase?.auth)return null;opts=opts||{};
   var auth=firebase.auth();
   var user=await new Promise(function(resolve){var unsub;var timer=setTimeout(function(){if(unsub)unsub();resolve(null);},5000);
@@ -947,6 +786,84 @@ async function fsResolveGroupRequestCallable(gid,peerId,adminId,status){try{
   await fn({gid:gid,seekerId:peerId,decision:decision});
   if(D())console.log('[FS] resolveGroupRequestCallable',gid,peerId,decision);return true;
 }catch(e){if(D())console.warn('[FS] resolveGroupRequestCallable error',gid,peerId,e?.message);return false;}}
+async function fsRemoveGroupMemberCallable(gid,memberId){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!gid||!memberId)return false;
+  var fn=firebase.functions().httpsCallable('removeGroupMember');
+  await fn({gid:gid,memberId:memberId});
+  if(D())console.log('[FS] removeGroupMemberCallable',gid,memberId);return true;
+}catch(e){
+  var msg=e?.message||'';
+  if(msg.includes('Cannot remove yourself'))notify('⚠️','Du kan ikke fjerne deg selv');
+  else if(msg.includes('Not group admin'))notify('⚠️','Kun admin kan fjerne medlemmer');
+  else if(msg.includes('not a member'))notify('⚠️','Ikke et aktivt medlem');
+  else notify('⚠️','Kunne ikke fjerne medlemmet');
+  if(D())console.warn('[FS] removeGroupMemberCallable error',gid,memberId,msg);return false;}}
+async function fsSendFriendRequestCallable(targetId){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!targetId)return false;
+  var fn=firebase.functions().httpsCallable('sendFriendRequest');
+  await fn({targetId:targetId});
+  if(D())console.log('[FS] sendFriendRequestCallable',targetId);
+  A._friendRequests[targetId]={peerId:targetId,peerName:'',direction:'outgoing',status:'pending',ts:Date.now(),updatedAt:Date.now()};
+  qPersist();return true;
+}catch(e){
+  var msg=e?.message||'';
+  if(msg.includes('Cannot send friend request to yourself'))notify('⚠️','Kan ikke sende til deg selv');
+  else if(msg.includes('Already friends'))notify('👤','Allerede venner');
+  else if(msg.includes('already pending'))notify('⏳','Venneforespørsel venter allerede');
+  else if(msg.includes('not found'))notify('⚠️','Brukeren finnes ikke');
+  else if(D())console.warn('[FS] sendFriendRequestCallable error',targetId,msg);
+  return false;}}
+async function fsResolveFriendRequestCallable(fromId,decision){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!fromId)return false;
+  var pn=A._friendRequests[fromId]?.peerName||'';
+  var fn=firebase.functions().httpsCallable('resolveFriendRequest');
+  await fn({fromId:fromId,decision:decision});
+  if(D())console.log('[FS] resolveFriendRequestCallable',fromId,decision);
+  delete A._friendRequests[fromId];
+  if(decision==='accepted'){A._friendRefs[fromId]={peerId:fromId,peerName:pn,status:'active',since:Date.now(),updatedAt:Date.now()};
+    if(!A.contacts.find(c=>c.id===fromId))A.contacts.push({id:fromId,name:pn||fromId.substr(0,12),alias:pn||fromId.substr(0,12)});}
+  qPersist();return true;
+}catch(e){var msg=e?.message||'';
+  if(msg.includes('not found'))notify('⚠️','Forespørselen finnes ikke');
+  else notify('⚠️','Kunne ikke behandle forespørselen');
+  if(D())console.warn('[FS] resolveFriendRequestCallable error',fromId,decision,msg);return false;}}
+async function fsCancelFriendRequestCallable(targetId){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!targetId)return false;
+  var fn=firebase.functions().httpsCallable('cancelFriendRequest');
+  await fn({targetId:targetId});
+  if(D())console.log('[FS] cancelFriendRequestCallable',targetId);
+  delete A._friendRequests[targetId];
+  qPersist();return true;
+}catch(e){var msg=e?.message||'';
+  if(msg.includes('not found'))notify('⚠️','Forespørselen finnes ikke');
+  else notify('⚠️','Kunne ikke avbryte forespørselen');
+  if(D())console.warn('[FS] cancelFriendRequestCallable error',targetId,msg);return false;}}
+async function fsRemoveFriendCallable(peerId){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId||!peerId)return false;
+  var fn=firebase.functions().httpsCallable('removeFriend');
+  await fn({peerId:peerId});
+  if(D())console.log('[FS] removeFriendCallable',peerId);
+  delete A._friendRefs[peerId];delete A._friendRequests[peerId];
+  A._removedContacts.add(peerId);A.contacts=A.contacts.filter(c=>c.id!==peerId);
+  qPersist();return true;
+}catch(e){var msg=e?.message||'';
+  if(msg.includes('not found'))notify('⚠️','Vennskap ikke funnet');
+  else notify('⚠️','Kunne ikke fjerne vennen');
+  if(D())console.warn('[FS] removeFriendCallable error',peerId,msg);return false;}}
+async function fsSyncMyFriendRefs(){if(!hasFS()||!A.myId)return;try{
+  var snap=await fbDb.collection('users').doc(A.myId).collection('friendRefs').limit(500).get();
+  var updated={},seeded=0;snap.docs.forEach(doc=>{var d=doc.data();updated[doc.id]={peerId:doc.id,peerName:d.peerName||'',status:d.status||'active',since:d.since||0,updatedAt:d.updatedAt||0};
+    if((d.status||'active')==='active'&&!A.contacts.find(c=>c.id===doc.id)){A.contacts.push({id:doc.id,name:d.peerName||doc.id.substr(0,12),alias:d.peerName||doc.id.substr(0,12)});seeded++;}});
+  A._friendRefs=updated;qPersist();
+  if(seeded>0)tryC&&A.contacts.forEach(c=>{if(updated[c.id])tryC(c.id);});
+  if(D())console.log('[fsSyncMyFriendRefs]',{count:snap.docs.length,seeded});
+}catch(e){if(D())console.log('[fsSyncMyFriendRefs] error',e.message);}}
+async function fsSyncMyFriendRequests(){if(!hasFS()||!A.myId)return;try{
+  var snap=await fbDb.collection('users').doc(A.myId).collection('friendRequests').limit(500).get();
+  var updated={};snap.docs.forEach(doc=>{var d=doc.data();updated[doc.id]={peerId:doc.id,peerName:d.peerName||'',direction:d.direction||'',status:d.status||'',ts:d.ts||0,updatedAt:d.updatedAt||0};});
+  A._friendRequests=updated;qPersist();
+  if(D())console.log('[fsSyncMyFriendRequests]',{count:snap.docs.length});
+}catch(e){if(D())console.log('[fsSyncMyFriendRequests] error',e.message);}}
 function upsertLocalGroupFromFs(gid,data,fallbackName){
   if(!gid||!data)return false;
   var g=A.groups.find(x=>x.id===gid);
@@ -1058,15 +975,16 @@ function fsWriteJobRef(uid,jid,fields){if(!hasFS()||!uid||!jid)return;try{fbDb.c
 function fsWriteDMRef(uid,peerId,fields){if(!hasFS()||!uid||!peerId)return;try{fbDb.collection('users').doc(uid).collection('dmRefs').doc(peerId).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] dmRef write',e);});}catch(e){}}
 function fsWriteGroupRef(uid,gid,fields){if(!hasFS()||!uid||!gid)return;try{fbDb.collection('users').doc(uid).collection('groupRefs').doc(gid).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] groupRef write',e);});}catch(e){}}
 async function fsRecoverArchivedJobsFromRefs(){if(!hasFS()||!A.myId)return;
-  var candidates=A.myJobs.filter(j=>j.status==='done'&&!j.archivedForMeAt);
+  var candidates=A.myJobs.filter(j=>(j.status==='done'&&!j.archivedForMeAt)||(!j.hiddenForMeAt&&['done','cancelled','declined','never_done'].includes(j.status)));
   if(!candidates.length)return;var recovered=0;
   for(var j of candidates){try{
     var doc=await fbDb.collection('users').doc(A.myId).collection('jobRefs').doc(j.id).get();
     if(!doc.exists)continue;var ref=doc.data();
-    if(ref?.visibility==='archived'){j.archivedForMeAt=ref.archivedAt||ref.updatedAt||now();delete A._unreadJobs[j.id];recovered++;}
+    if(ref?.visibility==='hidden'&&!j.hiddenForMeAt){j.hiddenForMeAt=ref.hiddenAt||ref.updatedAt||now();delete A._unreadJobs[j.id];recovered++;}
+    else if(ref?.visibility==='archived'&&!j.archivedForMeAt){j.archivedForMeAt=ref.archivedAt||ref.updatedAt||now();delete A._unreadJobs[j.id];recovered++;}
   }catch(e){}}
   if(recovered){persist();if(D())console.log('[fsRecoverArchivedJobsFromRefs]',{recovered});}}
-async function fsEnqueuePurgeIntent(type,targetId,extra){if(!hasFS()||!type||!targetId)return;try{await fbDb.collection('purgeQueue').add({type,targetId,requestedBy:A.myId,requestedAt:Date.now(),status:'pending',...(extra||{})});if(D())console.log('[FS] purgeIntent queued',{type,targetId});}catch(e){if(D())console.warn('[FS] purgeIntent write',e);}}
+async function fsEnqueuePurgeIntent(type,targetId,extra){if(!hasFS()||!type||!targetId)return null;try{var ref=await fbDb.collection('purgeQueue').add({type,targetId,requestedBy:A.myId,requestedAt:Date.now(),status:'pending',...(extra||{})});if(D())console.log('[FS] purgeIntent queued',{type,targetId,id:ref.id});return ref.id;}catch(e){if(D())console.warn('[FS] purgeIntent write',e);return null;}}
 async function fsDeleteGroupRequestArtifacts(gid){if(!hasFS()||!gid)return 0;try{var snap=await fbDb.collectionGroup('groupRequests').where('gid','==',gid).get();
   var n=0;for(var d of snap.docs){try{await d.ref.delete();n++;}catch(e){}}if(D()&&n)console.log('[purge] cleaned groupRequests',{gid,deleted:n});return n;}catch(e){if(D())console.warn('[purge] groupRequests cleanup error',gid,e);return 0;}}
 async function fsDeleteUserSubcollectionDocs(uid,sub){if(!hasFS()||!uid||!sub)return 0;try{var snap=await fbDb.collection('users').doc(uid).collection(sub).get();
@@ -1180,7 +1098,9 @@ async function fsCheckMyInvitations(){if(!hasFS()||!A.myId)return;try{
   for(var doc of snap.docs){var inv=doc.data();if(!inv.jid||inv.idx==null)continue;
     // Verify job still exists and item still assigned to me
     try{var jDoc=await fbDb.collection('posts').doc(inv.jid).get();
-      if(!jDoc.exists||!jDoc.data().items?.[inv.idx]||jDoc.data().items[inv.idx].assignedTo!==A.myId){
+      if(!jDoc.exists){fsDeletePointInvitation(A.myId,doc.id);continue;}
+      var _jd=jDoc.data();var _it=_jd.items?.[inv.idx];
+      if(!_it||_it.assignedTo!==A.myId||['cancelled','declined','never_done','done'].includes(_jd.status)||_it.status==='done'){
         fsDeletePointInvitation(A.myId,doc.id);continue;}}catch(e){continue;}
     // Skip if already in local queue
     if(A._pendingInvites.find(x=>x.jid===inv.jid&&x.idx===inv.idx))continue;
@@ -1261,8 +1181,9 @@ async function respondInvite(accepted){var inv=A._showingInvite;if(!inv){documen
     if(jDoc.exists){j={...jDoc.data()};}}catch(e){}}
   else if(!j||!j.items){try{var jDoc=await fbDb.collection('posts').doc(inv.jid).get();
     if(jDoc.exists){j={...jDoc.data()};}}catch(e){}}
-  // Validate: if accepting, job+item must exist and still be assigned to me
-  if(accepted&&(!j||!j.items||!j.items[inv.idx]||j.items[inv.idx].assignedTo!==A.myId)){
+  // Validate: if accepting, job+item must exist, still be assigned to me, and not be terminal
+  if(accepted&&(!j||!j.items||!j.items[inv.idx]||j.items[inv.idx].assignedTo!==A.myId
+    ||['cancelled','declined','never_done','done'].includes(j.status)||j.items[inv.idx].status==='done')){
     fsUpdatePointInvitation(A.myId,invId,{status:'stale'});
     notify('⚠️','Punktet er ikke lenger tilgjengelig');persist();sR();showNextInvite();return;}
   send(inv.creatorId,{t:'PA',jid:inv.jid,idx:inv.idx,accepted,_mid:paMid});
@@ -1835,9 +1756,9 @@ function onData(from,m){try{if(!m||A.blocked.has(from))return;
     const needsV=m.epub&&m.pub&&m.esig;
     A.peers.set(from,{...ex,id:from,name:m.name,bio:m.bio,pub:m.pub,epub:needsV?ex.epub||null:m.epub,esig:m.esig,done:m.done||0,online:true,ts:m.ts,pr:m.pr,epubV:needsV?ex.epubV:undefined,gids:m.gids||[],fylke:m.fylke||'',by:m.by||'',avatar:m.avatar||ex.avatar||''});
     if(needsV)verifyECDHSig(m.pub,m.epub,m.esig).then(ok=>{const p=A.peers.get(from);if(p){p.epubV=ok;if(ok)p.epub=m.epub;else{console.warn('[SEC] Peer',from,'ECDH sig INVALID');p.epub=null;}}});
+    // HI auto-add gated: no new friendship from HI alone. Only refresh metadata for existing contacts.
     if(m.cids?.includes(A.myId)&&!A.contacts.find(c=>c.id===from)){
-      if(A._removedContacts.has(from)){if(D())console.log('[HI] auto-add blocked — removedContacts',{from,name:m.name});}
-      else{A.contacts.push({id:from,name:m.name||from.substr(0,12),alias:m.name||from.substr(0,12)});persist();}}
+      if(D())console.log('[HI] auto-add blocked — friend requests required',{from,name:m.name});}
     if(m.name){const ec=A.contacts.find(c=>c.id===from);if(ec&&ec.name!==m.name&&(!ec.name||ec.name===from.substr(0,12)||ec.name.startsWith('o'))){ec.name=m.name;if(!ec.alias||ec.alias===ec.name||ec.alias.startsWith('o'))ec.alias=m.name;qPersist();}}
     {const _av=m.avatar||ex.avatar;if(_av){const _ec=A.contacts.find(c=>c.id===from);if(_ec&&_ec.avatar!==_av){_ec.avatar=_av;qPersist();}}}
     if(!ex.name){try{A.conns.get(from)?.send({t:'HI',...myPres()});}catch(e){}
@@ -2326,10 +2247,10 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
       <div style="display:flex;gap:8px;margin-top:8px"><input class="fi" id="add-id" placeholder="ID (oXXX) eller gruppe (gXXX)" style="flex:1;padding:10px;font-size:13px">
       <button class="btn bp bsm" style="width:auto;padding:10px 16px" onclick="connectById()">Koble til</button></div></div>`:''}
     ${!jobs.length&&!noC&&!myAct.length?'<div class="emp"><div class="emp-i">👀</div><div class="emp-t">Ingen innlegg ennå.<br>Trykk + for å legge ut det første!</div></div>':''}
-    ${jobs.map((j,_si)=>{const pr=avgR(j.creatorId);const typeMap={help:['🤝','bg1'],service:['💼','bp1']};
+    ${jobs.map(j=>{const pr=avgR(j.creatorId);const typeMap={help:['🤝','bg1'],service:['💼','bp1']};
       const[ico,cls]=typeMap[j.type]||['📋','bg1'];
       const imgSrc=j.imageUrl||j.imageData;const fNm=j.fylke?FYLKER.find(f=>f.id===j.fylke)?.name:'';
-      return`<div class="cd cdt s${(_si%5)+1}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">
+      return`<div class="cd cdt" onclick="go('jobDetail',{jobId:'${escA(j.id)}'})">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">${avHtml(j.creatorId,j.creatorName,28)}
         <span style="font-size:13px;font-weight:600">${esc(j.creatorName)}</span>${pr?`<span style="font-size:11px;color:var(--yw)">⭐ ${pr}</span>`:''}
         <span style="font-size:11px;color:var(--t3);margin-left:auto">${ago(j.ts)}</span></div>
@@ -2366,7 +2287,11 @@ function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
         ${e.sub?`<div style="font-size:11px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.sub}</div>`:''}</div>
         <span style="font-size:10px;color:var(--t3);flex-shrink:0">${ago(e.ts)}</span></div>`).join('')}`;})()}</div>`;}
 
-window.addF=(id,name)=>{if(D())console.log('[addF]',{id,name});if(A._removedContacts.has(id)){A._removedContacts.delete(id);if(D())console.log('[addF] cleared removedContacts',{id});}if(!A.contacts.find(c=>c.id===id))A.contacts.push({id,name,alias:name});persist();tryC(id);notify('👋','Lagt til!');render();};
+window.addF=(id,name)=>{if(D())console.log('[addF]',{id,name});
+  if(A._removedContacts.has(id)){A._removedContacts.delete(id);if(D())console.log('[addF] cleared removedContacts',{id});}
+  if(isActiveFriend(id)){notify('👤','Allerede venner');render();return;}
+  if(A._friendRequests[id]&&A._friendRequests[id].status==='pending'){notify('⏳','Venneforespørsel venter');render();return;}
+  fsSendFriendRequestCallable(id).then(ok=>{if(ok)notify('📩','Venneforespørsel sendt!');render();});};
 
 // ═══ CREATE ═══
 function vCreate(){
@@ -2551,6 +2476,13 @@ window.removeTerminalJob=function(jobId){
   j.archivedForMeAt=now();delete A._unreadJobs[jobId];
   if(j.status==='done')fsWriteJobRef(A.myId,jobId,{status:j.status,visibility:'archived',archivedAt:j.archivedForMeAt});
   persist();render();notify('📦','Flyttet til Avsluttet');};
+window.hideFromView=function(jobId){
+  var j=A.myJobs.find(x=>x.id===jobId);
+  if(D())console.log('[hideFromView]',{jobId,found:!!j,status:j?.status});
+  if(!j)return;
+  j.hiddenForMeAt=now();delete A._unreadJobs[jobId];
+  fsWriteJobRef(A.myId,jobId,{status:j.status,visibility:'hidden',hiddenAt:j.hiddenForMeAt});
+  persist();render();notify('🗑️','Fjernet fra oversikt');};
 function fsRefreshDetailOpenJob(jid){
   if(!hasFS()||!jid)return;
   window._detailFsCheck=window._detailFsCheck||{};
@@ -2652,7 +2584,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
     b+=`<div class="cd" style="border-color:var(--gbb);background:var(--gb)"><div style="font-size:14px;font-weight:700;color:var(--g2);margin-bottom:8px">${_pm?'Jobben er sendt til godkjenning':'Hjelper sier det er ferdig!'}</div>
     <div class="brow"><button class="btn bg" style="flex:1" onclick="ownerApprovePendingReview('${escA(j.id)}')">✅ Godkjenn</button>
     <button class="btn br" style="flex:1" onclick="ownerRejectPendingReview('${escA(j.id)}')">↩️ Ikke ferdig ennå</button></div></div>`;}
-  if(j.status==='done'){b+=`<div style="text-align:center;padding:24px 0"><div class="cel-wrap"><div class="cel-p cel-p1"></div><div class="cel-p cel-p2"></div><div class="cel-p cel-p3"></div><div class="cel-p cel-p4"></div><div class="cel-p cel-p5"></div><div class="cel-p cel-p6"></div><div class="cel-ico">🎉</div></div><div class="cel-txt" style="font-size:26px;font-weight:800;color:var(--g2);margin-top:10px">Fullført!</div></div>`;
+  if(j.status==='done'){b+=`<div style="text-align:center;padding:20px 0"><div style="font-size:48px;margin-bottom:8px">🎉</div><div style="font-size:24px;font-weight:800">Fullført!</div></div>`;
     if(j.items?.length&&isO&&!j.helperId){
       // Multi-person rating for point-mode
       var _rpa=pointAssignees(j);
@@ -2962,22 +2894,22 @@ window.decH=(jid,pid)=>{const j=A.myJobs.find(x=>x.id===jid);if(!j)return;
 if(!A._mineFilter)A._mineFilter='active';
 function vMine(){
   const directInvites=[...A.openJobs.values()].filter(j=>j.visibility==='direct'&&j.creatorId!==A.myId&&!['cancelled','done','never_done','declined'].includes(j.status)).sort((a,b)=>(b.ts||0)-(a.ts||0));
-  const nActive=A.myJobs.filter(j=>['open','accepting','pending','active','pending_review'].includes(j.status)).length+directInvites.length;
-  const nDone=A.myJobs.filter(j=>j.status==='done'&&!j.archivedForMeAt).length;
-  const nEnded=A.myJobs.filter(j=>['cancelled','declined','never_done'].includes(j.status)||(j.status==='done'&&j.archivedForMeAt)).length;
+  const nActive=A.myJobs.filter(j=>!j.hiddenForMeAt&&['open','accepting','pending','active','pending_review'].includes(j.status)).length+directInvites.length;
+  const nDone=A.myJobs.filter(j=>!j.hiddenForMeAt&&j.status==='done'&&!j.archivedForMeAt).length;
+  const nEnded=A.myJobs.filter(j=>!j.hiddenForMeAt&&(['cancelled','declined','never_done'].includes(j.status)||(j.status==='done'&&j.archivedForMeAt))).length;
   const mf=A._mineFilter||'active';
   const sm={open:['Åpent','bg1'],accepting:['Noen vil hjelpe!','by1'],pending:['Venter svar','by1'],active:['Pågår','bb1'],pending_review:['Ferdigmeldt','bp1'],done:['✅ Fullført','bg1'],declined:['Avslått','bgr'],never_done:['❌ Aldri gjort','br1'],cancelled:['Kansellert','bgr']};
   let filtered=[];
-  if(mf==='active')filtered=A.myJobs.filter(j=>['open','accepting','pending','active','pending_review'].includes(j.status));
-  else if(mf==='done')filtered=A.myJobs.filter(j=>j.status==='done'&&!j.archivedForMeAt);
-  else filtered=A.myJobs.filter(j=>['cancelled','declined','never_done'].includes(j.status)||(j.status==='done'&&j.archivedForMeAt));
+  if(mf==='active')filtered=A.myJobs.filter(j=>!j.hiddenForMeAt&&['open','accepting','pending','active','pending_review'].includes(j.status));
+  else if(mf==='done')filtered=A.myJobs.filter(j=>!j.hiddenForMeAt&&j.status==='done'&&!j.archivedForMeAt);
+  else filtered=A.myJobs.filter(j=>!j.hiddenForMeAt&&(['cancelled','declined','never_done'].includes(j.status)||(j.status==='done'&&j.archivedForMeAt)));
   filtered.sort((a,b)=>b.ts-a.ts);
   const mc=j=>{const isO=j.creatorId===A.myId;const _dp=j.visibility==='direct'?(j.targetIds||[])[0]:null;let[lbl,cls]=sm[j.status]||['—','bgr'];if(!isO&&j.status==='accepting'){lbl='Venter svar';cls='by1';}if(isO&&j.visibility==='direct'&&['open','accepting'].includes(j.status)&&!(j.interests?.length)){lbl='Venter svar';cls='by1';}const sD=['done','declined','never_done','cancelled'].includes(j.status);
     const tIco=j.type==='help'?'🤝':j.type==='service'?'💼':'📋';
     const visIco=j.visibility==='public'?'🌐 Offentlig':j.visibility==='direct'?'📩 Direkte':j.groupName?'🏘️ '+esc(j.groupName):'👥 Venner';
     const expDays=j.expiresAt&&j.expiresAt>0?Math.max(0,Math.ceil((j.expiresAt-now())/864e5)):0;const _ju=A._unreadJobs[j.id]||0;
     var _imgSrc=j.imageUrl||null;
-    return`<div class="cd cdt s1" style="${_ju?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'${mf==='ended'?",fromEnded:true":''}})">
+    return`<div class="cd cdt" style="${_ju?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'${mf==='ended'?",fromEnded:true":''}})">
     <div style="display:flex;align-items:start;gap:10px">
     <div style="flex:1"><div style="display:flex;align-items:center;font-size:14px;font-weight:700;line-height:1.4;margin-bottom:4px">${esc(j.title||'—')}${itemBadge(_ju)}</div>
     <div style="font-size:12px;color:var(--t3);margin-bottom:6px">${tIco} ${({help:'Jobb',service:'Tilbyr'})[j.type]||esc(j.type||'')} · ${isO?'Du posted':'Du hjelper '+esc(j.creatorName||'?')} · ${ago(j.ts)}</div>
@@ -2988,10 +2920,10 @@ function vMine(){
     ${isO&&j.visibility==='direct'&&['open','accepting'].includes(j.status)&&!(j.interests?.length)&&_dp?`<div style="font-size:12px;color:var(--t2);margin-bottom:4px">📩 Sendt til ${esc(dn(_dp,_dp.substr(0,8)))}</div>`:''}
     ${j.helperName&&['active','pending_review'].includes(j.status)?`<div style="font-size:12px;color:var(--t2);margin-bottom:4px">🤝 Hjelper: ${esc(j.helperName)}</div>`:''}
     ${expDays>0&&expDays<=30&&!sD?`<div style="font-size:11px;color:var(--t3)">Utløper om ${expDays} ${expDays===1?'dag':'dager'}</div>`:''}
-    ${sD&&mf!=='ended'?`<button class="btn bs bsm" style="margin-top:6px;padding:6px;font-size:11px" onclick="event.stopPropagation();removeTerminalJob('${escA(j.id)}')">📦 Flytt til Avsluttet</button>`:''}</div>${_imgSrc?`<img src="${esc(_imgSrc)}" style="width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0">`:''}
+    ${sD&&mf!=='ended'?`<button class="btn bs bsm" style="margin-top:6px;padding:6px;font-size:11px" onclick="event.stopPropagation();removeTerminalJob('${escA(j.id)}')">📦 Flytt til Avsluttet</button>`:''}${mf==='ended'?`<button class="btn bs bsm" style="margin-top:6px;padding:6px;font-size:11px" onclick="event.stopPropagation();hideFromView('${escA(j.id)}')">🗑️ Fjern fra oversikt</button>`:''}</div>${_imgSrc?`<img src="${esc(_imgSrc)}" style="width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0">`:''}
     </div></div>`;};
   const dc=j=>{const _ju=A._unreadJobs[j.id]||0;const _imgSrc=j.imageUrl||null;
-    return`<div class="cd cdt s2" style="${_ju?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'${mf==='ended'?",fromEnded:true":''}})">
+    return`<div class="cd cdt" style="${_ju?'border-color:var(--pbb);background:var(--pb)':''}" onclick="go('jobDetail',{jobId:'${escA(j.id)}'${mf==='ended'?",fromEnded:true":''}})">
     <div style="display:flex;align-items:start;gap:10px">
     <div style="flex:1"><div style="display:flex;align-items:center;font-size:14px;font-weight:700;line-height:1.4;margin-bottom:4px">${esc(j.title||'—')}${itemBadge(_ju)}</div>
     <div style="font-size:12px;color:var(--t3);margin-bottom:6px">📩 Direkte foresporsel fra ${esc(j.creatorName||'?')} · ${ago(j.ts)}</div>
@@ -3099,7 +3031,23 @@ window.dmS=async pid=>{const inp=$('dmi');if(!inp?.value.trim())return;const raw
 // ═══ CONTACTS ═══
 function vContacts(){const cq=(A._contactQ||'').toLowerCase();
   const filtered=cq?A.contacts.filter(c=>{const nm=c.alias||c.name||'';return nm.toLowerCase().includes(cq);}):A.contacts;
+  const _inc=Object.values(A._friendRequests).filter(r=>r.direction==='incoming'&&r.status==='pending');
+  const _out=Object.values(A._friendRequests).filter(r=>r.direction==='outgoing'&&r.status==='pending');
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('profile')">Tilbake</button><div class="pgt">Venner (${A.contacts.length})</div></div>
+  ${_inc.length?`<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:700;color:var(--t1);padding:8px 0 4px">📥 Innkommende forespørsler (${_inc.length})</div>
+  ${_inc.map(r=>{const nm=r.peerName||r.peerId.substr(0,12);return`<div class="cd" style="padding:10px 12px;margin-bottom:6px;display:flex;align-items:center;gap:10px">
+  ${avHtml(r.peerId,nm,36)}<div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(nm)}</div>
+  <div style="font-size:11px;color:var(--t3)">Vil bli din venn</div></div>
+  <button class="btn bp bsm" style="width:auto;padding:6px 12px;font-size:12px" onclick="event.stopPropagation();fsResolveFriendRequestCallable('${escA(r.peerId)}','accepted').then(ok=>{if(ok)notify('✅','Godtatt!');render();fsSyncMyFriendRequests().then(()=>fsSyncMyFriendRefs()).then(()=>render());})">✅ Godta</button>
+  <button class="btn bs bsm" style="width:auto;padding:6px 12px;font-size:12px" onclick="event.stopPropagation();fsResolveFriendRequestCallable('${escA(r.peerId)}','declined').then(ok=>{if(ok)notify('❌','Avslått');render();fsSyncMyFriendRequests().then(()=>render());})">❌ Avslå</button>
+  </div>`;}).join('')}</div>`:''}
+  ${_out.length?`<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:700;color:var(--t1);padding:8px 0 4px">📤 Utgående forespørsler (${_out.length})</div>
+  ${_out.map(r=>{const nm=r.peerName||r.peerId.substr(0,12);return`<div class="cd" style="padding:10px 12px;margin-bottom:6px;display:flex;align-items:center;gap:10px">
+  ${avHtml(r.peerId,nm,36)}<div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(nm)}</div>
+  <div style="font-size:11px;color:var(--t3)">Venter på svar</div></div>
+  <button class="btn bs bsm" style="width:auto;padding:6px 12px;font-size:12px" onclick="event.stopPropagation();fsCancelFriendRequestCallable('${escA(r.peerId)}').then(ok=>{if(ok)notify('🚫','Kansellert');render();fsSyncMyFriendRequests().then(()=>render());})">🚫 Avbryt</button>
+  </div>`;}).join('')}</div>`:''}
+  ${(_inc.length||_out.length)?'<div class="dv"></div>':''}
   <div class="fld"><label class="fl">Filtrer venner</label><input class="fi" id="cf" placeholder="Søk blant venner..." value="${esc(A._contactQ||'')}" oninput="A._contactQ=this.value;render()" autocomplete="off"></div>
   ${!A.contacts.length&&!cq?'<div class="emp"><div class="emp-i">👥</div><div class="emp-t">Ingen venner ennå. Søk etter folk eller del koden din.</div></div>':''}
   ${cq&&!filtered.length?'<div style="padding:8px;color:var(--t3);font-size:12px">Ingen treff blant venner</div>':''}
@@ -3134,12 +3082,13 @@ function vSearch(){const q=(A.params.q||'').toLowerCase();const myGids=new Set(A
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('contacts')">Tilbake</button><div class="pgt">Søk</div></div>
   <div class="fld"><input class="fi" id="sq" placeholder="Søk på navn, kommune eller fylke..." value="${esc(q)}" oninput="A.params.q=this.value;render()"></div>
   ${!results.length?'<div class="emp"><div class="emp-i">🔍</div><div class="emp-t">Ingen folk funnet i nettverket ennå.</div></div>':''}
-  ${results.map(p=>{const pr=avgR(p.id);const fNm=p.fylke?FYLKER.find(f=>f.id===p.fylke)?.name:'';const isFr=A.contacts.find(c=>c.id===p.id);
+  ${results.map(p=>{const pr=avgR(p.id);const fNm=p.fylke?FYLKER.find(f=>f.id===p.fylke)?.name:'';const isFr=isActiveFriend(p.id);const isPend=A._friendRequests[p.id]&&A._friendRequests[p.id].status==='pending';
     return`<div class="cd" style="padding:12px;margin-bottom:8px"><div style="display:flex;align-items:center;gap:10px">
     ${avHtml(p.id,p.name,36)}<div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(p.name)}</div>
     <div style="font-size:11px;color:var(--t3)">${[p.by,fNm].filter(Boolean).map(x=>esc(x)).join(', ')}${pr?' · ⭐'+pr:''}${p.mutual?' · '+p.mutual+' felles venner':''}${p.sharedG?' · '+p.sharedG+' felles grupper':''}</div></div>
-    ${!isFr?`<button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="event.stopPropagation();addF('${escA(p.id)}','${escA(p.name)}')">+ Legg til</button>`
-    :`<button class="btn bs bsm" style="width:auto;padding:6px 12px" onclick="event.stopPropagation();go('repProfile',{uid:'${escA(p.id)}',name:'${escA(p.name)}'})">Rykte</button>`}
+    ${isFr?`<button class="btn bs bsm" style="width:auto;padding:6px 12px" onclick="event.stopPropagation();go('repProfile',{uid:'${escA(p.id)}',name:'${escA(p.name)}'})">Rykte</button>`
+    :isPend?`<span style="font-size:11px;color:var(--t3);padding:6px 8px">⏳ Venter</span>`
+    :`<button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="event.stopPropagation();addF('${escA(p.id)}','${escA(p.name)}')">+ Legg til</button>`}
     </div></div>`;}).join('')}</div>`;}
 window.copyId=()=>{if(D())console.log('[copyId]',A.myId);try{navigator.clipboard.writeText(A.myId).then(()=>notify('✅','Kopiert!')).catch(()=>notify('📋',A.myId));}catch(e){notify('📋',A.myId);}};
 let _searchTimer=null;
@@ -3147,7 +3096,7 @@ window.searchUsers=q=>{clearTimeout(_searchTimer);var el=$('search-results');if(
   if(!q||q.length<2){el.innerHTML='';return;}
   _searchTimer=setTimeout(async()=>{var results=await fsSearchUsers(q);
     if(!results.length){el.innerHTML='<div style="padding:12px;color:var(--t3);font-size:13px">Ingen treff</div>';return;}
-    el.innerHTML=results.map(u=>{var isFr=A.contacts.find(c=>c.id===u.id);
+    el.innerHTML=results.map(u=>{var isFr=isActiveFriend(u.id);
       var av=u.avatar?`<img src="${esc(u.avatar)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover">`
         :`<div style="width:36px;height:36px;border-radius:50%;background:var(--pr);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px">${esc((u.name||'?')[0].toUpperCase())}</div>`;
       return`<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--s2)">
@@ -3169,7 +3118,7 @@ window.searchGroupInvite=(q,gid,gname)=>{clearTimeout(_grpSearchTimer);var el=$(
       return`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--s2)">
         ${av}<div style="flex:1;font-size:13px;font-weight:600">${esc(u.name)}</div>
         ${isMember?'<span style="font-size:11px;color:var(--g2)">✓ Medlem</span>'
-          :`<button class="btn bp bsm" style="padding:4px 10px;font-size:11px" onclick="if(!A.contacts.find(c=>c.id==='${escA(u.id)}'))addF('${escA(u.id)}','${escA(u.name)}');inviteToGroup('${escA(gid)}','${escA(gname)}','${escA(u.id)}');var s=$('grp-inv-search');if(s)s.value='';var r=$('grp-inv-results');if(r)r.innerHTML='';">Inviter</button>`}
+          :`<button class="btn bp bsm" style="padding:4px 10px;font-size:11px" onclick="inviteToGroup('${escA(gid)}','${escA(gname)}','${escA(u.id)}');var s=$('grp-inv-search');if(s)s.value='';var r=$('grp-inv-results');if(r)r.innerHTML='';">Inviter</button>`}
         </div>`;}).join('');},300);};
 window.connectById=async()=>{const inp=$('add-id');if(!inp)return;const id=inp.value.trim();if(D())console.log('[connectById]',{id});
   if(id.startsWith('g')){if(!/^g[a-zA-Z0-9]{1,20}$/.test(id)){notify('⚠️','Ugyldig gruppe-ID');return;}
@@ -3178,14 +3127,16 @@ window.connectById=async()=>{const inp=$('add-id');if(!inp)return;const id=inp.v
     if(!data){if(D())console.log('[connectById] group doc missing',id);notify('⚠️','Gruppen finnes ikke');return;}
     if(!data.private){inp.value='';requestGroupJoin(id,data.name||id);return;}
     inp.value='';notify('🔒','Denne gruppen er privat. Du må bli invitert for å bli med.');return;}
-  if(!id||!id.startsWith('o')||id.length<8){notify('⚠️','Ugyldig ID');return;}if(id===A.myId)return;tryC(id);
-  if(!A.contacts.find(c=>c.id===id))A.contacts.push({id,name:id.substr(0,12),alias:id.substr(0,12)});
-  persist();notify('✅','Koblet til!');inp.value='';render();};
+  if(!id||!id.startsWith('o')||id.length<8){notify('⚠️','Ugyldig ID');return;}if(id===A.myId)return;
+  inp.value='';render();
+  if(isActiveFriend(id)){notify('👤','Allerede venner');return;}
+  if(A._friendRequests[id]&&A._friendRequests[id].status==='pending'){notify('⏳','Venneforespørsel venter');return;}
+  fsSendFriendRequestCallable(id).then(ok=>{if(ok)notify('📩','Venneforespørsel sendt!');render();});};
 
 // ═══ REPUTATION ═══
 function vRep(){const u=A.params.uid;const un=A.params.name||u?.substr(0,12);const isMe=u===A.myId;
   const allR=A.ratings[u]||[];const gR=allR.filter(x=>!x.nd);const np=allR.filter(x=>x.nd);const pr=avgR(u);const peer=A.peers.get(u)||{};
-  const isFr=A.contacts.find(c=>c.id===u);const loc=[peer.by,peer.fylke?FYLKER.find(f=>f.id===peer.fylke)?.name:''].filter(Boolean).join(', ');
+  const isFr=isActiveFriend(u);const loc=[peer.by,peer.fylke?FYLKER.find(f=>f.id===peer.fylke)?.name:''].filter(Boolean).join(', ');
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go(A.prevScreen||'feed')">Tilbake</button><div class="pgt">${isMe?'Min profil':'Profil'}</div></div>
   <div class="pcard"><div style="margin-bottom:12px">${avHtml(u,un,72)}</div><div class="pnm">${esc(un)}</div>
   ${loc?`<div style="font-size:13px;color:var(--t2);margin-top:4px">📍 ${esc(loc)}</div>`:''}
@@ -3201,7 +3152,7 @@ function vRep(){const u=A.params.uid;const un=A.params.name||u?.substr(0,12);con
   <div style="font-size:11px;color:var(--t3)">Fra ${esc(r.raterName||'?')}</div></div>`).join('')}</div>`:''}
   ${!allR.length?'<div class="emp"><div class="emp-i">👤</div><div class="emp-t">Ingen vurderinger ennå</div></div>':''}
   ${isFr&&!isMe?`<div class="dv" style="margin:20px 0"></div>
-    <button class="btn bs" style="margin-bottom:8px" onclick="showConfirm('Fjern venn?','${escA(un)} fjernes fra vennelisten din.','Ja, fjern',()=>{A._removedContacts.add('${escA(u)}');A.contacts=A.contacts.filter(c=>c.id!=='${escA(u)}');send('${escA(u)}',{t:'UF'});if(D())console.log('[removeContact]','${escA(u)}');persist();notify('👋','Fjernet');go('contacts');})">🗑️ Fjern venn</button>
+    <button class="btn bs" style="margin-bottom:8px" onclick="showConfirm('Fjern venn?','${escA(un)} fjernes fra vennelisten din.','Ja, fjern',()=>{fsRemoveFriendCallable('${escA(u)}').then(ok=>{if(ok){send('${escA(u)}',{t:'UF'});notify('👋','Fjernet');go('contacts');}});})">🗑️ Fjern venn</button>
     <button class="btn br" onclick="showConfirm('Blokkere?','${escA(un)} blokkeres. Du vil ikke se innhold fra denne personen.','Ja, blokker',()=>{A.blocked.add('${escA(u)}');A._removedContacts.add('${escA(u)}');A.contacts=A.contacts.filter(c=>c.id!=='${escA(u)}');send('${escA(u)}',{t:'UF'});try{A.conns.get('${escA(u)}')?.close();}catch(e){}A.conns.delete('${escA(u)}');persist();notify('🚫','Blokkert');go('contacts');})">🚫 Blokker</button>`:''}</div>`;}
 
 // ═══ PROFILE ═══
@@ -3272,7 +3223,7 @@ function vSettings(){
   <div class="dv" style="margin:20px 0"></div>
   <div class="slbl" style="color:var(--rd)">FARLIG SONE</div>
   <div class="wbox">⚠️ Slett alt og start på nytt. Du mister alle jobber, venner, meldinger og vurderinger permanent. Du får en helt ny profil.</div>
-  <button class="btn br" onclick="showConfirm('Nullstill alt?','SISTE SJANSE: Din identitet og alle data slettes permanent.','Ja, slett alt',async()=>{try{await fsEnqueuePurgeIntent('account',A.myId,{accountId:A.myId});}catch(e){}localStorage.clear();indexedDB.deleteDatabase('optou');location.reload();})">⚠️ Nullstill alt</button></details></div>`;}
+  <button class="btn br" onclick="resetAccountConfirm()">${window._resettingAccount?'Sletter...':'⚠️ Nullstill alt'}</button></details></div>`;}
 window.updateAvatar=async inp=>{if(!inp.files[0])return;try{const d=await compressAvatar(inp.files[0]);
   if(hasFB()){const url=await fbUpload(d,'profiles/'+A.myId+'.webp');if(url){ss('oAvatar',url);notify('✅','Bilde oppdatert!');render();return;}}
   ss('oAvatar',d);notify('✅','Bilde oppdatert!');render();}catch(e){notify('⚠️','Kunne ikke laste bilde');}};
@@ -3357,16 +3308,12 @@ window.requestGroupJoin=(gid,gname)=>{if(A.groups.find(g=>g.id===gid)){notify('�
     else notify('⚠️','Kunne ikke sende forespørsel');});};
 window.approveGroupRequest=async(gid,peerId,name)=>{if(D())console.log('[approveGroupRequest]',{gid,peerId});
   const g=A.groups.find(x=>x.id===gid);if(!g){notify('⚠️','Gruppe ikke funnet');return;}
-  var res=await fsJoinGroup(gid,peerId);
-  if(res.missing){notify('⚠️','Gruppen finnes ikke lenger');return;}
-  if(!res.ok){notify('⚠️','Kunne ikke legge til medlem');return;}
   var _rok=await fsResolveGroupRequestCallable(gid,peerId,g.creatorId||A.myId,'approved');
   if(!_rok){notify('⚠️','Kunne ikke godkjenne forespørsel');return;}
   if(!Array.isArray(g._members))g._members=[A.myId];
   if(!g._members.includes(peerId))g._members.push(peerId);
   A._groupRequests[gid]=(A._groupRequests[gid]||[]).filter(r=>r.peerId!==peerId);
   A.tempConns.set('grr:'+gid+':'+peerId,{peerId,name:name||'',ts:now()});send(peerId,{t:'GR',gid,gname:g.name||gid,status:'approved'});
-  fsWriteGroupRef(peerId,gid,{role:'member',visibility:'active',joinedAt:Date.now(),leftAt:null});
   persist();notify('✅',(name||'Bruker')+' ble med i gruppen!');render();};
 window.denyGroupRequest=async(gid,peerId,name)=>{if(D())console.log('[denyGroupRequest]',{gid,peerId});
   const g=A.groups.find(x=>x.id===gid);
@@ -3394,13 +3341,53 @@ window.searchGroups=async q=>{const el=$('grp-search-results');if(!el)return;q=(
       <div style="font-size:11px;color:var(--t3)">${g.members?g.members.length:''} medlemmer</div></div>
       ${already?'<span class="badge bg1" style="font-size:11px">Medlem</span>':`<button class="btn bp bsm" style="width:auto;padding:6px 12px" onclick="requestGroupJoin('${escA(gid)}','${escA(g.name||gid)}')">Bli med</button>`}</div>`;}).join('');
   }catch(e){console.warn('[searchGroups]',e);el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:8px">Søk feilet.</div>';}};
+window._deletingGroup=false;
 window.deleteGroup=async(gid)=>{if(D())console.log('[deleteGroup]',gid);
-  var ok=await fsDeleteGroup(gid);
-  if(!ok){notify('⚠️','Kunne ikke slette gruppen akkurat nå');return;}
-  fsEnqueuePurgeIntent('group',gid,{groupId:gid});
-  dropMissingGroup(gid,'deleteGroup',true);
-  // GDEL gossip removed — other peers detect deletion via fsCleanupOrphanedGroups + dropMissingGroup
-  persist();bcast({t:'HI',...myPres()});notify('🗑️','Gruppen er slettet');go('groups');};
+  if(window._deletingGroup)return;window._deletingGroup=true;render();
+  try{
+    var intentId=await fsEnqueuePurgeIntent('group',gid,{groupId:gid});
+    if(!intentId){notify('⚠️','Kunne ikke opprette sletteforespørsel');window._deletingGroup=false;render();return;}
+    if(!firebase?.functions){notify('⚠️','Backend utilgjengelig');window._deletingGroup=false;render();return;}
+    var fn=firebase.functions().httpsCallable('runOneGroupPurgeIntent');
+    var result=await fn({});
+    if(!result?.data?.ok||result.data.status==='idle'){notify('⚠️','Kunne ikke slette gruppen akkurat nå');window._deletingGroup=false;render();return;}
+    // Verify the exact intent completed for the requested gid
+    try{var iDoc=await fbDb.collection('purgeQueue').doc(intentId).get();
+      if(iDoc.exists&&iDoc.data().targetId===gid&&iDoc.data().status==='done'){
+        dropMissingGroup(gid,'deleteGroup',true);
+        persist();bcast({t:'HI',...myPres()});notify('🗑️','Gruppen er slettet');go('groups');
+      }else{notify('⚠️','Sletting ble ikke bekreftet — prøv igjen');}
+    }catch(e2){notify('⚠️','Kunne ikke bekrefte sletting');}}
+  catch(e){notify('⚠️','Sletting feilet: '+(e?.message||'ukjent feil').substr(0,60));}
+  window._deletingGroup=false;render();};
+window.deleteGroupConfirm=(gid)=>{
+  showConfirm('Slett gruppen permanent?','ADVARSEL: Gruppen, alle innlegg og alt innhold slettes permanent for alle. Dette kan ikke angres.',
+    'Jeg forstår, fortsett',()=>{
+      showConfirm('Er du helt sikker?','Denne handlingen kan IKKE angres. All data i gruppen forsvinner for alle medlemmer.','Ja, slett permanent',()=>{deleteGroup(gid);});});};
+window._resettingAccount=false;
+window.resetAccount=async()=>{if(D())console.log('[resetAccount]');
+  if(window._resettingAccount)return;window._resettingAccount=true;render();
+  try{
+    var intentId=await fsEnqueuePurgeIntent('account',A.myId,{accountId:A.myId});
+    if(!intentId){notify('⚠️','Kunne ikke opprette sletteforespørsel');window._resettingAccount=false;render();return;}
+    if(!firebase?.functions){notify('⚠️','Backend utilgjengelig');window._resettingAccount=false;render();return;}
+    var fn=firebase.functions().httpsCallable('runOneAccountPurgeIntent');
+    var result=await fn({});
+    if(!result?.data?.ok||result.data.status==='idle'){notify('⚠️','Kunne ikke slette kontoen akkurat nå');window._resettingAccount=false;render();return;}
+    try{var iDoc=await fbDb.collection('purgeQueue').doc(intentId).get();
+      if(iDoc.exists&&iDoc.data().targetId===A.myId&&iDoc.data().status==='done'){
+        localStorage.clear();indexedDB.deleteDatabase('optou');location.reload();return;
+      }else{notify('⚠️','Sletting ble ikke bekreftet — prøv igjen');}
+    }catch(e2){notify('⚠️','Kunne ikke bekrefte sletting');}
+  }catch(e){notify('⚠️','Sletting feilet: '+(e?.message||'ukjent feil').substr(0,60));}
+  window._resettingAccount=false;render();};
+window.resetAccountConfirm=()=>{
+  showConfirm('Nullstill alt?','ADVARSEL: Din identitet, alle jobber, venner, meldinger, grupper og vurderinger slettes permanent. Du får en helt ny profil.',
+    'Jeg forstår, fortsett',()=>{
+      showConfirm('Er du virkelig sikker?','All din data og alt innhold du eier forsvinner permanent for alle. Dette kan IKKE angres.',
+        'Ja, fortsett',()=>{
+          showConfirm('SISTE SJANSE','Trykk «Slett alt permanent» for å slette kontoen din for godt. Det finnes ingen vei tilbake.',
+            'Slett alt permanent',()=>{resetAccount();});});});};
 window.doCreateGroup=async()=>{if(D())console.log('[-> doCreateGroup]');const n=$('gn')?.value?.trim();if(!n){notify('⚠️','Skriv et gruppenavn');return;}
   const priv=A.nb._gPriv!==false;
   let id;{const raw=n+'|'+A.myId+'|'+now()+'|'+Math.random();const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(raw));id='g'+ab64(h).replace(/[^a-zA-Z0-9]/g,'').substr(0,14);}
@@ -3565,7 +3552,7 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
   <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:10px;-webkit-overflow-scrolling:touch">${onlineMembers.filter(p=>p.online).map(p=>
     `<div style="text-align:center;flex-shrink:0;width:56px;cursor:pointer" onclick="go('repProfile',{uid:'${escA(p.id)}',name:'${escA(p.name)}'})">
     ${avHtml(p.id,p.name,36)}<div style="font-size:9px;font-weight:600;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name||'?')}</div>
-    ${!A.contacts.find(c=>c.id===p.id)?'<div style="font-size:8px;color:var(--pr);font-weight:700">+ Legg til</div>':''}</div>`).join('')}</div>`:''}
+    ${!isActiveFriend(p.id)?'<div style="font-size:8px;color:var(--pr);font-weight:700">+ Legg til</div>':''}</div>`).join('')}</div>`:''}
   <details style="margin-top:16px;margin-bottom:12px"><summary style="font-size:14px;font-weight:800;letter-spacing:.6px;color:var(--tx);cursor:pointer;padding:6px 2px">⚙️ Gruppeverktøy</summary>
   <div class="cd" style="margin-top:10px;padding:18px">
   <div style="display:flex;flex-direction:column;gap:10px">
@@ -3588,25 +3575,32 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
     <div style="font-size:13px;color:var(--t2);margin:8px 0">Nye medlemmer må inviteres direkte. Koden alene gir ikke tilgang.</div>
     <div class="idd">${g.id}</div>
     <button class="btn bs" style="margin-top:6px;min-height:44px" onclick="copyGid('${escA(g.id)}')">📋 Kopier kode</button></details>`:''}
-    ${isAdmin?`<button class="btn br" style="margin-top:8px;min-height:46px" onclick="showConfirm('Slett gruppen?','Du er admin. Gruppen og alle innlegg slettes for alle.','Ja, slett',()=>{deleteGroup('${escA(g.id)}');})">🗑️ Slett</button>`
+    ${isAdmin?`<button class="btn br" style="margin-top:8px;min-height:46px" onclick="deleteGroupConfirm('${escA(g.id)}')">${window._deletingGroup?'Sletter...':'🗑️ Slett'}</button>`
       :`<button class="btn br" style="margin-top:8px;min-height:46px" onclick="showConfirm('Forlate gruppen?','${g.private?'Du må bli invitert igjen for å komme tilbake.':'Du kan sende ny forespørsel senere.'}','Ja, forlat',()=>leaveGroup('${escA(g.id)}'))">Forlat</button>`}
   </div></div></details></div>`;}
+async function doRemoveGroupMember(gid,memberId,memberName){
+  if(!confirm('Fjern '+memberName+' fra gruppen?'))return;
+  var ok=await fsRemoveGroupMemberCallable(gid,memberId);
+  if(ok){var g=A.groups.find(x=>x.id===gid);
+    if(g&&g._members){g._members=g._members.filter(m=>m!==memberId);}
+    notify('✅',memberName+' ble fjernet');render();
+  }}
 function vGroupMembers(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===gid);
   if(!g)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groupDetail',{gid:'${escA(gid)}'})">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Gruppe ikke funnet.</div></div></div>`;
   const mids=g._members||[];const allIds=new Set(mids);allIds.add(A.myId);
-  // Also add online peers who have this group in gids
-  A.peers.forEach((p,pid)=>{if(p.gids?.includes(gid))allIds.add(pid);});
-  // Hydrate unknown member names from Firestore (async, re-renders when done)
+  // Membership list must follow the persisted group members, not transient peer presence.
   fsHydrateUserNames([...allIds]);
   const list=[...allIds].map(mid=>{const peer=A.peers.get(mid);const ct=A.contacts.find(c=>c.id===mid);
     const nm=mid===A.myId?A.myName:(ct?.alias||peer?.name||ct?.name||A._userNames[mid]||mid.substr(0,12));const online=mid===A.myId||!!A.conns.get(mid)?.open;
     const loc=[peer?.by,peer?.fylke?FYLKER.find(f=>f.id===peer.fylke)?.name:''].filter(Boolean).join(', ');
     const pr=avgR(mid);const isAdmin=g.creatorId===mid;const isMe=mid===A.myId;
     return{mid,nm,online,loc,pr,isAdmin,isMe,known:!!peer?.name||isMe};});
+  const callerIsAdmin=g.creatorId===A.myId;
   list.sort((a,b)=>{if(a.isAdmin!==b.isAdmin)return a.isAdmin?-1:1;if(a.isMe!==b.isMe)return a.isMe?-1:1;
     if(a.online!==b.online)return a.online?-1:1;if(a.known!==b.known)return a.known?-1:1;return 0;});
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groupDetail',{gid:'${escA(gid)}'})">Tilbake</button><div class="pgt">Medlemmer (${list.length})</div></div>
   ${list.map(m=>{const clk=m.isMe?'':` onclick="go('repProfile',{uid:'${escA(m.mid)}',name:'${escA(m.nm)}'})"`;
+    const canRemove=callerIsAdmin&&!m.isAdmin&&!m.isMe;
     return`<div class="cd cdt" style="padding:12px;margin-bottom:8px;${m.isMe?'cursor:default':''}"${clk}>
     <div style="display:flex;align-items:center;gap:12px">
     ${avHtml(m.mid,m.nm,48)}
@@ -3616,7 +3610,7 @@ function vGroupMembers(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===
       ${m.isAdmin?'<span class="badge bp1" style="font-size:9px;padding:2px 6px">Admin</span>':''}
       ${m.isMe?'<span class="badge bb1" style="font-size:9px;padding:2px 6px">Du</span>':''}</div>
       <div style="font-size:12px;color:var(--t3)">${m.online?'Online':'Offline'}${m.loc?' · '+esc(m.loc):''}${m.pr?' · ⭐'+m.pr:''}</div></div>
-    ${!m.isMe?`<button style="width:36px;height:36px;border-radius:18px;background:var(--pb);border:1px solid var(--pbb);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0" onclick="event.stopPropagation();go('dm',{peerId:'${escA(m.mid)}'})">💬</button>`:''}</div></div>`;}).join('')}</div>`;}
+    ${!m.isMe?`<button style="width:36px;height:36px;border-radius:18px;background:var(--pb);border:1px solid var(--pbb);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0" onclick="event.stopPropagation();go('dm',{peerId:'${escA(m.mid)}'})">💬</button>`:''}${canRemove?`<button style="width:36px;height:36px;border-radius:18px;background:var(--rb);border:1px solid var(--rbb);display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;color:var(--rd)" onclick="event.stopPropagation();doRemoveGroupMember('${escA(gid)}','${escA(m.mid)}','${escA(m.nm)}')" title="Fjern medlem">✕</button>`:''}</div></div>`;}).join('')}</div>`;}
 function vCreateGroup(){const priv=A.nb._gPriv!==false;const gImg=A.nb._gImg||null;const gFylke=A.nb._gFylke||A.myFylke||'';
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="A.nb={};go('groups')">Avbryt</button><div class="pgt">NY GRUPPE</div></div>
   <div class="fld"><label class="fl">Type gruppe</label><div class="ttypes">
@@ -3741,7 +3735,7 @@ async function boot(){
       var removed=pruneDirectOpenJobs(posts);
       if(added>0||removed>0){if(added>0&&A.screen!=='mine')A.unreadActivity+=added;updateB();persist();sR();if(added>0)showNextInvite();if(added>0)_new.slice(0,3).forEach(p=>notify('📩 '+(p.creatorName||''),(p.title||'').substr(0,40),()=>go('jobDetail',{jobId:p.id})));}
       if(D())console.log('[FS] loaded',added,'direct posts');});
-    fsCheckInterests();fsCheckJobChats();fsCheckMyJobChatAcks();fsCheckMyDMs();fsCheckMyDMAcks();fsCheckRatings();fsCheckJobStatus();fsCheckPointUpdates();fsCleanupOrphanedGroups();fsSyncMyPosts();fsCheckMyInvitations();fsCheckMyGroupRequests();fsCheckMyGroups();fsCheckAdminGroupRequests();
+    fsCheckInterests();fsCheckJobChats();fsCheckMyJobChatAcks();fsCheckMyDMs();fsCheckMyDMAcks();fsCheckRatings();fsCheckJobStatus();fsCheckPointUpdates();fsCleanupOrphanedGroups();fsSyncMyPosts();fsCheckMyInvitations();fsCheckMyGroupRequests();fsCheckMyGroups();fsCheckAdminGroupRequests();fsSyncMyFriendRefs();fsSyncMyFriendRequests();
     // Load group posts from Firestore
     if(hasFS()&&A.groups.length)A.groups.forEach(g=>{fsLoadGroupPosts(g.id)
       .then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});if(added>0){persist();sR();}}).catch(e=>console.warn('[FS] groupPosts',e));});
@@ -3777,7 +3771,7 @@ async function boot(){
       var removed=pruneDirectOpenJobs(posts);
       if(added>0||removed>0){if(added>0&&A.screen!=='mine')A.unreadActivity+=added;updateB();persist();sR();if(added>0)showNextInvite();if(added>0)_new.slice(0,2).forEach(p=>notify('📩 '+(p.creatorName||''),(p.title||'').substr(0,40),()=>go('jobDetail',{jobId:p.id})));}}).catch(()=>{});
     fsCheckInterests();fsCheckMyDMs();fsCheckMyDMAcks();
-    fsCheckJobStatus();fsCheckMyInvitations();fsCheckMyGroupRequests();fsCheckMyGroups();fsCheckAdminGroupRequests();
+    fsCheckJobStatus();fsCheckMyInvitations();fsCheckMyGroupRequests();fsCheckMyGroups();fsCheckAdminGroupRequests();fsSyncMyFriendRefs();fsSyncMyFriendRequests();
     // EVERY 2nd round: job chats + public groups + group posts + group orphan cleanup + point updates
     if(r%2===0){
       fsCheckJobChats();fsCheckMyJobChatAcks();fsCheckPointUpdates();
