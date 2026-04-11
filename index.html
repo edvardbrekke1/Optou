@@ -9,6 +9,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="description" content="Få ting gjort sammen — med familie, venner og nabolag.">
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://unpkg.com" crossorigin>
+<link rel="dns-prefetch" href="https://optou-peer.onrender.com">
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
@@ -3705,14 +3710,11 @@ window.shareApp=async()=>{if(D())console.log('[shareApp]');var url='https://edva
 // ═══ BOOT ═══
 async function fsBootReconcile(){
   if(!hasFS()||!A.myName)return;
-  try{await fsRegisterUser();}catch(e){}
-  try{await fsCheckMyGroups();}catch(e){}
-  try{await fsCleanupOrphanedGroups();}catch(e){}
-  try{await fsCheckJobStatus();}catch(e){}
-  try{await fsCheckPointUpdates();}catch(e){}
-  try{await fsSyncMyPosts();}catch(e){}
-  try{await fsRecoverArchivedJobsFromRefs();}catch(e){}
-  try{await fsCleanupOrphanedJobs(true);}catch(e){}
+  var _s=function(fn){return fn().catch(function(){});};
+  // Tier 1: independent ops — run in parallel
+  await Promise.allSettled([_s(fsRegisterUser),_s(fsCheckMyGroups),_s(fsCheckJobStatus),_s(fsSyncMyPosts)]);
+  // Tier 2+3: depend on Tier 1 — run in parallel with each other
+  await Promise.allSettled([_s(fsCleanupOrphanedGroups),_s(fsCheckPointUpdates),_s(fsRecoverArchivedJobsFromRefs),_s(function(){return fsCleanupOrphanedJobs(true);})]);
 }
 async function boot(){
   if(D()){performance.mark('boot:start');_rBootTs=performance.now();}
