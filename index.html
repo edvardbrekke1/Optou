@@ -2104,7 +2104,8 @@ window.go=(s,p)=>{if(D())console.log('[go]',{from:A.screen,to:s,params:p});if(A.
   updateB();render();window.scrollTo(0,0);
   if(s==='groups'){fsRefreshPublicGroupsIfNeeded();fsRefreshGroupPostsIfNeeded();}
   if(s==='groupDetail')fsRefreshGroupPostsIfNeeded();};
-function render(){const el=$('app');if(!el)return;if(D())console.log('[R]',A.screen,new Date().toISOString().substr(11,12));
+var _rCount=0,_rTotalMs=0,_rBootTs=0;
+function render(){const el=$('app');if(!el)return;if(D())console.log('[R]',A.screen,new Date().toISOString().substr(11,12));var _rt0=D()?performance.now():0;
   const map={onboarding:vOB,setup:vSetup,feed:vFeed,create:vCreate,mine:vMine,jobDetail:vDetail,interests:vInterests,
     chatHub:vChatHub,jobChat:vJobChat,dm:vDM,contacts:vContacts,repProfile:vRep,profile:vProfile,settings:vSettings,
     groups:vGroups,groupDetail:vGroupDetail,groupMembers:vGroupMembers,createGroup:vCreateGroup,groupCreated:vGroupCreated,search:vSearch};
@@ -2112,7 +2113,8 @@ function render(){const el=$('app');if(!el)return;if(D())console.log('[R]',A.scr
   catch(e){console.error('[render]',A.screen,e);el.innerHTML='<div class="scr"><button class="bk" onclick="go(\'feed\')">Tilbake</button><div class="emp"><div class="emp-i">⚠️</div><div class="emp-t">Noe gikk galt.</div></div></div>';}
   updateB();if(['jobChat','dm'].includes(A.screen))setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},60);
   if(A.screen==='jobDetail')setTimeout(()=>{const m=$('jd-chat');if(m)m.scrollTop=m.scrollHeight;},60);
-  if(A.screen==='create')setTimeout(drawCreateCanvas,50);}
+  if(A.screen==='create')setTimeout(drawCreateCanvas,50);
+  if(D()){_rCount++;_rTotalMs+=performance.now()-_rt0;if(_rBootTs&&performance.now()-_rBootTs<10000)console.log('[perf:render] #'+_rCount+' '+Math.round(performance.now()-_rt0)+'ms (total '+Math.round(_rTotalMs)+'ms)');}}
 let _rTimer=null;function sR(){
   // Don't re-render if user is actively typing — preserves keyboard and input
   var ae=document.activeElement;
@@ -3713,14 +3715,16 @@ async function fsBootReconcile(){
   try{await fsCleanupOrphanedJobs(true);}catch(e){}
 }
 async function boot(){
+  if(D()){performance.mark('boot:start');_rBootTs=performance.now();}
   if(D())console.log('[-> boot] phase:start');
   fetch('https://'+PEER_CONFIG.host).catch(()=>{});// Wake Render early
-  try{await openDB();if(D())console.log('[boot] phase:db-open');}catch(e){console.warn('[DB] IndexedDB unavailable, using fallback');}
-  await loadState();if(D())console.log('[boot] phase:state-loaded');
-  initFB();if(D())console.log('[boot] phase:firebase-init');
-  try{await ensureFirebaseAuthSession();}catch(e){}if(D())console.log('[boot] phase:firebase-auth');
+  try{await openDB();if(D())performance.mark('boot:db-open');}catch(e){console.warn('[DB] IndexedDB unavailable, using fallback');}
+  if(D())console.log('[boot] phase:db-open');
+  await loadState();if(D()){performance.mark('boot:state-loaded');console.log('[boot] phase:state-loaded');}
+  initFB();if(D()){performance.mark('boot:firebase-init');console.log('[boot] phase:firebase-init');}
+  try{await ensureFirebaseAuthSession();}catch(e){}if(D()){performance.mark('boot:firebase-auth');console.log('[boot] phase:firebase-auth');}
   if(typeof Notification!=='undefined'&&Notification.permission==='default')try{Notification.requestPermission();}catch(e){}
-  if(A.myName){if(D())console.log('[boot] phase:crypto');try{await initCrypto();}catch(e){console.error(e);}
+  if(A.myName){if(D())console.log('[boot] phase:crypto');try{await initCrypto();}catch(e){console.error(e);}if(D())performance.mark('boot:crypto');
     // Migration: fix jobs corrupted by old BS bug (owner's status overwritten to 'pending')
     var _migrated=0;A.myJobs.forEach(j=>{if(j.creatorId===A.myId&&j.status==='pending'){j.status='open';_migrated++;}});
     if(_migrated){console.log('[MIGRATE] Fixed',_migrated,'owner jobs from pending→open');persist();}
@@ -3734,10 +3738,10 @@ async function boot(){
     // Migration: clean orphaned jobChats
     var _chatCleaned=0;Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)){delete A.jobChats[k];_chatCleaned++;}});
     if(_chatCleaned){console.log('[MIGRATE] Cleaned',_chatCleaned,'orphaned jobChats');persist();}
-    try{await linkFirebaseIdentity();}catch(e){}if(D())console.log('[boot] phase:firebase-link');
+    try{await linkFirebaseIdentity();}catch(e){}if(D()){performance.mark('boot:identity-link');console.log('[boot] phase:firebase-link');}
     if(D())console.log('[boot] phase:firestore-reconcile');
-    await fsBootReconcile();
-    if(D())console.log('[boot] phase:peer');initPeer();$('nav').style.display='block';go('feed');
+    await fsBootReconcile();if(D())performance.mark('boot:reconcile');
+    if(D())console.log('[boot] phase:peer');initPeer();if(D())performance.mark('boot:peer');$('nav').style.display='block';go('feed');if(D())performance.mark('boot:first-feed');
     if(D())console.log('[boot] phase:firestore-sync');
     // Background: load discoverable posts from Firestore
     fsLoadPublicPosts().then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:false,isPublic:true});added++;}});if(added>0){persist();sR();}if(D())console.log('[FS] loaded',added,'public posts');});
@@ -3763,7 +3767,7 @@ async function boot(){
       const remotePol=data.invitePolicy||'members';
       if(g.invitePolicy!==remotePol){g.invitePolicy=remotePol;changed=true;}
       if(changed){persist();sR();}}});});}
-  else{if(D())console.log('[boot] phase:onboarding');go(ls('oSeen')?'setup':'onboarding');ss('oSeen','1');}
+  else{if(D()){performance.mark('boot:first-feed');console.log('[boot] phase:onboarding');}go(ls('oSeen')?'setup':'onboarding');ss('oSeen','1');}
   // Garbage collection (prevents Scuttlebutt bloat)
   setInterval(async()=>{
     A.openJobs.forEach((j,id)=>{if(j.expiresAt&&j.expiresAt!==0&&j.expiresAt<now())dropOpenJobLocal(id);});
@@ -3804,7 +3808,15 @@ async function boot(){
   }});
   // Periodic reconnect health check
   setInterval(()=>{if(A.myName&&A.peer&&!A.ready&&!A.peer.destroyed)schRec();},3e4);
-  if(D())console.log('[<- boot] complete');
+  if(D()){
+    performance.mark('boot:end');
+    var _phases=['boot:start','boot:db-open','boot:state-loaded','boot:firebase-init','boot:firebase-auth','boot:crypto','boot:identity-link','boot:reconcile','boot:peer','boot:first-feed','boot:end'];
+    var _t0=performance.getEntriesByName('boot:start','mark')[0];
+    if(_t0){var _rows=[];for(var _i=1;_i<_phases.length;_i++){var _m=performance.getEntriesByName(_phases[_i],'mark')[0];if(_m)_rows.push({phase:_phases[_i].replace('boot:',''),ms:Math.round(_m.startTime-_t0.startTime),delta:Math.round(_m.startTime-(_i>1?performance.getEntriesByName(_phases[_i-1],'mark')[0]?.startTime||_t0.startTime:_t0.startTime))});}
+    console.log('[perf:boot] timeline:');console.table(_rows);
+    console.log('[perf:boot] total:',Math.round(performance.getEntriesByName('boot:end','mark')[0].startTime-_t0.startTime)+'ms, renders:',_rCount,', render time:',Math.round(_rTotalMs)+'ms');}
+    console.log('[<- boot] complete');
+  }
 }
 boot();
 </script>
