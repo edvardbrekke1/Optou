@@ -474,7 +474,7 @@ function checkRules(){
 function addAct(t,i){A.activity.unshift({text:t,ico:i||'📌',ts:now()});}
 function addJMsg(jid,m){if(!A.jobChats[jid])A.jobChats[jid]=[];A.jobChats[jid].push(m);}
 function addDM(pid,m){if(!A.dms[pid])A.dms[pid]=[];A.dms[pid].push(m);}
-function dn(id,fb){const c=A.contacts.find(x=>x.id===id);return c?c.alias||c.name:fb||(id||'?').substr(0,8);}
+function dn(id,fb){const fr=A._friendRefs&&A._friendRefs[id];if(fr&&fr.peerName)return fr.peerName;const c=A.contacts.find(x=>x.id===id);return c?c.alias||c.name:fb||(id||'?').substr(0,8);}
 function ratingRid(r){return r?._rid||'';}
 function sameRating(a,b){
   const ar=ratingRid(a),br=ratingRid(b);
@@ -842,17 +842,17 @@ async function fsRemoveGroupMemberCallable(gid,memberId){try{
   else if(msg.includes('not a member'))notify('⚠️','Ikke et aktivt medlem');
   else notify('⚠️','Kunne ikke fjerne medlemmet');
   if(D())console.warn('[FS] removeGroupMemberCallable error',gid,memberId,msg);return false;}}
-async function fsSendFriendRequestCallable(targetId){try{
+async function fsSendFriendRequestCallable(targetId,targetName){try{
   if(!firebase?.functions||!firebase?.auth||!A.myId||!targetId)return false;
   var fn=firebase.functions().httpsCallable('sendFriendRequest');
   await fn({targetId:targetId});
   if(D())console.log('[FS] sendFriendRequestCallable',targetId);
-  A._friendRequests[targetId]={peerId:targetId,peerName:'',direction:'outgoing',status:'pending',ts:Date.now(),updatedAt:Date.now()};
+  A._friendRequests[targetId]={peerId:targetId,peerName:targetName||'',direction:'outgoing',status:'pending',ts:Date.now(),updatedAt:Date.now()};
   qPersist();return true;
 }catch(e){
   var msg=e?.message||'';
   if(msg.includes('Cannot send friend request to yourself'))notify('⚠️','Kan ikke sende til deg selv');
-  else if(msg.includes('Already friends'))notify('👤','Allerede venner');
+  else if(msg.includes('Already friends')){notify('👤','Allerede venner');fsSyncMyFriendRefs().then(()=>render()).catch(()=>render());}
   else if(msg.includes('already pending'))notify('⏳','Venneforespørsel venter allerede');
   else if(msg.includes('not found'))notify('⚠️','Brukeren finnes ikke');
   else if(D())console.warn('[FS] sendFriendRequestCallable error',targetId,msg);
@@ -894,13 +894,20 @@ async function fsRemoveFriendCallable(peerId){try{
   if(msg.includes('not found'))notify('⚠️','Vennskap ikke funnet');
   else notify('⚠️','Kunne ikke fjerne vennen');
   if(D())console.warn('[FS] removeFriendCallable error',peerId,msg);return false;}}
+async function fsPropagateNameChange(){try{
+  if(!firebase?.functions||!firebase?.auth||!A.myId)return;
+  var fn=firebase.functions().httpsCallable('propagateNameChange');
+  var r=await fn({});
+  if(D())console.log('[FS] propagateNameChange',r.data);
+}catch(e){if(D())console.warn('[FS] propagateNameChange error',e?.message||e);}}
 async function fsSyncMyFriendRefs(){if(!hasFS()||!A.myId)return;try{
   var snap=await fbDb.collection('users').doc(A.myId).collection('friendRefs').limit(500).get();
-  var updated={},seeded=0;snap.docs.forEach(doc=>{var d=doc.data();updated[doc.id]={peerId:doc.id,peerName:d.peerName||'',status:d.status||'active',since:d.since||0,updatedAt:d.updatedAt||0};
-    if((d.status||'active')==='active'&&!A.contacts.find(c=>c.id===doc.id)){A.contacts.push({id:doc.id,name:d.peerName||doc.id.substr(0,12),alias:d.peerName||doc.id.substr(0,12)});seeded++;}});
+  var updated={},seeded=0,patched=0;snap.docs.forEach(doc=>{var d=doc.data();updated[doc.id]={peerId:doc.id,peerName:d.peerName||'',status:d.status||'active',since:d.since||0,updatedAt:d.updatedAt||0};
+    if((d.status||'active')==='active'){var ec=A.contacts.find(c=>c.id===doc.id);if(!ec){A.contacts.push({id:doc.id,name:d.peerName||doc.id.substr(0,12),alias:d.peerName||doc.id.substr(0,12)});seeded++;}
+    else if(d.peerName&&(ec.name!==d.peerName||ec.alias!==d.peerName)){ec.name=d.peerName;ec.alias=d.peerName;patched++;}}});
   A._friendRefs=updated;qPersist();
   if(seeded>0)tryC&&A.contacts.forEach(c=>{if(updated[c.id])tryC(c.id);});
-  if(D())console.log('[fsSyncMyFriendRefs]',{count:snap.docs.length,seeded});
+  if(D())console.log('[fsSyncMyFriendRefs]',{count:snap.docs.length,seeded,patched});
 }catch(e){if(D())console.log('[fsSyncMyFriendRefs] error',e.message);}}
 async function fsSyncMyFriendRequests(){if(!hasFS()||!A.myId)return;try{
   var snap=await fbDb.collection('users').doc(A.myId).collection('friendRequests').limit(500).get();
@@ -2345,7 +2352,7 @@ window.addF=(id,name)=>{if(D())console.log('[addF]',{id,name});
   if(A._removedContacts.has(id)){A._removedContacts.delete(id);if(D())console.log('[addF] cleared removedContacts',{id});}
   if(isActiveFriend(id)){notify('👤','Allerede venner');render();return;}
   if(A._friendRequests[id]&&A._friendRequests[id].status==='pending'){notify('⏳','Venneforespørsel venter');render();return;}
-  fsSendFriendRequestCallable(id).then(ok=>{if(ok)notify('📩','Venneforespørsel sendt!');render();});};
+  fsSendFriendRequestCallable(id,name).then(ok=>{if(ok)notify('📩','Venneforespørsel sendt!');render();});};
 
 // ═══ CREATE ═══
 function vCreate(){
@@ -3084,7 +3091,7 @@ window.dmS=async pid=>{const inp=$('dmi');if(!inp?.value.trim())return;const raw
 
 // ═══ CONTACTS ═══
 function vContacts(){const cq=(A._contactQ||'').toLowerCase();
-  const filtered=cq?A.contacts.filter(c=>{const nm=c.alias||c.name||'';return nm.toLowerCase().includes(cq);}):A.contacts;
+  const filtered=cq?A.contacts.filter(c=>{const nm=dn(c.id,c.alias||c.name||'');return nm.toLowerCase().includes(cq);}):A.contacts;
   const _inc=Object.values(A._friendRequests).filter(r=>r.direction==='incoming'&&r.status==='pending');
   const _out=Object.values(A._friendRequests).filter(r=>r.direction==='outgoing'&&r.status==='pending');
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('profile')">Tilbake</button><div class="pgt">Venner (${A.contacts.length})</div></div>
@@ -3105,7 +3112,7 @@ function vContacts(){const cq=(A._contactQ||'').toLowerCase();
   <div class="fld"><label class="fl">Filtrer venner</label><input class="fi" id="cf" placeholder="Søk blant venner..." value="${esc(A._contactQ||'')}" oninput="A._contactQ=this.value;render()" autocomplete="off"></div>
   ${!A.contacts.length&&!cq?'<div class="emp"><div class="emp-i">👥</div><div class="emp-t">Ingen venner ennå. Søk etter folk eller del koden din.</div></div>':''}
   ${cq&&!filtered.length?'<div style="padding:8px;color:var(--t3);font-size:12px">Ingen treff blant venner</div>':''}
-  ${filtered.map(c=>{const peer=A.peers.get(c.id);const dn2=c.alias||peer?.name||c.name||c.id.substr(0,12);
+  ${filtered.map(c=>{const peer=A.peers.get(c.id);const dn2=dn(c.id,peer?.name||c.name||c.id.substr(0,12));
     const loc2=[peer?.by,peer?.fylke?FYLKER.find(f=>f.id===peer.fylke)?.name:''].filter(Boolean).join(', ');
     const online=A.conns.get(c.id)?.open;const pr=avgR(c.id);
     return`<div class="cd cdt" style="padding:12px;margin-bottom:8px" onclick="go('repProfile',{uid:'${escA(c.id)}',name:'${escA(dn2)}'})">
@@ -3287,7 +3294,7 @@ window.updateAvatar=async inp=>{if(!inp.files[0])return;try{const d=await compre
 window.saveS=()=>{const n=$('stn')?.value?.trim();if(!n){notify('⚠️','Skriv et navn');return;}
   A.myName=n;A.myFylke=$('stf')?.value||'';A.myBy=$('stc')?.value?.trim()||'';A.myCity=A.myBy;A.myBio=$('stb')?.value?.trim()||'';
   ss('oName',A.myName);ss('oCity',A.myCity);ss('oBio',A.myBio);ss('oFylke',A.myFylke);ss('oBy',A.myBy);
-  bcast({t:'HI',...myPres()});fsRegisterUser();notify('✅','Lagret!');go('profile');};
+  bcast({t:'HI',...myPres()});fsRegisterUser().then(()=>fsPropagateNameChange());notify('✅','Lagret!');go('profile');};
 
 // ═══ GROUPS ═══
 function countGM(gid){let c=0;A.peers.forEach(p=>{if(p.gids?.includes(gid)&&p.online)c++;});return c;}
@@ -3500,7 +3507,7 @@ function vGroupDetail(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===g
   const onlineMembers=[];A.peers.forEach((p,pid)=>{if(p.gids?.includes(gid)&&pid!==A.myId)onlineMembers.push({...p,id:pid});});
   const totalMembers=(g._members||[]).length||onlineMembers.length+1;
   const onlineCount=onlineMembers.filter(p=>p.online).length;
-  const adminName=isAdmin?'Du':g.creatorId?(()=>{const ap=A.peers.get(g.creatorId);return ap?.name||A.contacts.find(c=>c.id===g.creatorId)?.name||A._userNames[g.creatorId]||'';})():'';
+  const adminName=isAdmin?'Du':g.creatorId?(()=>{const ap=A.peers.get(g.creatorId);return dn(g.creatorId,ap?.name||A._userNames[g.creatorId]||'');})():'';
   // Background hydration if creatorId missing
   if(!g.creatorId&&hasFS())fsReadGroup(gid).then(data=>{if(data&&data.creatorId){
     g.creatorId=data.creatorId;if(data.members)g._members=data.members;if(data.imageUrl)g.imageUrl=data.imageUrl;if(data.name&&g.name==='Gruppe...')g.name=data.name;
@@ -3648,7 +3655,7 @@ function vGroupMembers(){const gid=A.params.gid;const g=A.groups.find(x=>x.id===
   // Membership list must follow the persisted group members, not transient peer presence.
   fsHydrateUserNames([...allIds]);
   const list=[...allIds].map(mid=>{const peer=A.peers.get(mid);const ct=A.contacts.find(c=>c.id===mid);
-    const nm=mid===A.myId?A.myName:(ct?.alias||peer?.name||ct?.name||A._userNames[mid]||mid.substr(0,12));const online=mid===A.myId||!!A.conns.get(mid)?.open;
+    const nm=mid===A.myId?A.myName:dn(mid,peer?.name||ct?.name||A._userNames[mid]||mid.substr(0,12));const online=mid===A.myId||!!A.conns.get(mid)?.open;
     const loc=[peer?.by,peer?.fylke?FYLKER.find(f=>f.id===peer.fylke)?.name:''].filter(Boolean).join(', ');
     const pr=avgR(mid);const isAdmin=g.creatorId===mid;const isMe=mid===A.myId;
     return{mid,nm,online,loc,pr,isAdmin,isMe,known:!!peer?.name||isMe};});
