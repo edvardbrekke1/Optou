@@ -2190,7 +2190,7 @@ function restoreBrowsableJobLocal(j){
 var _navTapT0=0,_bootFeedTs=0,_navSettled=false;
 var _rootScreens=new Set(['feed','groups','mine','profile']);
 var _noHistoryScreens=new Set(['onboarding','setup','groupCreated']);
-var _isPopstateNav=false;
+var _isPopstateNav=false;var _lastExitIntent=0;var _exitingApp=false;
 function _histDepth(s){return _rootScreens.has(s)?0:['interests','jobChat','dm','repProfile','groupMembers'].includes(s)?2:1;}
 var _lastDMSyncOk=0,_lastFRSyncOk=0,_lastPublicLoad=0,_lastFriendsLoad=0,_lastDirectLoad=0,_lastGroupsSync=0,_lastJobStatusSync=0,_lastFriendRefsSync=0;
 function _ht(n,p){if(D()&&_bootFeedTs&&p&&p.then)p.then(function(){var d=Math.round(performance.now()-_bootFeedTs);if(d<5000)console.log('[perf:hot] '+n+' done '+d+'ms render-possible');});return p;}
@@ -2222,9 +2222,10 @@ window.go=(s,p)=>{if(D())_navTapT0=performance.now();if(D())console.log('[go]',{
   if(s==='mine')fsBindActiveMineDirectListeners();
   else fsUnbindActiveMineDirectListeners();
   updateB();render();window.scrollTo(0,0);
-  // History API state management (feed-base model)
+  // History API state management (feed-base model with exitGuard)
   if(!_isPopstateNav&&!_noHistoryScreens.has(s)){var _hd=_histDepth(s),_hs={screen:s,params:p||{},depth:_hd};
-    if(s==='feed'){try{history.replaceState(_hs,'');}catch(e){}if(D())console.log('[history] replace',s,'depth:'+_hd);}
+    if(s==='feed'){var _cs=history.state;if(_cs&&_cs.screen==='feed'&&!_cs.exitGuard){try{history.replaceState(_hs,'');}catch(e){}if(D())console.log('[history] feed replace (already seeded)');}
+      else{try{history.replaceState({screen:'feed',params:{},depth:0,exitGuard:true},'');history.pushState(_hs,'');}catch(e){}if(D())console.log('[history] feed guard+active seeded');}}
     else if(_rootScreens.has(s)&&A.prevScreen==='feed'){try{history.pushState(_hs,'');}catch(e){}if(D())console.log('[history] push',s,'depth:'+_hd,'(feed→root)');}
     else if(_rootScreens.has(s)){try{history.replaceState(_hs,'');}catch(e){}if(D())console.log('[history] replace',s,'depth:'+_hd,'(root lateral)');}
     else{try{history.pushState(_hs,'');}catch(e){}if(D())console.log('[history] push',s,'depth:'+_hd);}}
@@ -2351,7 +2352,7 @@ window.finishSetup=async()=>{
   await linkFirebaseIdentity();
   // Write groups + user to Firestore (best-effort)
   A.groups.forEach(g=>{fsWriteGroup(g.id,{name:g.name,nameLower:(g.name||'').toLowerCase(),desc:g.desc||'',private:g.private,creatorId:g.creatorId||A.myId,createdAt:Date.now(),members:[A.myId],hasPasscode:!!g.hasPasscode,invitePolicy:g.invitePolicy||'members'});});
-  await fsRegisterUser();persist();if(!A.peer||A.peer.destroyed)initPeer();$('nav').style.display='block';A.nb={};go('feed');try{history.replaceState({screen:'feed',params:{},depth:0},'');}catch(e){}setTimeout(showInstallPopup,500);};
+  await fsRegisterUser();persist();if(!A.peer||A.peer.destroyed)initPeer();$('nav').style.display='block';A.nb={};go('feed');setTimeout(showInstallPopup,500);};
 
 // ═══ FEED ═══
 function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
@@ -3958,8 +3959,19 @@ async function boot(){
   }});
   // History API popstate handler
   window.addEventListener('popstate',function(e){
+    // Pass-through during app exit sequence
+    if(_exitingApp){if(D())console.log('[history] exit pass-through');return;}
+    // Exit guard: back from active feed lands on the guard entry
+    if(e.state&&e.state.exitGuard){var _now=Date.now();
+      if(_now-_lastExitIntent<2000){if(D())console.log('[history] exit allowed');_exitingApp=true;try{history.back();}catch(ex){}setTimeout(function(){_exitingApp=false;},500);return;}
+      _lastExitIntent=_now;
+      try{history.pushState({screen:'feed',params:{},depth:0},'');}catch(ex){}
+      notify('👋','Trykk tilbake en gang til for å forlate OptoU');
+      if(D())console.log('[history] exit intent, waiting for confirm');return;}
+    // Normal screen pop
     if(e.state&&e.state.screen){_isPopstateNav=true;if(D())console.log('[history] pop →',e.state.screen,'depth:'+e.state.depth);go(e.state.screen,e.state.params||{});_isPopstateNav=false;return;}
-    if(_rootScreens.has(A.screen)&&A.screen!=='feed'){_isPopstateNav=true;go('feed');_isPopstateNav=false;try{history.replaceState({screen:'feed',params:{},depth:0},'');}catch(ex){}}
+    // Non-feed root fallback
+    if(_rootScreens.has(A.screen)&&A.screen!=='feed'){_isPopstateNav=true;go('feed');_isPopstateNav=false;return;}
   });
   // Periodic reconnect health check
   setInterval(()=>{if(A.myName&&A.peer&&!A.ready&&!A.peer.destroyed)schRec();},3e4);
