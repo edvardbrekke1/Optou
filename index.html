@@ -905,16 +905,19 @@ async function fsSyncMyFriendRefs(){if(!hasFS()||!A.myId)return;try{
   var updated={},seeded=0,patched=0;snap.docs.forEach(doc=>{var d=doc.data();updated[doc.id]={peerId:doc.id,peerName:d.peerName||'',status:d.status||'active',since:d.since||0,updatedAt:d.updatedAt||0};
     if((d.status||'active')==='active'){var ec=A.contacts.find(c=>c.id===doc.id);if(!ec){A.contacts.push({id:doc.id,name:d.peerName||doc.id.substr(0,12),alias:d.peerName||doc.id.substr(0,12)});seeded++;}
     else if(d.peerName&&(ec.name!==d.peerName||ec.alias!==d.peerName)){ec.name=d.peerName;ec.alias=d.peerName;patched++;}}});
-  A._friendRefs=updated;qPersist();
+  A._friendRefs=updated;qPersist();_lastFriendRefsSync=performance.now();
   if(seeded>0)tryC&&A.contacts.forEach(c=>{if(updated[c.id])tryC(c.id);});
   if(D())console.log('[fsSyncMyFriendRefs]',{count:snap.docs.length,seeded,patched});
 }catch(e){if(D())console.log('[fsSyncMyFriendRefs] error',e.message);}}
-async function fsSyncMyFriendRequests(){if(!hasFS()||!A.myId)return;try{
+async function fsSyncMyFriendRequests(){if(!hasFS()||!A.myId)return;var _t0=performance.now(),_since=_lastFRSyncOk?Math.round((_t0-_lastFRSyncOk)/1000):null;
+  if(D())console.log('[sync:live] frSync start',{sinceSec:_since});try{
   var snap=await fbDb.collection('users').doc(A.myId).collection('friendRequests').limit(500).get();
+  var oldKeys=Object.keys(A._friendRequests).sort().join(',');
   var updated={};snap.docs.forEach(doc=>{var d=doc.data();updated[doc.id]={peerId:doc.id,peerName:d.peerName||'',direction:d.direction||'',status:d.status||'',ts:d.ts||0,updatedAt:d.updatedAt||0};});
-  A._friendRequests=updated;qPersist();
-  if(D())console.log('[fsSyncMyFriendRequests]',{count:snap.docs.length});
-}catch(e){if(D())console.log('[fsSyncMyFriendRequests] error',e.message);}}
+  var newKeys=Object.keys(updated).sort().join(',');var changed=oldKeys!==newKeys;
+  A._friendRequests=updated;qPersist();_lastFRSyncOk=performance.now();
+  if(D())console.log('[sync:live] frSync end',{count:snap.docs.length,changed,elapsed:Math.round(performance.now()-_t0)});
+}catch(e){if(D())console.log('[sync:live] frSync error',e.message);}}
 function upsertLocalGroupFromFs(gid,data,fallbackName){
   if(!gid||!data)return false;
   var g=A.groups.find(x=>x.id===gid);
@@ -956,7 +959,7 @@ async function fsCheckMyGroups(){if(!hasFS()||!A.myId)return;
     if(snap.docs.length<100){
       A.groups.filter(g=>!remoteGids.has(g.id)).forEach(g=>{if(dropMissingGroup(g.id,'fsCheckMyGroups — no longer member',true))changed=true;});
     }
-    if(D())console.log('[fsCheckMyGroups]',{remote:snap.docs.length,changed});
+    _lastGroupsSync=performance.now();if(D())console.log('[fsCheckMyGroups]',{remote:snap.docs.length,changed});
     if(changed){persist();bcast({t:'HI',...myPres()});sR();}
   }catch(e){if(D())console.log('[fsCheckMyGroups] error',e.message);}}
 async function fsCheckAdminGroupRequests(){if(!hasFS()||!A.myId)return;
@@ -1304,15 +1307,16 @@ async function fsSendDMAckCallable(userId,mid){try{
   await fn({receiverId:userId,_mid:mid,ts:Date.now()});
   if(D())console.log('[FS] sendDMAckCallable',userId,mid);return true;
 }catch(e){if(D())console.log('[FS] sendDMAckCallable error',userId,e.message);return false;}}
-async function fsCheckMyDMs(){if(!hasFS()||!A.myId)return;try{
-  var snap=await fbDb.collection('users').doc(A.myId).collection('dms').orderBy('ts','desc').limit(120).get();if(!snap.docs.length)return;
+async function fsCheckMyDMs(){if(!hasFS()||!A.myId)return;var _t0=performance.now(),_since=_lastDMSyncOk?Math.round((_t0-_lastDMSyncOk)/1000):null;
+  if(D())console.log('[sync:live] dmSync start',{sinceSec:_since});try{
+  var snap=await fbDb.collection('users').doc(A.myId).collection('dms').orderBy('ts','desc').limit(120).get();if(!snap.docs.length){_lastDMSyncOk=performance.now();if(D())console.log('[sync:live] dmSync end',{docs:0,elapsed:Math.round(performance.now()-_t0)});return;}
   var docs=snap.docs.slice().sort((a,b)=>(a.data()?.ts||0)-(b.data()?.ts||0));
   var added=0,cleaned=0,deferred=0,changed=false;for(var doc of docs){var m={_mid:doc.id,...doc.data()};if(!m.from||A.blocked.has(m.from)){await doc.ref.delete().catch(function(){});cleaned++;continue;}
     if(m._mid&&A._seenMids.has(m._mid)){send(m.from,{t:'MA',_mid:m._mid});fsSendDMAckCallable(m.from,m._mid);await doc.ref.delete().catch(function(){});cleaned++;continue;}
     var ok=await ingestDM(m.from,m,{deferPersist:true});if(!ok){deferred++;continue;}
     if(m._mid){send(m.from,{t:'MA',_mid:m._mid});fsSendDMAckCallable(m.from,m._mid);}await doc.ref.delete().catch(function(){});added++;cleaned++;changed=true;}
-  if(changed){persist();sR();}if(D()&&(added||cleaned||deferred))console.log('[fsCheckMyDMs]',{added,cleaned,deferred});
-}catch(e){if(D())console.log('[fsCheckMyDMs] error',e.message);}}
+  if(changed){persist();sR();}_lastDMSyncOk=performance.now();if(D())console.log('[sync:live] dmSync end',{added,cleaned,deferred,changed,elapsed:Math.round(performance.now()-_t0)});
+}catch(e){if(D())console.log('[sync:live] dmSync error',e.message);}}
 async function fsCheckMyDMAcks(){if(!hasFS()||!A.myId)return;try{
   var snap=await fbDb.collection('users').doc(A.myId).collection('dmAcks').orderBy('ts','desc').limit(120).get();if(!snap.docs.length)return;
   var changed=false,cleaned=0;for(var doc of snap.docs){var a={_mid:doc.id,...doc.data()};if(!a._mid){await doc.ref.delete().catch(function(){});cleaned++;continue;}
@@ -1357,9 +1361,10 @@ async function fsLoadPublicPostsPage(olderThan,takePerStatus){if(!hasFS())return
   if(D())console.log('[fsLoadPublicPostsPage]',{count:items.length,hasMore:anyFull});
   return{items,hasMore:anyFull};
 }catch(e){console.warn('[FS] loadPublicPostsPage',e);return{items:[],hasMore:false};}}
-async function fsLoadPublicPosts(){if(D())console.log('[-> fsLoadPublicPosts]');if(!hasFS())return[];
-  var r=await fsLoadPublicPostsPage(null,30);A._publicPostsHasMore=r.hasMore;
-  if(D())console.log('[<- fsLoadPublicPosts]',{count:r.items.length});return r.items;}
+async function fsLoadPublicPosts(){var _t0=performance.now(),_since=_lastPublicLoad?Math.round((_t0-_lastPublicLoad)/1000):null;
+  if(D())console.log('[sync:live] publicPosts start',{sinceSec:_since});if(!hasFS())return[];
+  var r=await fsLoadPublicPostsPage(null,30);A._publicPostsHasMore=r.hasMore;_lastPublicLoad=performance.now();
+  if(D())console.log('[sync:live] publicPosts end',{count:r.items.length,elapsed:Math.round(performance.now()-_t0)});return r.items;}
 window.loadMorePublicPosts=async()=>{if(A._publicPostsLoading||!A._publicPostsHasMore)return;
   A._publicPostsLoading=true;render();
   var oldest=Infinity;var _ds=new Set(DISCOVERABLE_POST_STATUSES);
@@ -1383,9 +1388,10 @@ async function fsLoadFriendsPostsPage(olderThan,takePerStatus){if(!hasFS()||!A.c
     if(D())console.log('[fsLoadFriendsPostsPage]',{count:items.length,hasMore:anyFull});
     return{items,hasMore:anyFull};
   }catch(e){if(D())console.log('[fsLoadFriendsPostsPage] error',e.message);return{items:[],hasMore:false};}}
-async function fsLoadFriendsPosts(){if(D())console.log('[-> fsLoadFriendsPosts]');if(!hasFS()||!A.contacts.length)return[];
-  var r=await fsLoadFriendsPostsPage(null,20);A._friendsPostsHasMore=r.hasMore;
-  if(D())console.log('[<- fsLoadFriendsPosts]',{count:r.items.length});return r.items;}
+async function fsLoadFriendsPosts(){var _t0=performance.now(),_since=_lastFriendsLoad?Math.round((_t0-_lastFriendsLoad)/1000):null;
+  if(D())console.log('[sync:live] friendsPosts start',{sinceSec:_since});if(!hasFS()||!A.contacts.length)return[];
+  var r=await fsLoadFriendsPostsPage(null,20);A._friendsPostsHasMore=r.hasMore;_lastFriendsLoad=performance.now();
+  if(D())console.log('[sync:live] friendsPosts end',{count:r.items.length,elapsed:Math.round(performance.now()-_t0)});return r.items;}
 window.loadMoreFriendsPosts=async()=>{if(A._friendsPostsLoading||!A._friendsPostsHasMore)return;
   A._friendsPostsLoading=true;render();
   var oldest=Infinity;var _ds=new Set(DISCOVERABLE_POST_STATUSES);
@@ -1393,15 +1399,16 @@ window.loadMoreFriendsPosts=async()=>{if(A._friendsPostsLoading||!A._friendsPost
   var r=await fsLoadFriendsPostsPage(oldest===Infinity?null:oldest,20);
   r.items.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId))A.openJobs.set(p.id,{...p,isFromContact:true,isPublic:false});});
   A._friendsPostsHasMore=r.hasMore;A._friendsPostsLoading=false;if(r.items.length)persist();sR();};
-async function fsLoadDirectPosts(){if(!hasFS()||!A.myId)return[];if(D())console.log('[-> fsLoadDirectPosts]');
+async function fsLoadDirectPosts(){if(!hasFS()||!A.myId)return[];var _t0=performance.now(),_since=_lastDirectLoad?Math.round((_t0-_lastDirectLoad)/1000):null;
+  if(D())console.log('[sync:live] directPosts start',{sinceSec:_since});
   try{var cutoff=now()-30*864e5,byId=new Map();
     for(const st of DISCOVERABLE_POST_STATUSES){try{
       var snap=await fbDb.collection('posts').where('visibility','==','direct').where('targetIds','array-contains',A.myId).where('status','==',st).where('ts','>',cutoff).orderBy('ts','desc').limit(100).get();
       snap.docs.forEach(d=>{if(!byId.has(d.id))byId.set(d.id,d.data());});
     }catch(e){}}
     var out=[...byId.values()].filter(p=>p.creatorId!==A.myId&&!isInvalidDirectJob(p)).sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,100);
-    if(D())console.log('[<- fsLoadDirectPosts]',{count:out.length});return out;
-  }catch(e){if(D())console.log('[fsLoadDirectPosts] error',e.message);return[];}}
+    _lastDirectLoad=performance.now();if(D())console.log('[sync:live] directPosts end',{count:out.length,elapsed:Math.round(performance.now()-_t0)});return out;
+  }catch(e){if(D())console.log('[sync:live] directPosts error',e.message);return[];}}
 async function fsLoadGroupPostsPage(gid,olderThan,takePerStatus){if(!hasFS()||!gid)return{items:[],hasMore:false};
   var tk=takePerStatus||20;try{var byId=new Map();var anyFull=false;
   for(const st of DISCOVERABLE_POST_STATUSES){try{
@@ -1558,7 +1565,7 @@ async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if
         if(fs.status==='done'){A.completedCount++;ss('oDone',A.completedCount);}
         _addJobUnreadWithActivity(j.id,1,A.screen!=='mine');}
       normalizeParticipantStatus(j);
-    }catch(e){}}if(D())console.log('[<- fsCheckJobStatus]');updateB();persist();sR();}catch(e){if(D())console.log('[fsSync] error',e);}}
+    }catch(e){}}_lastJobStatusSync=performance.now();if(D())console.log('[<- fsCheckJobStatus]');updateB();persist();sR();}catch(e){if(D())console.log('[fsSync] error',e);}}
 async function fsCheckPointUpdates(){if(!hasFS())return;if(D())console.log('[-> fsCheckPointUpdates]');
   try{const terminal=['done','cancelled','never_done','declined'];var changed=0,reopenLocal=[],dropLocal=[];
     for(const j of A.myJobs){if(!j?.items?.length||terminal.includes(j.status))continue;
@@ -1639,6 +1646,59 @@ function fsBindActiveJobChat(jid){fsUnbindActiveJobChat();if(!hasFS()||!jid)retu
       if(added>0){if(!((A.screen==='jobDetail'||A.screen==='jobChat')&&A.params.jobId===jid)){_addJobUnreadWithActivity(jid,added,true);}
         updateB();persist();sR();}},function(e){if(D())console.log('[FS] activeJobChat error',jid,e.message);});}
 function fsUnbindActiveJobChat(){if(_activeJobChatUnsub){try{_activeJobChatUnsub();}catch(e){}_activeJobChatUnsub=null;}_activeJobChatJid=null;}
+var _activeDMUnsub=null;var _activeDMPeerId=null;
+function fsBindActiveDMListener(peerId){fsUnbindActiveDMListener();if(!hasFS()||!peerId||!A.myId)return;
+  _activeDMPeerId=peerId;if(D())console.log('[sync:live] dmListener bind',peerId);
+  _activeDMUnsub=fbDb.collection('users').doc(A.myId).collection('dms').orderBy('ts','desc').limit(50)
+    .onSnapshot(async function(snap){if(!snap||_activeDMPeerId!==peerId)return;
+      var added=0;for(const ch of snap.docChanges()){if(ch.type!=='added')continue;var m={_mid:ch.doc.id,...ch.doc.data()};
+        if(!m.from||m.from!==peerId)continue;if(A.blocked.has(m.from))continue;
+        if(m._mid&&A._seenMids.has(m._mid)){send(m.from,{t:'MA',_mid:m._mid});fsSendDMAckCallable(m.from,m._mid);ch.doc.ref.delete().catch(function(){});continue;}
+        var ok=await ingestDM(m.from,m,{deferPersist:true});if(!ok)continue;
+        if(m._mid){send(m.from,{t:'MA',_mid:m._mid});fsSendDMAckCallable(m.from,m._mid);}
+        ch.doc.ref.delete().catch(function(){});added++;}
+      if(added>0){_lastDMSyncOk=performance.now();persist();sR();if(D())console.log('[sync:live] dmListener ingested',{peerId,added});}
+    },function(e){if(D())console.log('[sync:live] dmListener error',peerId,e.message);});}
+function fsUnbindActiveDMListener(){if(_activeDMUnsub){try{_activeDMUnsub();}catch(e){}_activeDMUnsub=null;}if(D()&&_activeDMPeerId)console.log('[sync:live] dmListener unbind',_activeDMPeerId);_activeDMPeerId=null;}
+var _contactsReqUnsub=null,_contactsRefUnsub=null,_contactsReqTimer=null,_contactsRefTimer=null;
+function fsBindActiveContactsListeners(){fsUnbindActiveContactsListeners();if(!hasFS()||!A.myId)return;
+  if(D())console.log('[sync:live] contactsListener bind');
+  _contactsReqUnsub=fbDb.collection('users').doc(A.myId).collection('friendRequests').onSnapshot(function(){
+    if(A.screen!=='contacts')return;if(_contactsReqTimer)return;
+    _contactsReqTimer=setTimeout(function(){_contactsReqTimer=null;if(A.screen!=='contacts')return;
+      if(D())console.log('[sync:live] contactsListener reqTick');fsSyncMyFriendRequests().then(function(){render();});},2000);
+  },function(e){if(D())console.log('[sync:live] contactsListener req error',e.message);});
+  _contactsRefUnsub=fbDb.collection('users').doc(A.myId).collection('friendRefs').onSnapshot(function(){
+    if(A.screen!=='contacts')return;if(_contactsRefTimer)return;
+    _contactsRefTimer=setTimeout(function(){_contactsRefTimer=null;if(A.screen!=='contacts')return;
+      if(D())console.log('[sync:live] contactsListener refTick');fsSyncMyFriendRefs().then(function(){render();});},2000);
+  },function(e){if(D())console.log('[sync:live] contactsListener ref error',e.message);});}
+function fsUnbindActiveContactsListeners(){var was=!!_contactsReqUnsub||!!_contactsRefUnsub;
+  if(_contactsReqUnsub){try{_contactsReqUnsub();}catch(e){}_contactsReqUnsub=null;}
+  if(_contactsRefUnsub){try{_contactsRefUnsub();}catch(e){}_contactsRefUnsub=null;}
+  if(_contactsReqTimer){clearTimeout(_contactsReqTimer);_contactsReqTimer=null;}
+  if(_contactsRefTimer){clearTimeout(_contactsRefTimer);_contactsRefTimer=null;}
+  if(D()&&was)console.log('[sync:live] contactsListener unbind');}
+var _mineDirectUnsubs=[],_mineDirectTimer=null;
+function fsBindActiveMineDirectListeners(){fsUnbindActiveMineDirectListeners();if(!hasFS()||!A.myId)return;
+  if(D())console.log('[sync:live] mineDirectListener bind');
+  var cutoff=now()-30*864e5;
+  DISCOVERABLE_POST_STATUSES.forEach(function(st){
+    var unsub=fbDb.collection('posts').where('visibility','==','direct').where('targetIds','array-contains',A.myId).where('status','==',st).where('ts','>',cutoff).orderBy('ts','desc').limit(100)
+      .onSnapshot(function(){
+        if(A.screen!=='mine')return;if(_mineDirectTimer)return;
+        _mineDirectTimer=setTimeout(function(){_mineDirectTimer=null;if(A.screen!=='mine')return;
+          if(D())console.log('[sync:live] mineDirectListener tick');
+          fsLoadDirectPosts().then(function(posts){var a=0,_new=[];posts.forEach(function(pp){if(!A.openJobs.has(pp.id)&&!A.myJobs.find(function(j){return j.id===pp.id;})&&!A.blocked.has(pp.creatorId)){A.openJobs.set(pp.id,{...pp,isFromContact:true,isPublic:false});A._unreadJobs[pp.id]=(A._unreadJobs[pp.id]||0)+1;queueDirectInvite(pp);a++;_new.push(pp);}});
+            var removed=pruneDirectOpenJobs(posts);
+            if(a>0||removed>0){if(a>0&&A.screen!=='mine')A.unreadActivity+=a;updateB();persist();sR();if(a>0)showNextInvite();}});
+        },2000);
+      },function(e){if(D())console.log('[sync:live] mineDirectListener error',st,e.message);});
+    _mineDirectUnsubs.push(unsub);});}
+function fsUnbindActiveMineDirectListeners(){var was=_mineDirectUnsubs.length>0;
+  _mineDirectUnsubs.forEach(function(fn){try{fn();}catch(e){}});_mineDirectUnsubs=[];
+  if(_mineDirectTimer){clearTimeout(_mineDirectTimer);_mineDirectTimer=null;}
+  if(D()&&was)console.log('[sync:live] mineDirectListener unbind');}
 async function fsCheckMyJobChatAcks(){if(!hasFS()||!A.myId)return;try{
   var snap=await fbDb.collection('users').doc(A.myId).collection('jobChatAcks').orderBy('ts','desc').limit(120).get();if(!snap.docs.length)return;
   var changed=false,cleaned=0;for(var doc of snap.docs){var a={_mid:doc.id,...doc.data()};if(!a._mid){await doc.ref.delete().catch(function(){});cleaned++;continue;}
@@ -2128,6 +2188,11 @@ function restoreBrowsableJobLocal(j){
 
 // ═══ ROUTER ═══
 var _navTapT0=0,_bootFeedTs=0,_navSettled=false;
+var _rootScreens=new Set(['feed','groups','mine','profile']);
+var _noHistoryScreens=new Set(['onboarding','setup','groupCreated']);
+var _isPopstateNav=false;
+function _histDepth(s){return _rootScreens.has(s)?0:['interests','jobChat','dm','repProfile','groupMembers'].includes(s)?2:1;}
+var _lastDMSyncOk=0,_lastFRSyncOk=0,_lastPublicLoad=0,_lastFriendsLoad=0,_lastDirectLoad=0,_lastGroupsSync=0,_lastJobStatusSync=0,_lastFriendRefsSync=0;
 function _ht(n,p){if(D()&&_bootFeedTs&&p&&p.then)p.then(function(){var d=Math.round(performance.now()-_bootFeedTs);if(d<5000)console.log('[perf:hot] '+n+' done '+d+'ms render-possible');});return p;}
 window.go=(s,p)=>{if(D())_navTapT0=performance.now();if(D())console.log('[go]',{from:A.screen,to:s,params:p});if(A.screen==='create'&&s!=='create'&&s!=='setup')A.nb={};
   if(A.screen!==s){window._pendingAudio=null;window._pendingImg=null;A._editGroup=false;A._pendingGroupImg=null;}
@@ -2150,9 +2215,45 @@ window.go=(s,p)=>{if(D())_navTapT0=performance.now();if(D())console.log('[go]',{
   if(s==='groupDetail'&&p?.gid)delete A._unreadGroupPosts[p.gid];
   if((s==='jobDetail'||s==='jobChat')&&p?.jobId)fsBindActiveJobChat(p.jobId);
   else fsUnbindActiveJobChat();
+  if(s==='dm'&&p?.peerId)fsBindActiveDMListener(p.peerId);
+  else fsUnbindActiveDMListener();
+  if(s==='contacts')fsBindActiveContactsListeners();
+  else fsUnbindActiveContactsListeners();
+  if(s==='mine')fsBindActiveMineDirectListeners();
+  else fsUnbindActiveMineDirectListeners();
   updateB();render();window.scrollTo(0,0);
+  // History API state management (feed-base model)
+  if(!_isPopstateNav&&!_noHistoryScreens.has(s)){var _hd=_histDepth(s),_hs={screen:s,params:p||{},depth:_hd};
+    if(s==='feed'){try{history.replaceState(_hs,'');}catch(e){}if(D())console.log('[history] replace',s,'depth:'+_hd);}
+    else if(_rootScreens.has(s)&&A.prevScreen==='feed'){try{history.pushState(_hs,'');}catch(e){}if(D())console.log('[history] push',s,'depth:'+_hd,'(feed→root)');}
+    else if(_rootScreens.has(s)){try{history.replaceState(_hs,'');}catch(e){}if(D())console.log('[history] replace',s,'depth:'+_hd,'(root lateral)');}
+    else{try{history.pushState(_hs,'');}catch(e){}if(D())console.log('[history] push',s,'depth:'+_hd);}}
+  // Screen-aware sync triggers (fire-and-forget, 10s debounce)
+  var _sn=performance.now(),_db=10000;
+  if((s==='dm'||s==='chatHub')&&_sn-_lastDMSyncOk>_db){if(D())console.log('[sync:live] trigger:'+s+' dmSync');fsCheckMyDMs();}
+  else if((s==='dm'||s==='chatHub')&&D())console.log('[sync:live] skip:'+s+' dmSync '+Math.round((_sn-_lastDMSyncOk)/1000)+'s');
+  if(s==='contacts'){if(_sn-_lastFriendRefsSync>_db){if(D())console.log('[sync:live] trigger:contacts friendRefs');fsSyncMyFriendRefs();}
+    else if(D())console.log('[sync:live] skip:contacts friendRefs '+Math.round((_sn-_lastFriendRefsSync)/1000)+'s');
+    if(_sn-_lastFRSyncOk>_db){if(D())console.log('[sync:live] trigger:contacts friendReqs');fsSyncMyFriendRequests();}
+    else if(D())console.log('[sync:live] skip:contacts friendReqs '+Math.round((_sn-_lastFRSyncOk)/1000)+'s');}
+  if(s==='feed'){if(_sn-_lastPublicLoad>_db){if(D())console.log('[sync:live] trigger:feed publicPosts');fsLoadPublicPosts().then(posts=>{var a=0;posts.forEach(pp=>{if(!A.openJobs.has(pp.id)&&!A.myJobs.find(j=>j.id===pp.id)&&!A.blocked.has(pp.creatorId)){A.openJobs.set(pp.id,{...pp,isFromContact:false,isPublic:true});a++;}});if(a>0){persist();sR();}});}
+    else if(D())console.log('[sync:live] skip:feed publicPosts '+Math.round((_sn-_lastPublicLoad)/1000)+'s');
+    if(_sn-_lastFriendsLoad>_db){if(D())console.log('[sync:live] trigger:feed friendsPosts');fsLoadFriendsPosts().then(posts=>{var a=0;posts.forEach(pp=>{if(!A.openJobs.has(pp.id)&&!A.myJobs.find(j=>j.id===pp.id)&&!A.blocked.has(pp.creatorId)){A.openJobs.set(pp.id,{...pp,isFromContact:true,isPublic:false});a++;}});if(a>0){persist();sR();}});}
+    else if(D())console.log('[sync:live] skip:feed friendsPosts '+Math.round((_sn-_lastFriendsLoad)/1000)+'s');}
+  if(s==='mine'){if(_sn-_lastDirectLoad>_db){if(D())console.log('[sync:live] trigger:mine directPosts');fsLoadDirectPosts().then(posts=>{var a=0,_new=[];posts.forEach(pp=>{if(!A.openJobs.has(pp.id)&&!A.myJobs.find(j=>j.id===pp.id)&&!A.blocked.has(pp.creatorId)){A.openJobs.set(pp.id,{...pp,isFromContact:true,isPublic:false});a++;_new.push(pp);}});if(a>0){updateB();persist();sR();}});}
+    else if(D())console.log('[sync:live] skip:mine directPosts '+Math.round((_sn-_lastDirectLoad)/1000)+'s');
+    if(_sn-_lastJobStatusSync>_db){if(D())console.log('[sync:live] trigger:mine jobStatus');fsCheckJobStatus();}
+    else if(D())console.log('[sync:live] skip:mine jobStatus '+Math.round((_sn-_lastJobStatusSync)/1000)+'s');}
+  if(s==='groups'||s==='groupDetail'){if(_sn-_lastGroupsSync>_db){if(D())console.log('[sync:live] trigger:'+s+' groups');fsCheckMyGroups();}
+    else if(D())console.log('[sync:live] skip:'+s+' groups '+Math.round((_sn-_lastGroupsSync)/1000)+'s');}
   if(s==='groups'){fsRefreshPublicGroupsIfNeeded();fsRefreshGroupPostsIfNeeded();}
   if(s==='groupDetail')fsRefreshGroupPostsIfNeeded();
+  if(D()){var _now=performance.now(),_syncAge={};
+    if(s==='dm'||s==='chatHub')_syncAge.dm=_lastDMSyncOk?Math.round((_now-_lastDMSyncOk)/1000)+'s':'never';
+    if(s==='contacts'){_syncAge.friendReqs=_lastFRSyncOk?Math.round((_now-_lastFRSyncOk)/1000)+'s':'never';}
+    if(s==='feed'){_syncAge.public=_lastPublicLoad?Math.round((_now-_lastPublicLoad)/1000)+'s':'never';_syncAge.friends=_lastFriendsLoad?Math.round((_now-_lastFriendsLoad)/1000)+'s':'never';}
+    if(s==='mine')_syncAge.direct=_lastDirectLoad?Math.round((_now-_lastDirectLoad)/1000)+'s':'never';
+    if(Object.keys(_syncAge).length)console.log('[sync:live] nav→'+s,_syncAge);}
   if(D()&&_navTapT0){var _nd=Math.round(performance.now()-_navTapT0);var _hot=_bootFeedTs&&(performance.now()-_bootFeedTs<5000);console.log('[perf:nav] '+s+' '+_nd+'ms'+(_hot?' [hot]':''));if(!_navSettled&&_hot&&_nd<100){_navSettled=true;console.log('[perf:nav] settled '+Math.round(performance.now()-_bootFeedTs)+'ms after feed');}
   _navTapT0=0;}};
 var _rCount=0,_rTotalMs=0,_rBootTs=0;
@@ -2250,7 +2351,7 @@ window.finishSetup=async()=>{
   await linkFirebaseIdentity();
   // Write groups + user to Firestore (best-effort)
   A.groups.forEach(g=>{fsWriteGroup(g.id,{name:g.name,nameLower:(g.name||'').toLowerCase(),desc:g.desc||'',private:g.private,creatorId:g.creatorId||A.myId,createdAt:Date.now(),members:[A.myId],hasPasscode:!!g.hasPasscode,invitePolicy:g.invitePolicy||'members'});});
-  await fsRegisterUser();persist();if(!A.peer||A.peer.destroyed)initPeer();$('nav').style.display='block';A.nb={};go('feed');setTimeout(showInstallPopup,500);};
+  await fsRegisterUser();persist();if(!A.peer||A.peer.destroyed)initPeer();$('nav').style.display='block';A.nb={};go('feed');try{history.replaceState({screen:'feed',params:{},depth:0},'');}catch(e){}setTimeout(showInstallPopup,500);};
 
 // ═══ FEED ═══
 function vFeed(){const oF=A.contacts.filter(c=>A.conns.get(c.id)?.open).length;
@@ -3855,6 +3956,11 @@ async function boot(){
     setTimeout(()=>{A.contacts.forEach(c=>tryC(c.id));flushQ();},2e3);
     setTimeout(()=>{A.contacts.forEach(c=>tryC(c.id));A.conns.forEach((_,id)=>{deliverR(id);offerRH(id);syncP(id);});flushQ();sR();},5e3);
   }});
+  // History API popstate handler
+  window.addEventListener('popstate',function(e){
+    if(e.state&&e.state.screen){_isPopstateNav=true;if(D())console.log('[history] pop →',e.state.screen,'depth:'+e.state.depth);go(e.state.screen,e.state.params||{});_isPopstateNav=false;return;}
+    if(_rootScreens.has(A.screen)&&A.screen!=='feed'){_isPopstateNav=true;go('feed');_isPopstateNav=false;try{history.replaceState({screen:'feed',params:{},depth:0},'');}catch(ex){}}
+  });
   // Periodic reconnect health check
   setInterval(()=>{if(A.myName&&A.peer&&!A.ready&&!A.peer.destroyed)schRec();},3e4);
   if(D()){
