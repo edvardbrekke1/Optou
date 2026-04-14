@@ -246,7 +246,7 @@ const A={myId:'',myName:'',myBio:'',myCity:'',myFylke:'',myBy:'',pubB64:'',privK
   contacts:[],blocked:new Set(),ratings:{},activity:[],offlineQ:[],relayQ:[],completedCount:0,
   screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,unreadActivity:0,unreadGroups:0,unreadFeed:0,_seenMids:new Set(),_seenAcks:new Set(),groups:[],
   feedFilter:{type:'',fylke:'',by:'',allNorway:false},tempConns:new Map(),_publicGroups:[],_publicGroupsCursor:null,_publicGroupsHasMore:false,_publicGroupsLoading:false,_groupPostsHasMore:{},_groupPostsLoading:{},_publicPostsHasMore:false,_publicPostsLoading:false,_friendsPostsHasMore:false,_friendsPostsLoading:false,_contactQ:'',_editGroup:false,_pendingGroupImg:null,
-  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{},_groupRequests:{},_groupRequestsTs:{},_myGroupRequests:{},_friendRefs:{},_friendRequests:{},isGuest:false,_guestPosts:[],_guestPostsLoaded:false,_guestGroups:[],_guestGroupsLoaded:false,_guestPostById:{},_guestGroupById:{},_shareTarget:null};
+  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{},_groupRequests:{},_groupRequestsTs:{},_myGroupRequests:{},_friendRefs:{},_friendRequests:{},isGuest:false,_guestPosts:[],_guestPostsLoaded:false,_guestGroups:[],_guestGroupsLoaded:false,_guestPostById:{},_guestGroupById:{},_shareTarget:null,_guestGroupPosts:{}};
 
 async function loadState(){
   if(D())console.log('[-> loadState]');
@@ -2393,8 +2393,12 @@ async function _fetchGuestGroup(gid){if(!hasFS()||!gid||A._guestGroupById[gid])r
     if(doc.exists){var d=doc.data();if(!d.private){A._guestGroupById[gid]={id:gid,...d};sR();return;}}
     A._guestGroupById[gid]='notfound';sR();
   }catch(e){A._guestGroupById[gid]='notfound';if(D())console.warn('[guest] fetchGroup error',gid,e.message);sR();}}
-function _guestCTA(){return`<div style="background:var(--pb);border:1px solid var(--pbb);border-radius:12px;padding:16px;margin:16px 0;text-align:center">
-  <div style="font-size:14px;font-weight:700;margin-bottom:6px">Opprett en gratis profil for å delta</div>
+function _guestCTA(ctx){var msg='Opprett en gratis profil for å delta';
+  if(ctx==='help')msg='Opprett en gratis profil for å søke på jobben';
+  else if(ctx==='service')msg='Opprett en gratis profil for å delta';
+  else if(ctx==='group')msg='Opprett en gratis profil for å bli med i gruppen';
+  return`<div style="background:var(--pb);border:1px solid var(--pbb);border-radius:12px;padding:16px;margin:16px 0;text-align:center">
+  <div style="font-size:14px;font-weight:700;margin-bottom:6px">${msg}</div>
   <div style="font-size:12px;color:var(--t2);margin-bottom:10px">Ingen epost, ingen passord. 30 sekunder.</div>
   <button class="btn bp bsm" style="width:auto;padding:8px 20px" onclick="A.isGuest=false;go('setup')">Opprett profil</button></div>`;}
 function vFeed(){if(A.isGuest){if(!A._guestPostsLoaded)_loadGuestPosts();
@@ -2752,19 +2756,31 @@ function fsRefreshDetailOpenJob(jid){
 // ═══ JOB DETAIL ═══
 function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);if(!j){const oj=A.openJobs.get(jid);if(oj)j=oj;}
   if(!j&&A.isGuest){j=A._guestPosts.find(p=>p.id===jid)||null;
+    if(!j){Object.values(A._guestGroupPosts).forEach(arr=>{if(!j&&Array.isArray(arr)){var f=arr.find(p=>p.id===jid);if(f)j=f;}});}
     if(!j&&A._guestPostById[jid]&&A._guestPostById[jid]!=='loading'&&A._guestPostById[jid]!=='notfound')j=A._guestPostById[jid];
     if(!j&&!A._guestPostById[jid]){_fetchGuestPost(jid);return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('feed')">Tilbake</button></div><div style="text-align:center;color:var(--t3);font-size:13px;padding:32px">Laster innlegg...</div></div>`;}
     if(!j&&A._guestPostById[jid]==='loading')return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('feed')">Tilbake</button></div><div style="text-align:center;color:var(--t3);font-size:13px;padding:32px">Laster innlegg...</div></div>`;}
   if(!j)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('feed')">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Fant ikke innlegget.</div></div></div>`;
   if(A.isGuest){const typeMap2={help:['🤝','Jobb','bg1'],service:['💼','Tilbyr','bp1']};const[tI,tN,tC]=typeMap2[j.type]||['📋','Innlegg','bg1'];
+    const fNm2=j.fylke?FYLKER.find(f=>f.id===j.fylke)?.name:'';const loc2=esc([j.by,fNm2].filter(Boolean).join(', ')||j.location||'');
     return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('feed')">Tilbake</button><div class="pgt">${tI} ${tN}</div></div>
     <div style="padding:0 16px">
     <div style="font-size:18px;font-weight:800;line-height:1.4;margin:12px 0 8px">${esc(j.title)}</div>
     ${j.desc?`<div style="font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:12px">${esc(j.desc)}</div>`:''}
     ${j.imageUrl||j.imageData?`<img src="${esc(j.imageUrl||j.imageData)}" style="width:100%;max-height:250px;object-fit:contain;border-radius:12px;margin-bottom:12px">`:''}
-    ${j.items?.length?`<div style="margin-bottom:12px">${j.items.map((it,idx)=>`<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--s2)"><span style="font-size:12px;font-weight:800;color:var(--t3)">${idx+1}</span><span style="font-size:14px">${esc(it.text||'Punkt '+(idx+1))}</span></div>`).join('')}</div>`:''}
-    <div style="font-size:12px;color:var(--t3);margin-bottom:16px">${esc(j.creatorName||'')}${j.by||j.location?' · 📍 '+esc(j.by||j.location||''):''}${j.reward?' · '+esc(j.reward):''}</div>
-    ${_guestCTA()}
+    ${j.items?.length?`<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:700;margin-bottom:6px">Punkter</div>${j.items.map((it,idx)=>{var ps=it.status||'open';var psIco=ps==='done'?'✅':'○';
+      return`<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--s2)">
+      <span style="font-size:18px;color:${ps==='done'?'var(--g2)':'var(--t3)'}">${psIco}</span>
+      <div style="flex:1"><div style="font-size:14px;font-weight:600;${ps==='done'?'text-decoration:line-through;color:var(--t3)':''}">${esc(it.text||'Punkt '+(idx+1))}</div>
+      ${it.assignedName?`<div style="font-size:11px;color:var(--t3)">👤 ${esc(it.assignedName)}</div>`:`<div style="font-size:11px;color:var(--pr)">Ledig</div>`}</div></div>`;}).join('')}</div>`:''}
+    <div class="dv"></div>
+    <div style="margin:12px 0">
+    ${j.creatorName?`<div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--s2)"><span style="font-size:12px;color:var(--t3);min-width:70px">Lagt ut av</span><span style="font-size:13px;font-weight:600">${esc(j.creatorName)}</span></div>`:''}
+    ${j.reward?`<div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--s2)"><span style="font-size:12px;color:var(--t3);min-width:70px">Tilbud</span><span style="font-size:13px;font-weight:600">${esc(j.reward)}</span></div>`:''}
+    ${loc2?`<div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--s2)"><span style="font-size:12px;color:var(--t3);min-width:70px">Sted</span><span style="font-size:13px;font-weight:600">${loc2}</span></div>`:''}
+    <div style="display:flex;gap:8px;padding:8px 0"><span style="font-size:12px;color:var(--t3);min-width:70px">Status</span><span style="font-size:13px;font-weight:600">${({open:'Åpen',accepting:'Søker hjelper',active:'Aktiv',done:'Fullført'})[j.status]||esc(j.status||'')}</span></div>
+    </div>
+    ${_guestCTA(j.type==='help'?'help':j.type==='service'?'service':undefined)}
     </div></div>`;}
   if(!A.myJobs.find(x=>x.id===jid)&&A.openJobs.has(jid))fsRefreshDetailOpenJob(jid);
   const isO=j.creatorId===A.myId,isH=j.isHelper,ints=j.interests||[],pr=avgR(j.creatorId),rated=A.rated.has(j.id);
@@ -3712,6 +3728,14 @@ function vGroupDetail(){const gid=A.params.gid;var g=A.groups.find(x=>x.id===gid
     if(!g&&A._guestGroupById[gid]==='loading')return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groups')">Tilbake</button></div><div style="text-align:center;color:var(--t3);font-size:13px;padding:32px">Laster gruppe...</div></div>`;}
   if(!g)return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groups')">Tilbake</button></div><div class="emp"><div class="emp-i">❓</div><div class="emp-t">Gruppe ikke funnet.</div></div></div>`;
   if(A.isGuest){var mc=(g.members||[]).length;
+    // Load group posts for guest (one-shot, no auth needed)
+    if(!A._guestGroupPosts[gid]&&hasFS()){A._guestGroupPosts[gid]='loading';
+      (async function(){try{var byId=new Map();for(const st of DISCOVERABLE_POST_STATUSES){try{
+        var snap=await fbDb.collection('posts').where('groupId','==',gid).where('status','==',st).orderBy('ts','desc').limit(20).get();
+        snap.docs.forEach(d=>{if(!byId.has(d.id))byId.set(d.id,{id:d.id,...d.data()});});}catch(e){}}
+        A._guestGroupPosts[gid]=[...byId.values()].sort((a,b)=>(b.ts||0)-(a.ts||0));sR();
+      }catch(e){A._guestGroupPosts[gid]=[];if(D())console.warn('[guest] groupPosts error',gid,e.message);sR();}})();}
+    var gPosts=Array.isArray(A._guestGroupPosts[gid])?A._guestGroupPosts[gid]:[];
     return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('groups')">Tilbake</button><div class="pgt">${esc(g.name||gid)}</div></div>
     <div style="padding:0 16px">
     <div style="display:flex;align-items:center;gap:12px;margin:16px 0">
@@ -3719,8 +3743,16 @@ function vGroupDetail(){const gid=A.params.gid;var g=A.groups.find(x=>x.id===gid
     :`<div style="width:64px;height:64px;border-radius:50%;background:#F5F3FF;border:2px solid #DDD6FE;display:flex;align-items:center;justify-content:center;font-size:28px">🔓</div>`}
     <div><div style="font-size:18px;font-weight:800">${esc(g.name||gid)}</div>
     <div style="font-size:13px;color:var(--t3)">${mc?mc+' medlemmer':'Åpen gruppe'}${g.fylke?' · '+esc(FYLKER.find(f=>f.id===g.fylke)?.name||''):''}</div></div></div>
-    ${g.desc?`<div style="font-size:14px;color:var(--t2);line-height:1.5;margin-bottom:16px">${esc(g.desc)}</div>`:''}
-    ${_guestCTA()}
+    ${g.desc?`<div style="font-size:14px;color:var(--t2);line-height:1.5;margin-bottom:12px">${esc(g.desc)}</div>`:''}
+    ${_guestCTA('group')}
+    ${A._guestGroupPosts[gid]==='loading'?'<div style="text-align:center;color:var(--t3);font-size:13px;padding:12px">Laster innlegg...</div>':''}
+    ${gPosts.length?`<div class="slbl" style="margin-top:8px">Innlegg i gruppen</div>${gPosts.map(p=>{
+      const typeMap3={help:['🤝','bg1'],service:['💼','bp1']};const[ico3,cls3]=typeMap3[p.type]||['📋','bg1'];
+      return`<div class="cd cdt" style="margin-bottom:8px" onclick="go('jobDetail',{jobId:'${escA(p.id)}'})">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span class="badge ${cls3}">${ico3}</span><span style="font-size:13px;font-weight:600">${esc(p.creatorName||'')}</span><span style="font-size:11px;color:var(--t3);margin-left:auto">${ago(p.ts)}</span></div>
+      <div style="font-size:15px;font-weight:700;margin-bottom:2px">${esc(p.title||'')}</div>
+      <div style="font-size:12px;color:var(--t2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(p.desc||'')}</div></div>`;}).join('')}`:''}
+    ${!gPosts.length&&A._guestGroupPosts[gid]!=='loading'?'<div style="text-align:center;color:var(--t3);font-size:13px;padding:12px">Ingen aktive innlegg i gruppen.</div>':''}
     </div></div>`;}
   // Registered non-member viewing a public/shared group
   if(!A.groups.find(x=>x.id===gid)&&!g.private){var mc2=(g.members||[]).length;
@@ -4055,7 +4087,7 @@ async function boot(){
     if(_sharePost||_shareGroup){A.isGuest=true;A._shareTarget=_sharePost?{type:'post',id:_sharePost}:{type:'group',id:_shareGroup};
       $('nav').style.display='block';if(_sharePost)go('jobDetail',{jobId:_sharePost});else go('groupDetail',{gid:_shareGroup});
       try{history.replaceState(null,'',location.pathname);}catch(e){}if(D())console.log('[guest] share entry',A._shareTarget);}
-    else{go(ls('oSeen')?'setup':'onboarding');ss('oSeen','1');}}
+    else{go('onboarding');}}
   // Garbage collection (prevents Scuttlebutt bloat)
   setInterval(async()=>{
     A.openJobs.forEach((j,id)=>{if(j.expiresAt&&j.expiresAt!==0&&j.expiresAt<now())dropOpenJobLocal(id);});
