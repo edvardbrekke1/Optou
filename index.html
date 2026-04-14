@@ -2200,7 +2200,7 @@ var _lastDMSyncOk=0,_lastFRSyncOk=0,_lastPublicLoad=0,_lastFriendsLoad=0,_lastDi
 function _ht(n,p){if(D()&&_bootFeedTs&&p&&p.then)p.then(function(){var d=Math.round(performance.now()-_bootFeedTs);if(d<5000)console.log('[perf:hot] '+n+' done '+d+'ms render-possible');});return p;}
 window.go=(s,p)=>{if(D())_navTapT0=performance.now();if(D())console.log('[go]',{from:A.screen,to:s,params:p});
   // Guest mode gate: block protected screens
-  if(A.isGuest&&!['feed','groups','onboarding','setup','groupDetail','jobDetail'].includes(s)){notify('👤','Opprett en profil for å bruke denne funksjonen');s='feed';p={};}
+  if(A.isGuest&&!['feed','groups','onboarding','setup','groupDetail','jobDetail','privacy','terms'].includes(s)){notify('👤','Opprett en profil for å bruke denne funksjonen');s='feed';p={};}
   if(A.screen==='create'&&s!=='create'&&s!=='setup')A.nb={};
   if(A.screen!==s){window._pendingAudio=null;window._pendingImg=null;A._editGroup=false;A._pendingGroupImg=null;}
   A.prevScreen=A.screen;A.screen=s;A.params=p||{};
@@ -2268,7 +2268,7 @@ var _rCount=0,_rTotalMs=0,_rBootTs=0;
 function render(){const el=$('app');if(!el)return;if(D())console.log('[R]',A.screen,new Date().toISOString().substr(11,12));var _rt0=D()?performance.now():0;
   const map={onboarding:vOB,setup:vSetup,feed:vFeed,create:vCreate,mine:vMine,jobDetail:vDetail,interests:vInterests,
     chatHub:vChatHub,jobChat:vJobChat,dm:vDM,contacts:vContacts,repProfile:vRep,profile:vProfile,settings:vSettings,
-    groups:vGroups,groupDetail:vGroupDetail,groupMembers:vGroupMembers,createGroup:vCreateGroup,groupCreated:vGroupCreated,search:vSearch};
+    groups:vGroups,groupDetail:vGroupDetail,groupMembers:vGroupMembers,createGroup:vCreateGroup,groupCreated:vGroupCreated,search:vSearch,privacy:vPrivacy,terms:vTerms};
   try{const newHtml=(map[A.screen]||vFeed)();if(el._lastHtml===newHtml)return;el._lastHtml=newHtml;el.innerHTML=newHtml;}
   catch(e){console.error('[render]',A.screen,e);el.innerHTML='<div class="scr"><button class="bk" onclick="go(\'feed\')">Tilbake</button><div class="emp"><div class="emp-i">⚠️</div><div class="emp-t">Noe gikk galt.</div></div></div>';}
   updateB();if(['jobChat','dm'].includes(A.screen))setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},60);
@@ -2285,11 +2285,13 @@ let _rTimer=null;function sR(){
 // ═══ ONBOARDING ═══
 function vOB(){return`<div class="obw"><div class="obl">Opt<em style="color:var(--pr)">oU</em></div><div class="obs">FÅ TING GJORT SAMMEN</div>
   <div class="obf"><div class="ofi">👋</div><div><div class="oft">Kom i gang på 30 sekunder</div><div class="ofd">Bare skriv navnet ditt. Ingen epost, ingen passord, ingen registrering.</div></div></div>
-  <div class="obf"><div class="ofi">📱</div><div><div class="oft">Dine data, din telefon</div><div class="ofd">Alt lagres på din telefon. Ingen selskap har tilgang.</div></div></div>
+  <div class="obf"><div class="ofi">📱</div><div><div class="oft">Vi lagrer minst mulig</div><div class="ofd">Profilen din ligger lokalt og i Google Firebase. Ingen tracking, ingen annonser.</div></div></div>
   <div class="obf"><div class="ofi">🤝</div><div><div class="oft">Hjelp og tjenester</div><div class="ofd">Be om hjelp. Tilby tjenester. Koordiner i grupper.</div></div></div>
   <div class="obf"><div class="ofi">⭐</div><div><div class="oft">Rykte er alt</div><div class="ofd">Fullførte oppgaver og vurderinger bygger profilen din.</div></div></div>
   <button class="btn bp" style="margin-top:20px" onclick="go('setup')">KOM I GANG →</button>
-  <button class="btn bs" style="margin-top:10px" onclick="A.isGuest=true;$('nav').style.display='block';go('feed')">Se appen først →</button></div>`;}
+  <button class="btn bs" style="margin-top:10px" onclick="A.isGuest=true;$('nav').style.display='block';go('feed')">Se appen først →</button>
+  <div style="text-align:center;font-size:11px;color:var(--t3);margin-top:16px"><a href="#" onclick="event.preventDefault();go('privacy')" style="color:var(--t3);text-decoration:underline">Personvern</a> · <a href="#" onclick="event.preventDefault();go('terms')" style="color:var(--t3);text-decoration:underline">Brukervilkår</a></div>
+  </div>`;}
 
 function vSetup(){const step=A.params.step||1;const sf=A.nb._sf||'';const komm=sf?FYLKER.find(f=>f.id===sf)?.kommuner||[]:[];
   const dots=`<div style="display:flex;justify-content:center;gap:8px;margin-bottom:24px">${[1,2,3,4].map(n=>`<div style="width:10px;height:10px;border-radius:5px;background:${n<=step?'var(--pr)':'var(--s3)'}"></div>`).join('')}</div>`;
@@ -2307,7 +2309,11 @@ function vSetup(){const step=A.params.step||1;const sf=A.nb._sf||'';const komm=s
     ${A.nb._sb==='_annet'?`<input class="fi" style="margin-top:6px" id="sba" placeholder="Skriv kommune..." maxlength="30" value="${esc(A.nb._sba||'')}" oninput="A.nb._sba=this.value">`:''}
     </div>`:''}
   <div class="fld"><label class="fl">Om deg (valgfritt)</label><textarea class="fi" id="sb" rows="3" placeholder="Skriv litt om deg selv. Hva kan du hjelpe med?" maxlength="200" oninput="A.nb._bio=this.value">${esc(A.nb._bio||'')}</textarea></div>
-  <button class="btn bp" onclick="obStep1()">Neste steg →</button></div>`;
+  <div class="fld" style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--t2);line-height:1.5">
+    <input type="checkbox" id="sCons" ${A.nb._consent?'checked':''} onchange="A.nb._consent=this.checked;if(this.checked)ls('oConsentV1',String(Date.now()));render()" style="margin-top:3px;flex-shrink:0">
+    <label for="sCons" style="cursor:pointer">Jeg har lest og godtar <a href="#" onclick="event.preventDefault();go('privacy',{from:'setup'})" style="color:var(--pr);text-decoration:underline">personvern</a> og <a href="#" onclick="event.preventDefault();go('terms',{from:'setup'})" style="color:var(--pr);text-decoration:underline">brukervilkår</a></label>
+  </div>
+  <button class="btn bp" onclick="obStep1()" ${A.nb._consent?'':'disabled style="opacity:0.5;cursor:not-allowed"'}>Neste steg →</button></div>`;
   if(step===2)return`<div class="obw">${dots}<div style="font-size:20px;font-weight:800;margin-bottom:4px">Hva vil du bruke appen til?</div><div style="font-size:13px;color:var(--t2);margin-bottom:20px">Velg det som passer deg. Du kan velge flere.</div>
   <div class="ttypes" style="grid-template-columns:1fr">${[['home','🏠','Hjemme og familie','Oppgaver hjemme, handlelister, husarbeid'],['work','💼','Jobb og team','Fordele oppgaver, koordinere, småjobber'],['local','🏘️','Nabolag og lokalt','Hjelpe naboer, finne lokale tjenester']].map(([v,i,n,d])=>
     `<div class="ttype${(A.nb._use||[]).includes(v)?' act':''}" onclick="if(!A.nb._use)A.nb._use=[];var _i=A.nb._use.indexOf('${v}');if(_i>=0)A.nb._use.splice(_i,1);else A.nb._use.push('${v}');render()"><div style="display:flex;align-items:center;gap:12px"><div class="ttype-i">${i}</div><div><div class="ttype-n">${n}</div><div class="ttype-d">${d}</div></div></div></div>`).join('')}</div>
@@ -2336,6 +2342,7 @@ function vSetup(){const step=A.params.step||1;const sf=A.nb._sf||'';const komm=s
   return'';}
 window.handleAvatar=async inp=>{if(!inp.files[0])return;try{A.nb._avatar=await compressAvatar(inp.files[0]);render();}catch(e){notify('⚠️','Kunne ikke laste bilde');}};
 window.obStep1=async()=>{if(window._obBusy)return;const n=$('sn')?.value?.trim()||A.nb._name;if(!n){notify('⚠️','Skriv et visningsnavn');return;}
+  if(!A.nb._consent){notify('⚠️','Du må godta personvern og brukervilkår');return;}
   window._obBusy=true;
   try{A.nb._name=n;A.nb._bio=$('sb')?.value?.trim()||A.nb._bio||'';if(A.nb._sb==='_annet')A.nb._sb=A.nb._sba||$('sba')?.value?.trim()||'';
   A.myName=n;A.myFylke=A.nb._sf||'';A.myBy=A.nb._sb||'';A.myCity=A.myBy;A.myBio=A.nb._bio;
@@ -2816,7 +2823,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
   <div class="dv"></div>
   ${[['Lagt ut av',esc(j.creatorName)+(pr?' · ⭐'+pr:'')],j.reward?['Tilbud',esc(j.reward)]:null,j.by||j.fylke||j.location?['Sted','📍 '+esc([j.by,FYLKER.find(f=>f.id===j.fylke)?.name,j.location].filter(Boolean).join(', '))]:null,j.groupName?['Gruppe','🏘️ '+esc(j.groupName)]:null,
   directPid&&isO&&['open','accepting'].includes(j.status)&&!ints.length?['Invitert til',esc(directName)]:null,
-  j.jobDate?['Når',fmtDate(j.jobDate,j.jobTime)]:null,j.helperName?['Hjelper',esc(j.helperName)]:null,['Status',esc(isO&&j.visibility==='direct'&&j.status==='open'&&!ints.length?'Venter på svar':({open:'Åpent',accepting:'Venter',pending:'Venter svar',active:'Pågår',pending_review:'Ferdigmeldt',done:'✅ Fullført',declined:'Avslått',never_done:'❌ Aldri gjort',cancelled:'Kansellert'}[j.status]||j.status))]
+  j.jobDate?['Når',fmtDate(j.jobDate,j.jobTime)]:null,j.helperName?['Hjelper',esc(j.helperName)]:null,['Status',esc(isO&&j.visibility==='direct'&&j.status==='open'&&!ints.length?'Venter på svar':({open:'Åpent',accepting:'Venter',pending:'Venter svar',active:'Pågår',pending_review:'Ferdigmeldt',done:'✅ Fullført',declined:'Avslått',never_done:'❌ Aldri gjort',cancelled:'Kansellert',expired:'⏰ Utløpt'}[j.status]||j.status))]
   ].filter(Boolean).map(([k,v])=>`<div class="drow"><span>${k}</span><span class="dval">${v}</span></div>`).join('')}</div>`;
   if(isO&&j.visibility==='direct'&&['open','accepting'].includes(j.status)&&!ints.length)b+=`<div class="cd" style="margin-bottom:10px"><div style="font-size:var(--fs-md);font-weight:var(--fw-bold);margin-bottom:6px">📩 Direkte foresporsel sendt</div>
   <div style="font-size:12px;color:var(--t2);margin-bottom:10px">Venter på svar fra <strong>${esc(directName||'valgt person')}</strong>.</div>
@@ -3444,6 +3451,47 @@ function vProfile(){const pr=avgR(A.myId);const loc=[A.myBy,FYLKER.find(f=>f.id=
   <div style="font-size:11px;color:var(--t3);text-align:center">Vipps-nummer: 45390</div></div>`;}
 
 // ═══ SETTINGS ═══
+function _privacyBack(){if(A.params&&A.params.from==='setup')return"go('setup',{step:1})";return A.myName?"go('settings')":"go('onboarding')";}
+function vPrivacy(){var bk=_privacyBack();
+  return`<div class="scr"><div class="tbar"><button class="bk" onclick="${bk}">Tilbake</button><div class="pgt">Personvern</div></div>
+  <div style="padding:0 16px;font-size:14px;line-height:1.6;color:var(--t2)">
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Hva vi lagrer</h3>
+  <p>Visningsnavn, fylke/by, profilbilde (valgfritt), bio (valgfritt), et ECDSA-nøkkelpar, og en anonym Firebase-ID. Vi krever ikke epost eller passord.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Hva andre brukere ser</h3>
+  <p>Navn, by/fylke, bilde, bio, vurderinger andre har gitt deg, og dine offentlige innlegg/grupper.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Hvor det lagres</h3>
+  <p>Lokalt på enheten din, og i Google Firebase (Cloud Firestore + Storage). Firebase kjører i regioner styrt av Google.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Vurderinger</h3>
+  <p>Vurderinger andre har gitt deg lever på din profil. Vurderinger du har gitt andre lever på deres profil. Reset av din konto fjerner ikke vurderinger du har gitt andre.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Sletting</h3>
+  <p>Du kan slette egen konto via Innstillinger → Nullstill alt. Dette sletter profilen din og dine egne innlegg/grupper.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Hvem som har tilgang</h3>
+  <p>Andre brukere via P2P og Firebase. Vi (OptoU) har teknisk admin-tilgang via Firebase, men leser ikke innholdet ditt rutinemessig.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Tredjeparter</h3>
+  <p>Firebase (Google Cloud) for lagring og auth. PeerJS-relé (Render) for P2P-oppkobling. Ingen analytics, ingen annonser, ingen tracking.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Kontakt</h3>
+  <p>Spørsmål? Ta kontakt via OptoU.</p>
+  <div style="font-size:11px;color:var(--t3);margin:24px 0 16px;text-align:center">v1 — 2026-04-14</div>
+  </div></div>`;}
+function vTerms(){var bk=_privacyBack();
+  return`<div class="scr"><div class="tbar"><button class="bk" onclick="${bk}">Tilbake</button><div class="pgt">Brukervilkår</div></div>
+  <div style="padding:0 16px;font-size:14px;line-height:1.6;color:var(--t2)">
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Hva tjenesten er</h3>
+  <p>OptoU er et P2P/Firebase-verktøy for å koordinere oppgaver mellom folk. Vi er ikke en arbeidsformidler, ikke arbeidsgiver, og ikke part i avtaler mellom brukere.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Brukeransvar</h3>
+  <p>Du er ansvarlig for innholdet du legger ut. Ulovlig innhold, trakassering, spam og bedrageri er ikke tillatt.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Vurderinger</h3>
+  <p>Vurderinger må være ærlige og knyttet til faktisk samarbeid mellom dere.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Avtaler mellom brukere</h3>
+  <p>Avtaler om penger, jobb eller leveranser inngås mellom brukerne selv. OptoU er ikke part i disse.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Vi kan stenge kontoer</h3>
+  <p>Vi kan stenge kontoer som bryter reglene eller misbruker tjenesten.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Beta</h3>
+  <p>Tjenesten er i beta. Funksjoner kan endres, og nedetid kan forekomme.</p>
+  <h3 style="font-size:16px;font-weight:800;color:var(--t1);margin:16px 0 8px">Ingen garantier</h3>
+  <p>OptoU leveres "som det er". Vi gjør vårt beste, men kan ikke garantere kontinuerlig drift, datatap eller konsekvenser av brukernes egen bruk.</p>
+  <div style="font-size:11px;color:var(--t3);margin:24px 0 16px;text-align:center">v1 — 2026-04-14</div>
+  </div></div>`;}
 function vSettings(){
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('profile')">Tilbake</button><div class="pgt">Innstillinger</div></div>
   <div class="fld" style="text-align:center"><label style="cursor:pointer;display:inline-block">
@@ -3468,6 +3516,10 @@ function vSettings(){
   <div class="slbl">${t('lang').toUpperCase()}</div>
   <div style="display:flex;gap:8px;margin-bottom:16px">${[['no','Norsk'],['en','English']].map(([v,l])=>
     `<button class="btn ${(ls('oLang')||'no')===v?'bp':'bs'}" style="flex:1" onclick="ss('oLang','${v}');render()">${l}</button>`).join('')}</div>
+  <div class="dv" style="margin:24px 0"></div>
+  <div class="slbl">📄 JURIDISK</div>
+  <button class="btn bs" style="margin-bottom:8px" onclick="go('privacy')">Personvern</button>
+  <button class="btn bs" style="margin-bottom:16px" onclick="go('terms')">Brukervilkår</button>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">ℹ️ OM OPTOU</div>
   <div style="font-size:13px;color:var(--t2);line-height:1.7;margin-bottom:12px">OptoU v${V} — Få ting gjort sammen.<br>Én HTML-fil. Ingen server. Ingen eier dataene dine.<br>${A.conns.size} tilkoblinger · ${A.peers.size} i nettverket</div>
