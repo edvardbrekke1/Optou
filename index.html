@@ -2782,7 +2782,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
     ${j.creatorName?`<div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--s2)"><span style="font-size:12px;color:var(--t3);min-width:70px">Lagt ut av</span><span style="font-size:13px;font-weight:600">${esc(j.creatorName)}</span></div>`:''}
     ${j.reward?`<div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--s2)"><span style="font-size:12px;color:var(--t3);min-width:70px">Tilbud</span><span style="font-size:13px;font-weight:600">${esc(j.reward)}</span></div>`:''}
     ${loc2?`<div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--s2)"><span style="font-size:12px;color:var(--t3);min-width:70px">Sted</span><span style="font-size:13px;font-weight:600">${loc2}</span></div>`:''}
-    <div style="display:flex;gap:8px;padding:8px 0"><span style="font-size:12px;color:var(--t3);min-width:70px">Status</span><span style="font-size:13px;font-weight:600">${({open:'Åpen',accepting:'Søker hjelper',active:'Aktiv',done:'Fullført'})[j.status]||esc(j.status||'')}</span></div>
+    <div style="display:flex;gap:8px;padding:8px 0"><span style="font-size:12px;color:var(--t3);min-width:70px">Status</span><span style="font-size:13px;font-weight:600">${({open:'Åpen',accepting:'Søker hjelper',active:'Aktiv',done:'Fullført',expired:'⏰ Utløpt'})[j.status]||esc(j.status||'')}</span></div>
     </div>
     ${_guestCTA(j.type==='help'?'help':j.type==='service'?'service':undefined)}
     </div></div>`;}
