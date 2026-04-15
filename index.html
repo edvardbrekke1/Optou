@@ -246,7 +246,7 @@ const A={myId:'',myName:'',myBio:'',myCity:'',myFylke:'',myBy:'',pubB64:'',privK
   contacts:[],blocked:new Set(),ratings:{},activity:[],offlineQ:[],relayQ:[],completedCount:0,
   screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,unreadActivity:0,unreadGroups:0,unreadFeed:0,_seenMids:new Set(),_seenAcks:new Set(),groups:[],
   feedFilter:{type:'',fylke:'',by:'',allNorway:false},tempConns:new Map(),_publicGroups:[],_publicGroupsCursor:null,_publicGroupsHasMore:false,_publicGroupsLoading:false,_groupPostsHasMore:{},_groupPostsLoading:{},_publicPostsHasMore:false,_publicPostsLoading:false,_friendsPostsHasMore:false,_friendsPostsLoading:false,_contactQ:'',_editGroup:false,_pendingGroupImg:null,
-  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{},_groupRequests:{},_groupRequestsTs:{},_myGroupRequests:{},_friendRefs:{},_friendRequests:{},isGuest:false,_guestPosts:[],_guestPostsLoaded:false,_guestGroups:[],_guestGroupsLoaded:false,_guestPostById:{},_guestGroupById:{},_shareTarget:null,_guestGroupPosts:{}};
+  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{},_groupRequests:{},_groupRequestsTs:{},_myGroupRequests:{},_friendRefs:{},_friendRequests:{},isGuest:false,_guestPosts:[],_guestPostsLoaded:false,_guestGroups:[],_guestGroupsLoaded:false,_guestPostById:{},_guestGroupById:{},_shareTarget:null,_guestGroupPosts:{},_supportThread:null,_supportMessages:[],_supportLoaded:false,_supportLastSend:0};
 
 async function loadState(){
   if(D())console.log('[-> loadState]');
@@ -2228,6 +2228,7 @@ window.go=(s,p)=>{if(D())_navTapT0=performance.now();if(D())console.log('[go]',{
   else fsUnbindActiveContactsListeners();
   if(s==='mine')fsBindActiveMineDirectListeners();
   else fsUnbindActiveMineDirectListeners();
+  if(s==='support')A._supportLoaded=false;
   updateB();render();window.scrollTo(0,0);
   // History API state management (feed-base model with exitGuard)
   if(!_isPopstateNav&&!_noHistoryScreens.has(s)){var _hd=_histDepth(s),_hs={screen:s,params:p||{},depth:_hd};
@@ -2268,7 +2269,7 @@ var _rCount=0,_rTotalMs=0,_rBootTs=0;
 function render(){const el=$('app');if(!el)return;if(D())console.log('[R]',A.screen,new Date().toISOString().substr(11,12));var _rt0=D()?performance.now():0;
   const map={onboarding:vOB,setup:vSetup,feed:vFeed,create:vCreate,mine:vMine,jobDetail:vDetail,interests:vInterests,
     chatHub:vChatHub,jobChat:vJobChat,dm:vDM,contacts:vContacts,repProfile:vRep,profile:vProfile,settings:vSettings,
-    groups:vGroups,groupDetail:vGroupDetail,groupMembers:vGroupMembers,createGroup:vCreateGroup,groupCreated:vGroupCreated,search:vSearch,privacy:vPrivacy,terms:vTerms};
+    groups:vGroups,groupDetail:vGroupDetail,groupMembers:vGroupMembers,createGroup:vCreateGroup,groupCreated:vGroupCreated,search:vSearch,privacy:vPrivacy,terms:vTerms,report:vReport,support:vSupport};
   try{const newHtml=(map[A.screen]||vFeed)();if(el._lastHtml===newHtml)return;el._lastHtml=newHtml;el.innerHTML=newHtml;}
   catch(e){console.error('[render]',A.screen,e);el.innerHTML='<div class="scr"><button class="bk" onclick="go(\'feed\')">Tilbake</button><div class="emp"><div class="emp-i">⚠️</div><div class="emp-t">Noe gikk galt.</div></div></div>';}
   updateB();if(['jobChat','dm'].includes(A.screen))setTimeout(()=>{const m=$('ch-m');if(m)m.scrollTop=m.scrollHeight;},60);
@@ -2941,6 +2942,7 @@ function vDetail(){const jid=A.params.jobId;let j=A.myJobs.find(x=>x.id===jid);i
     <div style="flex:1"></div>
     <button style="width:44px;height:44px;border-radius:22px;background:var(--pr);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;border:none;cursor:pointer" onclick="jdCS('${escA(jid)}','${escA(_oId||'')}')">➤</button>
     </div></div>`}`;}
+  if(!isO&&!A.isGuest)b+=`<div style="margin-top:16px;text-align:center"><a href="#" onclick="event.preventDefault();openReport('post','${escA(jid)}')" style="font-size:12px;color:var(--t3);text-decoration:underline">🚩 Rapporter</a></div>`;
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go(A.prevScreen||'feed')">Tilbake</button><div class="pgt">Detaljer</div></div>${b}</div>`;}
 
 window.doHelp=async(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A.openJobs.get(jid);
@@ -3492,6 +3494,83 @@ function vTerms(){var bk=_privacyBack();
   <p>OptoU leveres "som det er". Vi gjør vårt beste, men kan ikke garantere kontinuerlig drift, datatap eller konsekvenser av brukernes egen bruk.</p>
   <div style="font-size:11px;color:var(--t3);margin:24px 0 16px;text-align:center">v1 — 2026-04-14</div>
   </div></div>`;}
+window.openReport=(targetType,targetId)=>{
+  if(A.isGuest){notify('👤','Opprett en profil for å rapportere innhold');return;}
+  var k=targetType+':'+targetId;
+  if(A._reportedTargets&&A._reportedTargets.has(k)){notify('ℹ️','Du har allerede rapportert dette innholdet');return;}
+  A._reportDraft={targetType,targetId,reason:'',text:'',from:A.screen,fromParams:{...(A.params||{})}};
+  go('report');};
+window.cancelReport=()=>{var d=A._reportDraft||{};var from=d.from,fromParams=d.fromParams||{};A._reportDraft=null;
+  if(from==='jobDetail'||from==='groupDetail')go(from,fromParams);else go('feed');};
+function vReport(){var d=A._reportDraft||{};var reasons=[['spam','Spam'],['harassment','Trakassering'],['fraud','Svindel'],['illegal','Ulovlig innhold'],['other','Annet']];
+  var canSend=!!d.reason&&(d.reason!=='other'||(d.text||'').trim().length>0);
+  return`<div class="scr"><div class="tbar"><button class="bk" onclick="cancelReport()">Tilbake</button><div class="pgt">Rapporter innhold</div></div>
+  <div style="padding:0 16px">
+  <div style="font-size:13px;color:var(--t2);margin:12px 0 16px">Velg hva som er galt med dette innholdet. Vi bruker dette til å gjennomgå rapporter manuelt.</div>
+  <div class="slbl">Årsak</div>
+  ${reasons.map(([v,l])=>`<button class="btn ${d.reason===v?'bp':'bs'}" style="margin-bottom:6px;width:100%" onclick="A._reportDraft.reason='${v}';render()">${l}</button>`).join('')}
+  <div class="fld" style="margin-top:16px"><label class="fl">${d.reason==='other'?'Beskriv (obligatorisk)':'Beskriv (valgfritt)'}</label>
+    <textarea class="fi" rows="3" maxlength="500" placeholder="${d.reason==='other'?'Forklar hva som er galt...':'Legg til detaljer hvis du vil'}" oninput="A._reportDraft.text=this.value">${esc(d.text||'')}</textarea></div>
+  <button class="btn bp" style="margin-bottom:8px" ${canSend?'':'disabled style="opacity:0.5;cursor:not-allowed"'} onclick="doSubmitReport()">Send rapport</button>
+  <button class="btn bs" onclick="cancelReport()">Avbryt</button>
+  </div></div>`;}
+async function fsSubmitReport(payload){
+  if(!hasFS()||!A.myId)return false;
+  try{await fbDb.collection('reports').doc().set({...payload,reporterId:A.myId,reporterName:A.myName||'',createdAt:Date.now(),status:'open'});
+    if(D())console.log('[FS] submitReport',payload.targetType,payload.targetId,payload.reason);return true;
+  }catch(e){if(D())console.warn('[FS] submitReport error',e.message);return false;}}
+window.doSubmitReport=async()=>{var d=A._reportDraft||{};if(!d.reason)return;
+  if(d.reason==='other'&&!(d.text||'').trim()){notify('⚠️','Skriv en beskrivelse');return;}
+  var payload={targetType:d.targetType,targetId:d.targetId,reason:d.reason,text:(d.text||'').trim()};
+  var ok=await fsSubmitReport(payload);
+  if(ok){
+    if(!A._reportedTargets)A._reportedTargets=new Set();
+    A._reportedTargets.add(d.targetType+':'+d.targetId);
+    notify('✅','Rapporten er sendt. Takk.');
+    var fromScreen=d.from||'feed';var fromParams=d.fromParams||{};
+    A._reportDraft=null;
+    if(fromScreen==='jobDetail'||fromScreen==='groupDetail')go(fromScreen,fromParams);else go('feed');
+  }else{notify('⚠️','Kunne ikke sende rapport. Prøv igjen.');}};
+async function fsLoadSupportThread(){if(!hasFS()||!A.myId)return;
+  try{var tRef=fbDb.collection('supportThreads').doc(A.myId);
+    var tDoc=await tRef.get();
+    if(tDoc.exists){A._supportThread={id:A.myId,...tDoc.data()};
+      try{var mSnap=await tRef.collection('messages').orderBy('ts','asc').limit(100).get();
+        A._supportMessages=mSnap.docs.map(d=>({id:d.id,...d.data()}));}catch(e){if(D())console.warn('[support] msgs load',e.message);}
+      if(A._supportThread.userUnread){try{await tRef.update({userUnread:false});A._supportThread.userUnread=false;}catch(e){}}
+    }else{A._supportThread=null;A._supportMessages=[];}
+    A._supportLoaded=true;sR();
+  }catch(e){A._supportLoaded=true;if(D())console.warn('[support] thread load',e.message);sR();}}
+async function fsSendSupportMessage(text){
+  if(!text||!text.trim())return;var t=text.trim();if(t.length>2000)t=t.substring(0,2000);
+  var now_=Date.now();if(now_-A._supportLastSend<2000){notify('⏳','Vent litt før du sender igjen');return;}
+  if(!hasFS()||!A.myId){notify('⚠️','Kunne ikke sende');return;}
+  A._supportLastSend=now_;
+  try{var tRef=fbDb.collection('supportThreads').doc(A.myId);
+    if(!A._supportThread){await tRef.set({userId:A.myId,userName:A.myName||'',createdAt:now_,updatedAt:now_,status:'open',lastSender:'user',adminUnread:true,userUnread:false});}
+    await tRef.collection('messages').add({sender:'user',senderName:A.myName||'',text:t,ts:now_});
+    await tRef.update({updatedAt:now_,lastSender:'user',adminUnread:true,userUnread:false});
+    notify('✅','Melding sendt');
+    await fsLoadSupportThread();
+  }catch(e){if(D())console.warn('[support] send',e.message);notify('⚠️','Kunne ikke sende. Prøv igjen senere.');A._supportLastSend=0;}}
+window.doSendSupport=()=>{var ta=$('sup-ta');if(!ta)return;var t=ta.value;ta.value='';fsSendSupportMessage(t);};
+function vSupport(){if(!A._supportLoaded)fsLoadSupportThread();
+  var t=A._supportThread;var msgs=A._supportMessages||[];var isClosed=t&&t.status==='closed';
+  return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('settings')">Tilbake</button><div class="pgt">Support</div></div>
+  <div style="padding:0 16px">
+  ${!A._supportLoaded?'<div style="text-align:center;color:var(--t3);font-size:13px;padding:24px">Laster...</div>':''}
+  ${A._supportLoaded&&!t?`<div style="text-align:center;padding:20px 0">
+    <div style="font-size:32px;margin-bottom:6px">💬</div>
+    <div style="font-size:15px;font-weight:700;margin-bottom:4px">Trenger du hjelp?</div>
+    <div style="font-size:13px;color:var(--t2);line-height:1.5">Send en melding nedenfor. Vi svarer så raskt vi kan.</div></div>`:''}
+  ${msgs.length?`<div style="display:flex;flex-direction:column;gap:10px;margin:12px 0">${msgs.map(m=>{var mine=m.sender==='user';
+    return`<div style="align-self:${mine?'flex-end':'flex-start'};max-width:85%;background:${mine?'var(--pb)':'var(--s2)'};border:1px solid ${mine?'var(--pbb)':'var(--s3)'};border-radius:12px;padding:10px 12px">
+    <div style="font-size:11px;color:var(--t3);margin-bottom:4px">${mine?'Du':esc(m.senderName||'Support')} · ${ago(m.ts)}</div>
+    <div style="font-size:14px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word">${esc(m.text||'')}</div></div>`;}).join('')}</div>`:''}
+  ${isClosed?'<div class="ibox">Denne tråden er lukket. Send en ny melding for å åpne en ny sak.</div>':''}
+  <div class="fld" style="margin-top:16px"><textarea class="fi" id="sup-ta" rows="3" maxlength="2000" placeholder="Beskriv problemet..."></textarea></div>
+  <button class="btn bp" onclick="doSendSupport()">Send</button>
+  </div></div>`;}
 function vSettings(){
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('profile')">Tilbake</button><div class="pgt">Innstillinger</div></div>
   <div class="fld" style="text-align:center"><label style="cursor:pointer;display:inline-block">
@@ -3516,6 +3595,9 @@ function vSettings(){
   <div class="slbl">${t('lang').toUpperCase()}</div>
   <div style="display:flex;gap:8px;margin-bottom:16px">${[['no','Norsk'],['en','English']].map(([v,l])=>
     `<button class="btn ${(ls('oLang')||'no')===v?'bp':'bs'}" style="flex:1" onclick="ss('oLang','${v}');render()">${l}</button>`).join('')}</div>
+  <div class="dv" style="margin:24px 0"></div>
+  <div class="slbl">💬 SUPPORT</div>
+  <button class="btn bs" style="margin-bottom:16px" onclick="go('support')">💬 Support / bug</button>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">📄 JURIDISK</div>
   <button class="btn bs" style="margin-bottom:8px" onclick="go('privacy')">Personvern</button>
@@ -3822,6 +3904,7 @@ function vGroupDetail(){const gid=A.params.gid;var g=A.groups.find(x=>x.id===gid
     <div style="font-size:13px;color:var(--t3)">${mc2?mc2+' medlemmer':'Åpen gruppe'}${g.fylke?' · '+esc(FYLKER.find(f=>f.id===g.fylke)?.name||''):''}</div></div></div>
     ${g.desc?`<div style="font-size:14px;color:var(--t2);line-height:1.5;margin-bottom:16px">${esc(g.desc)}</div>`:''}
     <button class="btn bp" style="margin-bottom:16px" onclick="requestGroupJoin('${escA(gid)}','${escA(g.name||gid)}')">Bli med i gruppen</button>
+    <div style="margin-top:16px;text-align:center"><a href="#" onclick="event.preventDefault();openReport('group','${escA(gid)}')" style="font-size:12px;color:var(--t3);text-decoration:underline">🚩 Rapporter</a></div>
     </div></div>`;}
   const isAdmin=!!(g.creatorId&&g.creatorId===A.myId);
   const onlineMembers=[];A.peers.forEach((p,pid)=>{if(p.gids?.includes(gid)&&pid!==A.myId)onlineMembers.push({...p,id:pid});});
@@ -3961,7 +4044,9 @@ function vGroupDetail(){const gid=A.params.gid;var g=A.groups.find(x=>x.id===gid
     <button class="btn bs" style="margin-top:6px;min-height:44px" onclick="copyGid('${escA(g.id)}')">📋 Kopier kode</button></details>`:''}
     ${isAdmin?`<button class="btn br" style="margin-top:8px;min-height:46px" onclick="deleteGroupConfirm('${escA(g.id)}')">${window._deletingGroup?'Sletter...':'🗑️ Slett'}</button>`
       :`<button class="btn br" style="margin-top:8px;min-height:46px" onclick="showConfirm('Forlate gruppen?','${g.private?'Du må bli invitert igjen for å komme tilbake.':'Du kan sende ny forespørsel senere.'}','Ja, forlat',()=>leaveGroup('${escA(g.id)}'))">Forlat</button>`}
-  </div></div></details></div>`;}
+  </div></div></details>
+  ${!isAdmin&&!A.isGuest?`<div style="margin-top:16px;text-align:center"><a href="#" onclick="event.preventDefault();openReport('group','${escA(gid)}')" style="font-size:12px;color:var(--t3);text-decoration:underline">🚩 Rapporter</a></div>`:''}
+  </div>`;}
 async function doRemoveGroupMember(gid,memberId,memberName){
   if(!confirm('Fjern '+memberName+' fra gruppen?'))return;
   var ok=await fsRemoveGroupMemberCallable(gid,memberId);
