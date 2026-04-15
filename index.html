@@ -507,6 +507,14 @@ function avHtml(id,name,size){const sz=size||40;const av=id===A.myId?ls('oAvatar
   return`<div class="av" style="width:${sz}px;height:${sz}px;border-radius:${sz/2}px;font-size:${Math.round(sz*.38)}px">${((name||'?')[0]||'?').toUpperCase()}</div>`;}
 function countActivePosts(){return A.myJobs.filter(j=>!['cancelled','declined','never_done','expired'].includes(j.status)).length;}
 function countActiveChats(){var jc=Object.keys(A.jobChats).filter(k=>A.myJobs.find(j=>j.id===k&&!['cancelled','declined','never_done','expired'].includes(j.status))).length;return jc+Object.keys(A.dms).filter(k=>A.dms[k]?.length).length;}
+// Honest user-facing counters for settings LAGRING card (H20-s2).
+// Only counts what the user actually interacts with — not feed cache.
+function countMyActiveJobs(){return A.myJobs.filter(j=>!j.hiddenForMeAt&&!['done','cancelled','declined','never_done','expired'].includes(j.status)).length;}
+function countMyVisibleThreads(){
+  var dmPeers=Object.keys(A.dms||{}).filter(k=>{var arr=A.dms[k];return Array.isArray(arr)&&arr.length>0;}).length;
+  var activeSet=new Set(A.myJobs.filter(j=>!j.hiddenForMeAt&&!['done','cancelled','declined','never_done','expired'].includes(j.status)).map(j=>j.id));
+  var jc=Object.keys(A.jobChats||{}).filter(k=>activeSet.has(k)&&Array.isArray(A.jobChats[k])&&A.jobChats[k].length>0).length;
+  return dmPeers+jc;}
 function compressAvatar(file){return new Promise((res,rej)=>{
   const reader=new FileReader();reader.onload=e=>{const img=new Image();img.onerror=()=>rej(new Error('Ugyldig bilde'));img.onload=()=>{
     const c=document.createElement('canvas');c.width=c.height=200;const ctx=c.getContext('2d');
@@ -1511,6 +1519,22 @@ async function fsCleanupOrphanedGroups(){if(!hasFS()||!A.groups.length)return;
       if(!doc.exists){if(D())console.log('[fsCleanup] group missing from Firestore',gid);
         dropMissingGroup(gid,'fsCleanupOrphanedGroups');removed++;}
     }catch(e){}}if(D()&&removed)console.log('[fsCleanupOrphanedGroups]',{checked:gids.length,removed});}
+// GC candidate observability (read-only, no deletion)
+// Conservative: terminal status + older than 30d grace window.
+var _GC_TERMINAL=['done','cancelled','never_done','declined','expired'];
+var _GC_GRACE_MS=30*864e5;
+function isLocalGCCandidatePost(p,nowMs){
+  if(!p||typeof p!=='object')return false;
+  if(!_GC_TERMINAL.includes(p.status))return false;
+  var t=typeof p.ts==='number'?p.ts:0;if(!t)return false;
+  var n=typeof nowMs==='number'?nowMs:Date.now();
+  return (n-t)>_GC_GRACE_MS;}
+function _logGCTally(){if(!D())return;var n=Date.now();if(n-(A._lastGCTallyLog||0)<60000)return;A._lastGCTallyLog=n;
+  var mine=A.myJobs||[];var open=A.openJobs?[...A.openJobs.values()]:[];
+  var myCandidates=mine.filter(j=>isLocalGCCandidatePost(j,n));
+  var openCandidates=open.filter(j=>isLocalGCCandidatePost(j,n));
+  var sample=myCandidates.slice(0,3).map(j=>({id:(j.id||'').substr(0,8),status:j.status}));
+  console.log('[gc:candidate] local',{mine:myCandidates.length,open:openCandidates.length,sample});}
 async function fsSyncMyPosts(){if(!hasFS()||!A.myId)return;if(D())console.log('[-> fsSyncMyPosts]');
   try{const snap=await fbDb.collection('posts').where('creatorId','==',A.myId).get();
     const myLocalIds=new Set(A.myJobs.filter(j=>j.creatorId===A.myId).map(j=>j.id));
@@ -1535,6 +1559,7 @@ async function fsSyncMyPosts(){if(!hasFS()||!A.myId)return;if(D())console.log('[
       try{var _mr=await fsMirrorPost(lj);if(_mr.ok){mirrored++;if(D())console.log('[fsSync] mirrored missing remote own post',lj.id);}if(_mr.changed)persist();}catch(e){if(D())console.log('[fsSync] mirror missing remote error',lj.id,e.message);}}
     if(mirrored||recovered){persist();sR();}
     if(D())console.log('[<- fsSyncMyPosts]',{checked:snap.docs.length,deleted,updated,missingLocal,recovered,mirrored});
+    _logGCTally();
   }catch(e){if(D())console.log('[fsSyncMyPosts] error',e.message);}}
 async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if(!hasFS())return;try{
   const terminal=['done','cancelled','never_done','declined','expired'];
@@ -1569,7 +1594,7 @@ async function fsCheckJobStatus(){if(D())console.log('[-> fsCheckJobStatus]');if
         if(fs.status==='done'){A.completedCount++;ss('oDone',A.completedCount);}
         _addJobUnreadWithActivity(j.id,1,A.screen!=='mine');}
       normalizeParticipantStatus(j);
-    }catch(e){}}_lastJobStatusSync=performance.now();if(D())console.log('[<- fsCheckJobStatus]');updateB();persist();sR();}catch(e){if(D())console.log('[fsSync] error',e);}}
+    }catch(e){}}_lastJobStatusSync=performance.now();if(D())console.log('[<- fsCheckJobStatus]');updateB();persist();sR();_logGCTally();}catch(e){if(D())console.log('[fsSync] error',e);}}
 async function fsCheckPointUpdates(){if(!hasFS())return;if(D())console.log('[-> fsCheckPointUpdates]');
   try{const terminal=['done','cancelled','never_done','declined','expired'];var changed=0,reopenLocal=[],dropLocal=[];
     for(const j of A.myJobs){if(!j?.items?.length||terminal.includes(j.status))continue;
@@ -3588,9 +3613,10 @@ function vSettings(){
   <button class="btn bp" onclick="saveS()">Lagre endringer</button>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">📱 LAGRING</div>
-  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:6px">Du bruker ${A.openJobs.size+countActivePosts()} innlegg og ${countActiveChats()} samtaler.</div>
-  <div style="font-size:11px;color:var(--t3);line-height:1.5;margin-bottom:12px">Rydd opp fjerner gamle innlegg fra feeden og samtaler eldre enn 60 dager. Dine egne jobber beholdes under Aktiviteter.</div>
-  <button class="btn bs" onclick="showConfirm('Rydd opp?','Fjerner gamle feed-innlegg og samtaler. Dine egne jobber beholdes.','Rydd opp',()=>{var n=now();var d30=n-30*864e5,d60=n-60*864e5;A.openJobs.forEach((j,id)=>{if(j.ts<d30)dropOpenJobLocal(id);});Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)&&(!A.jobChats[k].length||A.jobChats[k][A.jobChats[k].length-1].ts<d60))delete A.jobChats[k];});Object.keys(A.dms).forEach(k=>{if(!A.dms[k].length||A.dms[k][A.dms[k].length-1].ts<d60){fsWriteDMRef(A.myId,k,{visibility:'hidden'});delete A.dms[k];}});persist();notify('✅','Ryddet opp!');render();})">🧹 Rydd opp</button>
+  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:4px">Mine aktive jobber: <strong>${countMyActiveJobs()}</strong></div>
+  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:8px">Mine samtaler: <strong>${countMyVisibleThreads()}</strong></div>
+  <div style="font-size:11px;color:var(--t3);line-height:1.5;margin-bottom:12px">Rydd lokal cache fjerner gamle feed-innlegg og gamle chat-forhåndsvisninger fra denne enheten. Dine egne jobber og vurderinger påvirkes ikke. Andres kopi av delt historikk påvirkes ikke.</div>
+  <button class="btn bs" onclick="showConfirm('Rydd lokal cache?','Fjerner gamle feed-innlegg, gamle chat-forhåndsvisninger, og skjulte DM-trader fra denne enheten.\\n\\nDine egne jobber og vurderinger påvirkes IKKE.\\nAndres kopi av delt historikk påvirkes IKKE.','Rydd lokal cache',()=>{var n=now();var d30=n-30*864e5,d60=n-60*864e5;A.openJobs.forEach((j,id)=>{if(j.ts<d30)dropOpenJobLocal(id);});Object.keys(A.jobChats).forEach(k=>{if(!A.myJobs.find(j=>j.id===k)&&(!A.jobChats[k].length||A.jobChats[k][A.jobChats[k].length-1].ts<d60))delete A.jobChats[k];});Object.keys(A.dms).forEach(k=>{if(!A.dms[k].length||A.dms[k][A.dms[k].length-1].ts<d60){fsWriteDMRef(A.myId,k,{visibility:'hidden'});delete A.dms[k];}});persist();notify('✅','Lokal cache ryddet');render();})">🧹 Rydd lokal cache</button>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">${t('lang').toUpperCase()}</div>
   <div style="display:flex;gap:8px;margin-bottom:16px">${[['no','Norsk'],['en','English']].map(([v,l])=>
