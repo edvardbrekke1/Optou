@@ -7,8 +7,12 @@
 <title>OptoU</title>
 <meta name="theme-color" content="#DC4A27">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="OptoU">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="description" content="Få ting gjort sammen — med familie, venner og nabolag.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -4258,21 +4262,13 @@ window.shareApp=async()=>{if(D())console.log('[shareApp]');var url='https://edva
   catch(e){showConfirm('Del OptoU','Kopier denne lenken:\n'+url,'OK',()=>{});}};
 
 // ═══ PWA ═══
-(function(){try{const sz=512,c=document.createElement('canvas');c.width=c.height=sz;const ctx=c.getContext('2d');
-  ctx.fillStyle='#FF6B35';ctx.beginPath();ctx.arc(sz/2,sz/2,sz/2,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='#fff';ctx.font='bold '+(sz*.5)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('O',sz/2,sz*.52);
-  const png=c.toDataURL('image/png');const al=document.createElement('link');al.rel='apple-touch-icon';al.href=png;document.head.appendChild(al);
-  const manifest={name:'OptoU',short_name:'OptoU',start_url:location.href.replace(/[?#].*/,''),display:'standalone',background_color:'#FAF9F6',theme_color:'#FF6B35',
-    icons:[{src:png,sizes:'512x512',type:'image/png',purpose:'any maskable'}]};
-  const bl=new Blob([JSON.stringify(manifest)],{type:'application/manifest+json'});
-  const ml=document.createElement('link');ml.rel='manifest';ml.href=URL.createObjectURL(bl);document.head.appendChild(ml);
-}catch(e){}})();
-
-
-// ═══ SERVICE WORKER ═══
-// Note: SW registration disabled — blob:-URLs cannot be registered as service workers.
-// To enable offline support, deploy a static sw.js file alongside optou.html and register it here:
-// navigator.serviceWorker.register('./sw.js').catch(e=>console.warn('[SW]',e));
+window.addEventListener('load',()=>{
+  try{
+    if(!('serviceWorker' in navigator)) return;
+    if(!(location.protocol==='https:' || location.hostname==='localhost')) return;
+    navigator.serviceWorker.register('./sw.js').catch(e=>console.warn('[SW]',e));
+  }catch(e){console.warn('[SW]',e);}
+});
 
 
 // ═══ BOOT ═══
