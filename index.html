@@ -825,12 +825,14 @@ async function fsRequestGroupJoinCallable(gid){try{
   if(D())console.log('[FS] requestGroupJoinCallable',gid,result?.data);
   return result?.data?.ok?{ok:true,adminId:result.data.adminId||''}:{ok:false};
 }catch(e){
-  var msg=e?.message||'';
+  var code=String(e?.code||'');var msg=e?.message||'';
   if(msg.includes('Cannot request own group'))notify('⚠️','Du eier denne gruppen');
   else if(msg.includes('Private group'))notify('⚠️','Denne gruppen er privat');
   else if(msg.includes('Already a member')||msg.includes('already a member'))notify('⚠️','Allerede medlem');
+  else if(code.includes('resource-exhausted')||msg.includes('Group join cooldown active'))notify('⏳','Vent litt før du sender igjen');
+  else if(code.includes('already-exists')||msg.includes('Group request already sent recently')||msg.includes('Group request already pending'))notify('ℹ️','Du har allerede sendt denne forespørselen nylig');
   else if(D())console.warn('[FS] requestGroupJoinCallable error',gid,msg);
-  return{ok:false};}}
+  return{ok:false,handled:true};}}
 async function fsResolveGroupRequestCallable(gid,peerId,adminId,status){try{
   if(!firebase?.functions||!firebase?.auth||!A.myId||!gid||!peerId)return false;
   var fn=firebase.functions().httpsCallable('resolveGroupRequest');
@@ -858,10 +860,12 @@ async function fsSendFriendRequestCallable(targetId,targetName){try{
   A._friendRequests[targetId]={peerId:targetId,peerName:targetName||'',direction:'outgoing',status:'pending',ts:Date.now(),updatedAt:Date.now()};
   qPersist();return true;
 }catch(e){
-  var msg=e?.message||'';
+  var code=String(e?.code||'');var msg=e?.message||'';
   if(msg.includes('Cannot send friend request to yourself'))notify('⚠️','Kan ikke sende til deg selv');
   else if(msg.includes('Already friends')){notify('👤','Allerede venner');fsSyncMyFriendRefs().then(()=>render()).catch(()=>render());}
   else if(msg.includes('already pending'))notify('⏳','Venneforespørsel venter allerede');
+  else if(code.includes('resource-exhausted')||msg.includes('Friend request cooldown active'))notify('⏳','Vent litt før du sender igjen');
+  else if(code.includes('already-exists')||msg.includes('Friend request already sent recently'))notify('ℹ️','Du har allerede sendt denne forespørselen nylig');
   else if(msg.includes('not found'))notify('⚠️','Brukeren finnes ikke');
   else if(D())console.warn('[FS] sendFriendRequestCallable error',targetId,msg);
   return false;}}
@@ -2655,6 +2659,7 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
   const defExp=['public','friends'].includes(vis)?30:0;
   const expDays=A.nb.expiry!==undefined?A.nb.expiry:defExp;
   const expAt=expDays>0?now()+expDays*864e5:0;
+  const postNow=now();
   window._postBusy=true;
   try{const jobId='j'+now().toString(36)+Math.random().toString(36).substr(2,4);
   // Bake image-point markers into the image if present
@@ -2667,21 +2672,44 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
       cx2.fillStyle='#fff';cx2.font='bold '+Math.round(sz*1.1)+'px sans-serif';cx2.textAlign='center';cx2.textBaseline='middle';cx2.fillText(''+(i+1),x,y);}});
     res(cv2.toDataURL('image/webp',0.85));};img2.src=A.nb.imageData;});}catch(e){}}
   let imageUrl=null;
+  const items=(A.nb.items||[]).filter(it=>it.text.trim()||it.audioData||it.audioUrl);
+  const postMediaCleanup=[];
   // Upload to Firebase if available, otherwise keep inline
   if(A.nb.imageData&&hasFB()){
     notify('📤','Laster opp bilde...');
     imageUrl=await fbUpload(A.nb.imageData,'posts/'+jobId+'.webp');
+    if(imageUrl)postMediaCleanup.push(imageUrl);
   }
   if(D())console.log('[POST] imageUpload',{success:!!imageUrl,fallback:!imageUrl&&!!A.nb.imageData});
   // Upload audio for items
-  const items=(A.nb.items||[]).filter(it=>it.text.trim()||it.audioData||it.audioUrl);
   var audioFailed=false;
   for(let i=0;i<items.length;i++){if(items[i].audioData){
     if(hasFB()){const aUrl=await fbUpload(items[i].audioData,'audio/'+jobId+'_'+i+_aExt);
-      if(aUrl){items[i].audioUrl=aUrl;items[i].audioData=null;}else{audioFailed=true;}}
+      if(aUrl){items[i].audioUrl=aUrl;items[i].audioData=null;postMediaCleanup.push(aUrl);}else{audioFailed=true;}}
     else{audioFailed=true;}}}
   if(audioFailed)notify('⚠️','Noe lyd kunne ikke lastes opp. Andre vil ikke høre den.');
   if(D())console.log('[POST] audioUpload',{total:items.length,failed:audioFailed});
+  const postPayload={postId:jobId,type:A.nb.type||'help',title:t,desc:A.nb.desc.trim(),items:items.map(it=>({text:it.text.trim(),audioUrl:it.audioUrl||null,duration:it.duration||0,mode:it.mode||'list',status:it.status||'open',assignedTo:it.assignedTo||null,assignedName:it.assignedName||null,assignedStatus:it.assignedStatus||null})),
+    reward:A.nb.reward||'',location:A.nb.location||'',fylke:A.nb.fylke||A.myFylke||'',by:A.nb.by||A.myBy||'',
+    imageUrl:imageUrl||null,groupId:A.nb.groupId||null,groupName:A.nb.groupName||null,
+    jobDate:A.nb.jobDate||null,jobTime:A.nb.jobTime||null,visibility:A.nb.vis||((A.nb.type||'help')==='help'?'friends':'public'),
+    targetIds:(A.nb.vis==='direct'?(A.nb.targetIds||[]).slice(0,1):(A.nb.targetIds||[])),expiresAt:expAt};
+  var createdAt=postNow;
+  if(hasFB()&&firebase?.functions){
+    try{
+      var fn=firebase.functions().httpsCallable('createPost');
+      var r=await fn(postPayload);
+      createdAt=Number(r?.data?.createdAt)||postNow;
+    }catch(e){
+      postMediaCleanup.forEach(url=>{try{fsDeleteMediaUrl(url);}catch(_e){}});
+      var code=String(e?.code||'');var msg2=e?.message||'';
+      if(code.includes('resource-exhausted')||msg2.includes('Post create cooldown active'))notify('⏳','Vent litt før du publiserer igjen');
+      else if(code.includes('already-exists')||msg2.includes('Post already submitted recently')||msg2.includes('Post already exists'))notify('ℹ️','Du har allerede publisert noe tilsvarende nylig');
+      else notify('⚠️','Kunne ikke publisere nå');
+      if(D())console.warn('[doPost] createPost callable error',msg2);
+      return;
+    }
+  }
   const job={id:jobId,type:A.nb.type||'help',title:t,desc:A.nb.desc.trim(),items:items.map(it=>({text:it.text.trim(),audioUrl:it.audioUrl||null,audioData:it.audioUrl?null:(it.audioData||null),duration:it.duration||0,mode:it.mode||'list',status:it.status||'open',assignedTo:it.assignedTo||null,assignedName:it.assignedName||null,assignedStatus:it.assignedStatus||null})),
     reward:A.nb.reward||'',location:A.nb.location||'',fylke:A.nb.fylke||A.myFylke||'',by:A.nb.by||A.myBy||'',
     imageData:imageUrl?null:A.nb.imageData||null, // Inline only if no Firebase
@@ -2689,7 +2717,7 @@ window.doPost=async()=>{if(window._postBusy)return;const t=A.nb.title?.trim();if
     groupId:A.nb.groupId||null,groupName:A.nb.groupName||null,
     jobDate:A.nb.jobDate||null,jobTime:A.nb.jobTime||null,
     visibility:A.nb.vis||((A.nb.type||'help')==='help'?'friends':'public'),targetIds:(A.nb.vis==='direct'?(A.nb.targetIds||[]).slice(0,1):(A.nb.targetIds||[])),
-    creatorId:A.myId,creatorName:A.myName,ts:now(),expiresAt:expAt,status:'open',interests:[]};
+    creatorId:A.myId,creatorName:A.myName,ts:createdAt,expiresAt:expAt,status:'open',interests:[]};
   A.myJobs.push({...job});
   if(A.nb.imageData)dbPut('images',jobId,A.nb.imageData);
   var lj=A.myJobs.find(x=>x.id===jobId);
@@ -2978,15 +3006,26 @@ window.doHelp=async(jid,cid)=>{if(A.myJobs.find(x=>x.id===jid))return;const oj=A
       if(!_dj.exists||!Array.isArray(_dj.data()?.targetIds)||!_dj.data().targetIds.includes(A.myId)||['cancelled','done','never_done','declined','expired'].includes(_dj.data()?.status)){dropOpenJobLocal(jid);persist();updateB();sR();notify('⚠️','Denne direkte foresporselen gjelder ikke lenger deg');return;}
     }catch(e){notify('⚠️','Kunne ikke verifisere foresporselen akkurat nå. Prov igjen snart.');return;}}
   const ha=window._helpAudio;window._helpAudio=null;
-  if(!A.contacts.find(c=>c.id===cid)){A.tempConns.set(jid,{peerId:cid,name:oj?.creatorName||'',ts:now()});tryC(cid);}
-  dropOpenJobLocal(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
-    fylke:oj?.fylke,by:oj?.by,imageUrl:oj?.imageUrl,imageData:oj?.imageData,groupId:oj?.groupId,groupName:oj?.groupName,jobDate:oj?.jobDate,jobTime:oj?.jobTime,
-    visibility:oj?.visibility||null,targetIds:Array.isArray(oj?.targetIds)?oj.targetIds.slice(0,1):[],expiresAt:oj?.expiresAt||0,isFromContact:!!oj?.isFromContact,isPublic:!!oj?.isPublic,
-    creatorId:cid,creatorName:oj?.creatorName,status:'pending',isHelper:true,ts:now()});
-  send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0});
-  if(hasFS()){try{fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId).set({id:A.myId,name:A.myName,msg:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,ts:Date.now()}).catch(e=>console.warn('[FS] interest write',e));}catch(e){}}
-  fsWriteJobRef(A.myId,jid,{role:'applicant',status:'pending',visibility:'active',archivedAt:null,createdAt:Date.now()});
-  persist();go('mine');notify('✅','Interesse sendt!');};
+  if(!firebase?.functions||!firebase?.auth||!A.myId){notify('⚠️','Kunne ikke sende søknaden akkurat nå');return;}
+  try{
+    var fn=firebase.functions().httpsCallable('submitInterest');
+    await fn({jid:jid,msg:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,points:[]});
+    if(!A.contacts.find(c=>c.id===cid)){A.tempConns.set(jid,{peerId:cid,name:oj?.creatorName||'',ts:now()});tryC(cid);}
+    dropOpenJobLocal(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
+      fylke:oj?.fylke,by:oj?.by,imageUrl:oj?.imageUrl,imageData:oj?.imageData,groupId:oj?.groupId,groupName:oj?.groupName,jobDate:oj?.jobDate,jobTime:oj?.jobTime,
+      visibility:oj?.visibility||null,targetIds:Array.isArray(oj?.targetIds)?oj.targetIds.slice(0,1):[],expiresAt:oj?.expiresAt||0,isFromContact:!!oj?.isFromContact,isPublic:!!oj?.isPublic,
+      creatorId:cid,creatorName:oj?.creatorName,status:'pending',isHelper:true,ts:now()});
+    send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0});
+    fsWriteJobRef(A.myId,jid,{role:'applicant',status:'pending',visibility:'active',archivedAt:null,createdAt:Date.now()});
+    persist();go('mine');notify('✅','Interesse sendt!');
+  }catch(e){
+    var code=String(e?.code||'');var msg2=e?.message||'';
+    if(code.includes('resource-exhausted')||msg2.includes('Interest cooldown active'))notify('⏳','Vent litt før du sender igjen');
+    else if(code.includes('already-exists')||msg2.includes('Interest already submitted recently')||msg2.includes('Interest already pending'))notify('ℹ️','Du har allerede sendt søknaden nylig');
+    else if(code.includes('invalid-argument')||msg2.includes('Cannot submit interest to own post'))notify('⚠️','Du kan ikke søke på din egen jobb');
+    else if(code.includes('not-found')||msg2.includes('Post not found'))notify('⚠️','Jobben finnes ikke lenger');
+    else if(D())console.warn('[doHelp] callable error',msg2);
+  }};
 window.reinviteDirect=async function(jobId){
   var j=A.myJobs.find(x=>x.id===jobId);
   if(!j||j.creatorId!==A.myId||j.visibility!=='direct'){notify('⚠️','Fant ikke direktejobben');return;}
@@ -3024,7 +3063,7 @@ window.togglePointInterest=(jid,idx)=>{if(!A._pointPick[jid])A._pointPick[jid]=[
     var oj=A.openJobs.get(jid)||A.myJobs.find(x=>x.id===jid);var it=oj?.items?.[idx];
     if(!it||(it.status||'open')!=='open'||it.assignedTo)return;
     arr.push(idx);}render();};
-window.doHelpPoints=(jid,cid)=>{var existing=A.myJobs.find(x=>x.id===jid);
+window.doHelpPoints=async(jid,cid)=>{var existing=A.myJobs.find(x=>x.id===jid);
   var oj=A.openJobs.get(jid)||existing;
   var _canPointReapply=existing&&oj?.items?.length&&!['cancelled','declined','never_done','done','expired'].includes(oj.status)&&oj.items.some(it=>!it.assignedTo);
   if(!oj||(!['open','accepting'].includes(oj.status)&&!_canPointReapply)){notify('⚠️','Denne jobben tar ikke imot søknader');return;}
@@ -3033,17 +3072,37 @@ window.doHelpPoints=(jid,cid)=>{var existing=A.myJobs.find(x=>x.id===jid);
   if(!pts.length){notify('⚠️','Velg minst ett punkt');return;}
   var msg=$('jmsg')?.value?.trim()||'';var ha=window._helpAudio;window._helpAudio=null;
   if(D())console.log('[doHelpPoints]',{jid,cid,points:pts,reApply:!!existing});
+  var _sendPts=existing?existing._myPoints?.slice()||pts.slice():pts.slice();
+  if(!existing){
+    if(!firebase?.functions||!firebase?.auth||!A.myId){notify('⚠️','Kunne ikke sende søknaden akkurat nå');return;}
+    try{
+      var fn=firebase.functions().httpsCallable('submitInterest');
+      await fn({jid:jid,msg:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,points:_sendPts});
+      if(!A.contacts.find(c=>c.id===cid)){A.tempConns.set(jid,{peerId:cid,name:oj?.creatorName||'',ts:now()});tryC(cid);}
+      dropOpenJobLocal(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
+        fylke:oj?.fylke,by:oj?.by,imageUrl:oj?.imageUrl,imageData:oj?.imageData,groupId:oj?.groupId,groupName:oj?.groupName,jobDate:oj?.jobDate,jobTime:oj?.jobTime,
+        visibility:oj?.visibility||null,targetIds:Array.isArray(oj?.targetIds)?oj.targetIds.slice(0,1):[],expiresAt:oj?.expiresAt||0,isFromContact:!!oj?.isFromContact,isPublic:!!oj?.isPublic,
+        creatorId:cid,creatorName:oj?.creatorName,status:'pending',isHelper:true,isPointApplicant:true,_myPoints:_sendPts.slice(),ts:now()});
+      send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,points:_sendPts});
+      fsWriteJobRef(A.myId,jid,{role:'applicant',status:'pending',visibility:'active',archivedAt:null,createdAt:Date.now()});
+      delete A._pointPick[jid];persist();go('mine');notify('✅','Søknad sendt for '+pts.length+' punkt'+(pts.length>1?'er':'')+'!');
+    }catch(e){
+      var code=String(e?.code||'');var msg2=e?.message||'';
+      if(code.includes('resource-exhausted')||msg2.includes('Interest cooldown active'))notify('⏳','Vent litt før du sender igjen');
+      else if(code.includes('already-exists')||msg2.includes('Interest already submitted recently')||msg2.includes('Interest already pending'))notify('ℹ️','Du har allerede sendt søknaden nylig');
+      else if(code.includes('invalid-argument')||msg2.includes('Cannot submit interest to own post'))notify('⚠️','Du kan ikke søke på din egen jobb');
+      else if(code.includes('not-found')||msg2.includes('Post not found'))notify('⚠️','Jobben finnes ikke lenger');
+      else if(D())console.warn('[doHelpPoints] callable error',msg2);
+    }
+    return;
+  }
   if(!A.contacts.find(c=>c.id===cid)){A.tempConns.set(jid,{peerId:cid,name:oj?.creatorName||'',ts:now()});tryC(cid);}
-  if(!existing){dropOpenJobLocal(jid);A.myJobs.push({id:jid,type:oj?.type,title:oj?.title,desc:oj?.desc,items:oj?.items,reward:oj?.reward,location:oj?.location,
-    fylke:oj?.fylke,by:oj?.by,imageUrl:oj?.imageUrl,imageData:oj?.imageData,groupId:oj?.groupId,groupName:oj?.groupName,jobDate:oj?.jobDate,jobTime:oj?.jobTime,
-    visibility:oj?.visibility||null,targetIds:Array.isArray(oj?.targetIds)?oj.targetIds.slice(0,1):[],expiresAt:oj?.expiresAt||0,isFromContact:!!oj?.isFromContact,isPublic:!!oj?.isPublic,
-    creatorId:cid,creatorName:oj?.creatorName,status:'pending',isHelper:true,isPointApplicant:true,_myPoints:pts.slice(),ts:now()});
-  }else{var _old=existing._myPoints||[];existing._myPoints=[..._old,...pts.filter(p=>!_old.includes(p))];existing.isPointApplicant=true;
-    if(!(hasPointAssignment(existing,A.myId)||existing.isPointHelper))existing.status='pending';
-    else if(!['active','pending_review','done'].includes(existing.status))existing.status='active';}
-  var _sendPts=existing?existing._myPoints.slice():pts.slice();
-  send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,points:_sendPts});
-  if(hasFS()){try{fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId).set({id:A.myId,name:A.myName,msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,points:_sendPts,type:'application',ts:Date.now()},{merge:true}).catch(e=>console.warn('[FS] interest write',e));}catch(e){}}
+  var _old=existing._myPoints||[];existing._myPoints=[..._old,...pts.filter(p=>!_old.includes(p))];existing.isPointApplicant=true;
+  if(!(hasPointAssignment(existing,A.myId)||existing.isPointHelper))existing.status='pending';
+  else if(!['active','pending_review','done'].includes(existing.status))existing.status='active';
+  var _mergePts=existing._myPoints.slice();
+  send(cid,{t:'JR',jid,name:A.myName,message:msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,points:_mergePts});
+  if(hasFS()){try{fbDb.collection('posts').doc(jid).collection('interests').doc(A.myId).set({id:A.myId,name:A.myName,msg,audioUrl:ha?.url||null,audioDur:ha?.dur||0,points:_mergePts,type:'application',ts:Date.now()},{merge:true}).catch(e=>console.warn('[FS] interest write',e));}catch(e){}}
   fsWriteJobRef(A.myId,jid,{role:'applicant',status:'pending',visibility:'active',archivedAt:null,createdAt:Date.now()});
   delete A._pointPick[jid];persist();go('mine');notify('✅','Søknad sendt for '+pts.length+' punkt'+(pts.length>1?'er':'')+'!');};
 window.withdrawHelp=async(jid,cid)=>{if(D())console.log('[withdrawHelp]',{jid,cid,connOpen:!!A.conns.get(cid)?.open});
@@ -3540,22 +3599,32 @@ function vReport(){var d=A._reportDraft||{};var reasons=[['spam','Spam'],['haras
   <button class="btn bs" onclick="cancelReport()">Avbryt</button>
   </div></div>`;}
 async function fsSubmitReport(payload){
-  if(!hasFS()||!A.myId)return false;
-  try{await fbDb.collection('reports').doc().set({...payload,reporterId:A.myId,reporterName:A.myName||'',createdAt:Date.now(),status:'open'});
-    if(D())console.log('[FS] submitReport',payload.targetType,payload.targetId,payload.reason);return true;
-  }catch(e){if(D())console.warn('[FS] submitReport error',e.message);return false;}}
+  try{
+    if(!firebase?.functions||!firebase?.auth||!A.myId)return false;
+    var fn=firebase.functions().httpsCallable('submitReport');
+    await fn({targetType:payload.targetType,targetId:payload.targetId,reason:payload.reason,text:payload.text||''});
+    if(D())console.log('[FS] submitReportCallable',payload.targetType,payload.targetId,payload.reason);
+    return true;
+  }catch(e){
+    var code=String(e?.code||'');var msg=e?.message||'';
+    if(code.includes('resource-exhausted')||msg.includes('Report cooldown active')){notify('⏳','Vent litt før du sender igjen');return 'handled';}
+    if(code.includes('already-exists')||msg.includes('Open report already exists')){notify('ℹ️','Du har allerede en åpen rapport for dette innholdet');return 'handled';}
+    if(code.includes('unauthenticated')){notify('👤','Opprett en profil for å rapportere innhold');return 'handled';}
+    if(D())console.warn('[FS] submitReport error',msg);
+    return false;
+  }}
 window.doSubmitReport=async()=>{var d=A._reportDraft||{};if(!d.reason)return;
   if(d.reason==='other'&&!(d.text||'').trim()){notify('⚠️','Skriv en beskrivelse');return;}
   var payload={targetType:d.targetType,targetId:d.targetId,reason:d.reason,text:(d.text||'').trim()};
   var ok=await fsSubmitReport(payload);
-  if(ok){
+  if(ok===true){
     if(!A._reportedTargets)A._reportedTargets=new Set();
     A._reportedTargets.add(d.targetType+':'+d.targetId);
     notify('✅','Rapporten er sendt. Takk.');
     var fromScreen=d.from||'feed';var fromParams=d.fromParams||{};
     A._reportDraft=null;
     if(fromScreen==='jobDetail'||fromScreen==='groupDetail')go(fromScreen,fromParams);else go('feed');
-  }else{notify('⚠️','Kunne ikke sende rapport. Prøv igjen.');}};
+  }else if(ok!== 'handled'){notify('⚠️','Kunne ikke sende rapport. Prøv igjen.');}};
 async function fsLoadSupportThread(){if(!hasFS()||!A.myId)return;
   try{var tRef=fbDb.collection('supportThreads').doc(A.myId);
     var tDoc=await tRef.get();
@@ -3567,17 +3636,28 @@ async function fsLoadSupportThread(){if(!hasFS()||!A.myId)return;
     A._supportLoaded=true;sR();
   }catch(e){A._supportLoaded=true;if(D())console.warn('[support] thread load',e.message);sR();}}
 async function fsSendSupportMessage(text){
-  if(!text||!text.trim())return;var t=text.trim();if(t.length>2000)t=t.substring(0,2000);
-  var now_=Date.now();if(now_-A._supportLastSend<2000){notify('⏳','Vent litt før du sender igjen');return;}
-  if(!hasFS()||!A.myId){notify('⚠️','Kunne ikke sende');return;}
+  if(!text||!text.trim())return;
+  var t=text.trim();
+  if(t.length>2000){notify('⚠️','Meldingen er for lang');return;}
+  var now_=Date.now();
+  if(now_-A._supportLastSend<2000){notify('⏳','Vent litt før du sender igjen');return;}
+  if(!firebase?.functions||!firebase?.auth||!A.myId){notify('⚠️','Kunne ikke sende');return;}
   A._supportLastSend=now_;
-  try{var tRef=fbDb.collection('supportThreads').doc(A.myId);
-    if(!A._supportThread){await tRef.set({userId:A.myId,userName:A.myName||'',createdAt:now_,updatedAt:now_,status:'open',lastSender:'user',adminUnread:true,userUnread:false});}
-    await tRef.collection('messages').add({sender:'user',senderName:A.myName||'',text:t,ts:now_});
-    await tRef.update({updatedAt:now_,lastSender:'user',adminUnread:true,userUnread:false});
+  try{
+    var fn=firebase.functions().httpsCallable('sendSupportMessage');
+    await fn({text:t});
     notify('✅','Melding sendt');
     await fsLoadSupportThread();
-  }catch(e){if(D())console.warn('[support] send',e.message);notify('⚠️','Kunne ikke sende. Prøv igjen senere.');A._supportLastSend=0;}}
+  }catch(e){
+    var code=String(e?.code||'');var msg=e?.message||'';
+    var handled=false;
+    if(code.includes('resource-exhausted')||msg.includes('Support cooldown active'))notify('⏳','Vent litt før du sender igjen');
+    else if(code.includes('already-exists')||msg.includes('Duplicate support message'))notify('ℹ️','Samme melding ble sendt nylig');
+    else if(code.includes('unauthenticated'))notify('⚠️','Kunne ikke sende');
+    else {handled=true;if(D())console.warn('[support] send',msg);}
+    A._supportLastSend=0;
+    if(handled||!(code.includes('resource-exhausted')||msg.includes('Support cooldown active')||code.includes('already-exists')||msg.includes('Duplicate support message')||code.includes('unauthenticated')))notify('⚠️','Kunne ikke sende. Prøv igjen senere.');
+  }}
 window.doSendSupport=()=>{var ta=$('sup-ta');if(!ta)return;var t=ta.value;ta.value='';fsSendSupportMessage(t);};
 function vSupport(){if(!A._supportLoaded)fsLoadSupportThread();
   var t=A._supportThread;var msgs=A._supportMessages||[];var isClosed=t&&t.status==='closed';
@@ -3732,7 +3812,7 @@ window.requestGroupJoin=(gid,gname)=>{if(A.groups.find(g=>g.id===gid)){notify('�
       A._myGroupRequests[gid]={name:data.name||gname||'',ts:reqTs};persist();
       if(adminId&&adminId!==A.myId){A.tempConns.set('greq:'+gid,{peerId:adminId,name:data.name||gname||'',ts:now()});send(adminId,{t:'GQ',gid,peerId:A.myId,name:A.myName,avatar:ls('oAvatar')||'',bio:A.myBio||'',fylke:A.myFylke||'',by:A.myBy||'',gname:data.name||gname||gid,ts:reqTs});}
       notify('✅','Forespørsel sendt!');}
-    else notify('⚠️','Kunne ikke sende forespørsel');});};
+    else if(!r?.handled)notify('⚠️','Kunne ikke sende forespørsel');});};
 window.approveGroupRequest=async(gid,peerId,name)=>{if(D())console.log('[approveGroupRequest]',{gid,peerId});
   const g=A.groups.find(x=>x.id===gid);if(!g){notify('⚠️','Gruppe ikke funnet');return;}
   var _rok=await fsResolveGroupRequestCallable(gid,peerId,g.creatorId||A.myId,'approved');
@@ -3824,10 +3904,21 @@ window.doCreateGroup=async()=>{if(D())console.log('[-> doCreateGroup]');const n=
   const ph=rawPass?await hashPass(rawPass):null;
   let imageUrl=null;
   if(A.nb._gImg&&hasFB()){try{imageUrl=await fbUpload(A.nb._gImg,'groups/'+id+'.webp');}catch(e){if(D())console.log('[doCreateGroup] img upload err',e.message);notify('⚠️','Kunne ikke laste opp gruppebildet');return;}}
-  const fsData={name:n,nameLower:n.toLowerCase(),desc,private:priv,fylke,imageUrl:imageUrl||null,creatorId:A.myId,createdAt:Date.now(),members:[A.myId],hasPasscode:!!ph,invitePolicy:'members'};
-  if(ph)fsData.passHash=ph;
-  if(!(await fsWriteGroup(id,fsData))){notify('⚠️','Kunne ikke opprette gruppen akkurat nå');return;}
-  A.groups.push({id,name:n,desc,creatorId:A.myId,createdTs:now(),isGroup:true,private:priv,_members:[A.myId],imageUrl,fylke,hasPasscode:!!ph,invitePolicy:'members'});
+  try{
+    if(!firebase?.functions||!firebase?.auth||!A.myId){notify('⚠️','Kunne ikke opprette gruppen akkurat nå');return;}
+    var fn=firebase.functions().httpsCallable('createGroup');
+    var r=await fn({groupId:id,name:n,desc,private:priv,fylke,imageUrl:imageUrl||null,hasPasscode:!!ph,passHash:ph||'',invitePolicy:'members'});
+    var createdAt=r?.data?.createdAt||Date.now();
+    A.groups.push({id,name:n,desc,creatorId:A.myId,creatorName:A.myName||'',createdTs:createdAt,isGroup:true,private:priv,_members:[A.myId],imageUrl,fylke,hasPasscode:!!ph,invitePolicy:'members'});
+  }catch(e){
+    var code=String(e?.code||'');var msg=e?.message||'';
+    if(imageUrl)try{fsDeleteMediaUrl(imageUrl);}catch(_e){}
+    if(code.includes('resource-exhausted')||msg.includes('Group create cooldown active'))notify('⏳','Vent litt før du oppretter en ny gruppe');
+    else if(code.includes('already-exists')||msg.includes('Group name already used recently')||msg.includes('Group already exists'))notify('ℹ️','Det navnet ble brukt nylig');
+    else if(code.includes('unauthenticated'))notify('👤','Opprett en profil for å opprette grupper');
+    else if(D())console.warn('[doCreateGroup] callable error',msg);
+    return;
+  }
   fsWriteGroupRef(A.myId,id,{role:'admin',visibility:'active',joinedAt:Date.now(),leftAt:null});
   persist();bcast({t:'HI',...myPres()});
   // GRP gossip removed — public group discovery via Firestore (fsLoadPublicGroups) only
