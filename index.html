@@ -215,6 +215,8 @@ const DEFAULT_GROUPS=[
 ];
 const ls=k=>localStorage.getItem(k),ss=(k,v)=>localStorage.setItem(k,typeof v==='string'?v:JSON.stringify(v)),$=id=>document.getElementById(id),uid=()=>'m'+Date.now().toString(36)+Math.random().toString(36).substr(2,5),now=()=>Date.now(),esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const PUSH_MODES={off:'off',personal:'personal',all:'all'};
+const BACKUP_SCHEMA_VERSION=1;
+const BACKUP_STORAGE_KEYS=['oId','oName','oBio','oCity','oFylke','oBy','oAvatar','oPriv','oPub','oEPriv','oEPub','oESig','oDone','oLang','oPushMode','oConsentV1'];
 const FB_PUSH_VAPID_KEY=(window.__OPTOU_VAPID_KEY__||ls('oPushVapidKey')||'').trim();
 let fbMessaging=undefined,_pushSyncP=null,_messagingSdkLoadP=null;
 function getPushMode(){const m=ls('oPushMode')||PUSH_MODES.personal;return Object.values(PUSH_MODES).includes(m)?m:PUSH_MODES.personal;}
@@ -222,14 +224,22 @@ function pushSupported(){return typeof Notification!=='undefined'&&'permission' 
 function pushTransportSupported(){return pushSupported()&&'serviceWorker' in navigator&&'PushManager' in window&&typeof firebase!=='undefined';}
 function pushPermissionState(){return pushSupported()?Notification.permission:'unsupported';}
 function pushEnabledNow(mode){const m=mode||A.pushMode||getPushMode();return !A.isGuest&&m!==PUSH_MODES.off&&pushTransportSupported()&&pushPermissionState()==='granted';}
+function pushDeviceReady(){return !!currentPushToken();}
 function pushNudgeSeen(){return ls('oPushNudgeV1')==='1';}
 function markPushNudgeSeen(){ss('oPushNudgeV1','1');}
 function isStandaloneLike(){try{return !!((window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)||window.navigator.standalone);}catch(e){return false;}}
 function pushModeLabel(mode){return mode===PUSH_MODES.off?'Av':mode===PUSH_MODES.all?'Mer aktivitet / alt':'Bare det som gjelder meg';}
 function pushModeDesc(mode){return mode===PUSH_MODES.off?'Ingen browser-varsler. In-app varsler fungerer fortsatt.':mode===PUSH_MODES.all?'Fanger også mer aktivitet, men fortsatt innenfor appens truth-modell.':'Bare personlige signaler som gjelder deg.';}
+function pushStatusText(){const mode=A.pushMode||getPushMode();
+  if(!pushTransportSupported())return 'Denne nettleseren støtter ikke push-varsler.';
+  if(mode===PUSH_MODES.off)return 'Varsler er slått av.';
+  if(pushPermissionState()==='granted')return pushDeviceReady()?`Valgt nivå: ${pushModeLabel(mode)} · Denne enheten er klar for varsler`:`Valgt nivå: ${pushModeLabel(mode)} · Nettleseren har sagt ja, men denne enheten er ikke registrert helt ennå`;
+  if(pushPermissionState()==='denied')return `Valgt nivå: ${pushModeLabel(mode)} · Blokkert i nettleseren`;
+  return `Valgt nivå: ${pushModeLabel(mode)} · Trykk på «Tillat varsler» for å slå på nettleservarsler`; }
 async function setPushMode(mode,opts){if(!Object.values(PUSH_MODES).includes(mode))return false;if(A.isGuest){notify('👤','Opprett en profil for å slå på varsler');return false;}
+  const prev=A.pushMode||getPushMode();
   A.pushMode=mode;ss('oPushMode',mode);render();
-  if(opts?.ask&&mode!==PUSH_MODES.off&&pushPermissionState()==='default')await askPushPermission({source:'settings'});
+  if(opts?.ask&&mode!==PUSH_MODES.off&&pushPermissionState()==='default'&&mode!==prev)await askPushPermission({source:'settings'});
   syncPushRegistration({force:true}).catch(()=>{if(hasFS())fsRegisterUser().catch(()=>{});});
   return true;}
 async function askPushPermission(opts){if(A.isGuest){notify('👤','Opprett en profil for å slå på varsler');return false;}
@@ -248,15 +258,148 @@ async function askPushPermission(opts){if(A.isGuest){notify('👤','Opprett en p
   bg.querySelector('#_pp_yes').onclick=async()=>{bg.remove();try{const perm=await Notification.requestPermission();if(perm==='granted'){notify('✅','Varsler er slått på');syncPushRegistration({force:true}).catch(()=>{if(hasFS())fsRegisterUser().catch(()=>{});});}else{notify('ℹ️','Varsler er ikke slått på');syncPushRegistration({force:true}).catch(()=>{if(hasFS())fsRegisterUser().catch(()=>{});});}}catch(e){notify('⚠️','Kunne ikke be om varsler');}};
   bg.onclick=e=>{if(e.target===bg)bg.remove();};
   return true;}
-function maybeShowPushNudge(){if(A.isGuest||!A.myName||!pushTransportSupported())return false;
-  if(pushNudgeSeen())return false;
+function maybeShowPushNudge(opts){opts=opts||{};if(A.isGuest||!A.myName||!pushTransportSupported())return false;
+  if(pushNudgeSeen()&&!opts.force)return false;
   if(pushPermissionState()!=='default')return false;
   if((A.pushMode||getPushMode())===PUSH_MODES.off)return false;
-  if(!isStandaloneLike())return false;
+  if(!opts.force&&!isStandaloneLike())return false;
   markPushNudgeSeen();
-  setTimeout(()=>{askPushPermission({auto:true});},700);
+  setTimeout(()=>{askPushPermission({auto:true,source:opts.source||'auto'});},opts.delayMs||700);
   return true;}
 function currentPushToken(){return ls('oPushToken')||'';}
+function backupNudgeSeen(){return ls('oBackupNudgeV1')==='1';}
+function markBackupNudgeSeen(){ss('oBackupNudgeV1','1');}
+function backupHasStatus(){return!!(A._backupStatus&&A._backupStatus.exists);}
+function fmtDateTime(ts){if(!ts)return'';try{return new Date(ts).toLocaleString((ls('oLang')||'no')==='en'?'en-GB':'nb-NO',{dateStyle:'medium',timeStyle:'short'});}catch(e){return new Date(ts).toLocaleString();}}
+function cloneJson(v){try{return JSON.parse(JSON.stringify(v));}catch(e){return null;}}
+function backupStatusLead(){
+  if(A.isGuest)return'Opprett en profil for å bruke sikkerhetskopi.';
+  if(A._backupLoading&&!A._backupLoaded)return'Laster status...';
+  if(backupHasStatus())return'Du har en sikkerhetskopi.';
+  return'Du har ingen sikkerhetskopi ennå.';
+}
+function backupStatusSub(){
+  if(A.isGuest)return'Gjenoppretting blir tilgjengelig når du har en profil.';
+  if(A._backupLoading&&!A._backupLoaded)return'Vi sjekker om du allerede har lagret en sikkerhetskopi.';
+  if(backupHasStatus()){
+    var when=A._backupStatus.updatedAt||A._backupStatus.createdAt||0;
+    return when?`Sist oppdatert: ${fmtDateTime(when)}`:'Du kan oppdatere den når du vil.';
+  }
+  return'Lag en sikkerhetskopi så du kan hente tilbake profilen din hvis du bytter telefon eller mister nettleserdata.';
+}
+function backupRecoverNote(){return'Du trenger gjenopprettingskoden din, og gjenoppretting erstatter OptoU-dataene på denne enheten.';}
+function buildBackupPackage(){
+  var local={};BACKUP_STORAGE_KEYS.forEach(k=>{var v=ls(k);if(v!==null&&v!==undefined&&v!=='')local[k]=String(v);});
+  local.oId=A.myId||local.oId||'';
+  local.oName=A.myName||local.oName||'';
+  local.oBio=A.myBio||local.oBio||'';
+  local.oCity=A.myCity||local.oCity||'';
+  local.oFylke=A.myFylke||local.oFylke||'';
+  local.oBy=A.myBy||local.oBy||'';
+  local.oPushMode=A.pushMode||local.oPushMode||getPushMode();
+  return{
+    version:BACKUP_SCHEMA_VERSION,
+    exportedAt:Date.now(),
+    profile:{
+      myId:A.myId||'',
+      myName:A.myName||'',
+      myBio:A.myBio||'',
+      myCity:A.myCity||'',
+      myFylke:A.myFylke||'',
+      myBy:A.myBy||''
+    },
+    localStorage:local,
+    config:cloneJson({
+      myJobs:A.myJobs||[],
+      contacts:A.contacts||[],
+      groups:A.groups||[],
+      blocked:[...A.blocked],
+      rated:[...A.rated],
+      myGroupRequests:A._myGroupRequests||{},
+      friendRefs:A._friendRefs||{},
+      friendRequests:A._friendRequests||{}
+    })||{}
+  };
+}
+async function resetLocalOptouState(){
+  try{if(firebase?.auth)await firebase.auth().signOut().catch(()=>{});}catch(e){}
+  try{if(db){try{db.close();}catch(e){}db=null;}}catch(e){}
+  await new Promise(resolve=>{
+    try{
+      var req=indexedDB.deleteDatabase('optou');
+      var done=false;
+      var fin=()=>{if(done)return;done=true;resolve();};
+      req.onsuccess=fin;req.onerror=fin;req.onblocked=()=>setTimeout(fin,1200);
+      setTimeout(fin,1500);
+    }catch(e){resolve();}
+  });
+  try{localStorage.clear();}catch(e){}
+}
+async function applyRecoveredPackage(pkg){
+  if(!pkg||typeof pkg!=='object')throw new Error('Mangler sikkerhetskopi');
+  var local=(pkg.localStorage&&typeof pkg.localStorage==='object')?pkg.localStorage:{};
+  var cfg=(pkg.config&&typeof pkg.config==='object')?pkg.config:{};
+  await resetLocalOptouState();
+  BACKUP_STORAGE_KEYS.forEach(k=>{if(local[k]!==undefined&&local[k]!==null&&local[k]!=='')ss(k,String(local[k]));});
+  ss('oBackupNudgeV1','1');
+  await openDB();
+  await Promise.all([
+    dbPut('config','myJobs',Array.isArray(cfg.myJobs)?cfg.myJobs:[]),
+    dbPut('config','jobChats',{}),
+    dbPut('config','dms',{}),
+    dbPut('config','contacts',Array.isArray(cfg.contacts)?cfg.contacts:[]),
+    dbPut('config','blocked',Array.isArray(cfg.blocked)?cfg.blocked:[]),
+    dbPut('config','ratings',{}),
+    dbPut('config','activity',[]),
+    dbPut('config','offlineQ',[]),
+    dbPut('config','relayQ',[]),
+    dbPut('config','openJobs',[]),
+    dbPut('config','rated',Array.isArray(cfg.rated)?cfg.rated:[]),
+    dbPut('config','seenMids',[]),
+    dbPut('config','seenAcks',[]),
+    dbPut('config','groups',Array.isArray(cfg.groups)?cfg.groups:[]),
+    dbPut('config','tempConns',[]),
+    dbPut('config','removedContacts',[]),
+    dbPut('config','deadJobs',[]),
+    dbPut('config','myGroupRequests',(cfg.myGroupRequests&&typeof cfg.myGroupRequests==='object')?cfg.myGroupRequests:{}),
+    dbPut('config','friendRefs',(cfg.friendRefs&&typeof cfg.friendRefs==='object')?cfg.friendRefs:{}),
+    dbPut('config','friendRequests',(cfg.friendRequests&&typeof cfg.friendRequests==='object')?cfg.friendRequests:{})
+  ]);
+}
+function showBackupCodeModal(code,updatedAt){
+  const bg=document.createElement('div');bg.className='modal-bg';
+  bg.innerHTML=`<div class="modal"><div style="font-size:16px;font-weight:800;margin-bottom:8px">🔐 Ta vare på gjenopprettingskoden</div>
+    <div style="font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:16px">Denne koden trenger du hvis du skal hente tilbake profilen din på en ny enhet. Vi viser den bare nå.</div>
+    <div class="idd" style="margin-bottom:12px">${esc(code)}</div>
+    <div style="font-size:12px;color:var(--t3);line-height:1.6;margin-bottom:16px">${updatedAt?`Sist oppdatert: ${esc(fmtDateTime(updatedAt))}.`:''} Lagre koden et sted du finner den igjen.</div>
+    <div class="brow"><button class="btn bs" style="flex:1" id="_br_copy">Kopier koden</button>
+    <button class="btn bp" style="flex:1" id="_br_ok">Jeg har lagret den</button></div></div>`;
+  document.body.appendChild(bg);
+  bg.querySelector('#_br_copy').onclick=()=>{try{navigator.clipboard.writeText(code).then(()=>notify('✅','Koden er kopiert')).catch(()=>notify('📋',code));}catch(e){notify('📋',code);}};
+  bg.querySelector('#_br_ok').onclick=()=>bg.remove();
+  bg.onclick=e=>{if(e.target===bg)bg.remove();};
+}
+function maybeShowBackupNudge(opts){
+  opts=opts||{};
+  if(A.isGuest||!A.myName)return false;
+  if(backupNudgeSeen()&&!opts.force)return false;
+  if(backupHasStatus()&&!opts.force)return false;
+  markBackupNudgeSeen();
+  const show=()=>{
+    if(document.querySelector('.modal-bg')){setTimeout(show,800);return;}
+    const bg=document.createElement('div');bg.className='modal-bg';
+    bg.innerHTML=`<div class="modal"><div style="font-size:16px;font-weight:800;margin-bottom:8px">🛟 Sikre profilen din?</div>
+      <div style="font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:18px">Du kan lage en sikkerhetskopi så du kan hente tilbake profilen din hvis du bytter telefon eller mister nettleserdata.</div>
+      <div class="brow"><button class="btn bs" style="flex:1" id="_bn_no">Ikke nå</button>
+      <button class="btn bp" style="flex:1" id="_bn_yes">Se hvordan</button></div></div>`;
+    document.body.appendChild(bg);
+    bg.querySelector('#_bn_no').onclick=()=>bg.remove();
+    bg.querySelector('#_bn_yes').onclick=()=>{bg.remove();go('backup');};
+    bg.onclick=e=>{if(e.target===bg)bg.remove();};
+  };
+  setTimeout(show,opts.delayMs||2600);
+  return true;
+}
 async function loadMessagingSdk(){if(typeof firebase==='undefined')return false;if(firebase.messaging)return true;if(_messagingSdkLoadP)return _messagingSdkLoadP;
   _messagingSdkLoadP=new Promise((resolve,reject)=>{var s=document.createElement('script');s.src='https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js';s.async=true;
     s.onload=()=>resolve(true);s.onerror=()=>reject(new Error('messaging-sdk-load-failed'));document.head.appendChild(s);})
@@ -290,8 +433,9 @@ async function syncPushRegistration(opts){opts=opts||{};if(_pushSyncP&&!opts.for
     ss('oPushToken',token);
     await fbDb.collection('users').doc(A.myId).set({...base,pushToken:token,pushTokenUpdatedAt:Date.now(),pushTokenKind:'web'},{merge:true});
     return true;
-  })().finally(()=>{_pushSyncP=null;});
+  })().finally(()=>{_pushSyncP=null;sR();});
   return _pushSyncP;}
+window.retryPushRegistration=async()=>{try{var ok=await syncPushRegistration({force:true});if(ok)notify('✅','Denne enheten er klar for varsler');else notify('⚠️','Kunne ikke registrere denne enheten ennå');}catch(e){notify('⚠️','Kunne ikke registrere denne enheten ennå');}};
 function getEntryTargetFromUrl(){try{var _sp=new URLSearchParams(location.search);var _sharePost=_sp.get('post');var _shareGroup=_sp.get('group');var _dm=_sp.get('dm');
   if(_sharePost)return{type:'post',id:_sharePost};if(_shareGroup)return{type:'group',id:_shareGroup};if(_dm)return{type:'dm',id:_dm};}catch(e){}return null;}
 function clearEntryTargetUrl(){try{history.replaceState(null,'',location.pathname);}catch(e){}}
@@ -342,7 +486,7 @@ const A={myId:'',myName:'',myBio:'',myCity:'',myFylke:'',myBy:'',pubB64:'',privK
   contacts:[],blocked:new Set(),ratings:{},activity:[],offlineQ:[],relayQ:[],completedCount:0,
   screen:'loading',params:{},nb:{},rated:new Set(),unreadChat:0,unreadActivity:0,unreadGroups:0,unreadFeed:0,pushMode:getPushMode(),_seenMids:new Set(),_seenAcks:new Set(),groups:[],
   feedFilter:{type:'',fylke:'',by:'',allNorway:false},tempConns:new Map(),_publicGroups:[],_publicGroupsCursor:null,_publicGroupsHasMore:false,_publicGroupsLoading:false,_groupPostsHasMore:{},_groupPostsLoading:{},_publicPostsHasMore:false,_publicPostsLoading:false,_friendsPostsHasMore:false,_friendsPostsLoading:false,_contactQ:'',_editGroup:false,_pendingGroupImg:null,
-  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{},_groupRequests:{},_groupRequestsTs:{},_myGroupRequests:{},_friendRefs:{},_friendRequests:{},isGuest:false,_guestPosts:[],_guestPostsLoaded:false,_guestGroups:[],_guestGroupsLoaded:false,_guestPostById:{},_guestGroupById:{},_shareTarget:null,_guestGroupPosts:{},_supportThread:null,_supportMessages:[],_supportLoaded:false,_supportLastSend:0};
+  _unreadDMs:{},_unreadJobs:{},_unreadGroupPosts:{},_removedContacts:new Set(),_deadJobs:new Set(),_userNames:{},_pendingInvites:[],_showingInvite:null,_pointPick:{},_groupRequests:{},_groupRequestsTs:{},_myGroupRequests:{},_friendRefs:{},_friendRequests:{},isGuest:false,_guestPosts:[],_guestPostsLoaded:false,_guestGroups:[],_guestGroupsLoaded:false,_guestPostById:{},_guestGroupById:{},_shareTarget:null,_guestGroupPosts:{},_supportThread:null,_supportMessages:[],_supportLoaded:false,_supportLastSend:0,_backupStatus:null,_backupLoaded:false,_backupLoading:false,_backupBusy:false};
 
 async function loadState(){
   if(D())console.log('[-> loadState]');
@@ -1134,6 +1278,37 @@ function fsRefreshGroupPostsIfNeeded(){if(!hasFS()||!A.groups.length||now()-_grp
   A.groups.forEach(g=>{fsLoadGroupPosts(g.id).then(posts=>{var added=0;posts.forEach(p=>{if(!A.openJobs.has(p.id)&&!A.myJobs.find(j=>j.id===p.id)&&!A.blocked.has(p.creatorId)){A.openJobs.set(p.id,{...p,isFromContact:true});added++;}});
     if(added>0){if(A.screen!=='groups')A.unreadGroups+=added;if(!(A.screen==='groupDetail'&&A.params.gid===g.id))A._unreadGroupPosts[g.id]=(A._unreadGroupPosts[g.id]||0)+added;updateB();persist();sR();}}).catch(()=>{});});}
 async function fsRegisterUser(){if(D())console.log('[-> fsRegisterUser]',{myId:A.myId,myName:A.myName});if(!hasFS()||!A.myId||!A.myName)return;try{var authUid='';try{authUid=(firebase&&firebase.auth&&firebase.auth().currentUser&&firebase.auth().currentUser.uid)||'';}catch(_){}if(!authUid||authUid!==A.myId){if(D())console.warn('[FS] registerUser skipped until auth linked',{authUid:authUid||null,myId:A.myId});return;}ss('oFbUid',authUid);const _pushMode=A.pushMode||getPushMode();await fbDb.collection('users').doc(A.myId).set({name:A.myName,nameLower:A.myName.toLowerCase(),fylke:A.myFylke||'',by:A.myBy||'',avatar:ls('oAvatar')||'',pub:A.pubB64||'',epub:A.ecdhPubB64||'',esig:A.ecdhSig||'',firebaseUid:authUid,pushMode:_pushMode,pushEnabled:pushEnabledNow(_pushMode),pushPermission:pushPermissionState(),pushUpdatedAt:Date.now(),updatedAt:Date.now()},{merge:true});if(D())console.log('[<- fsRegisterUser] success');}catch(e){console.warn('[FS] registerUser',e);}}
+async function fsGetBackupStatus(force){
+  if(A.isGuest||!firebase?.functions||!A.myId)return null;
+  if(A._backupLoading&&!force)return A._backupStatus||null;
+  A._backupLoading=true;render();
+  try{
+    var fn=firebase.functions().httpsCallable('getBackupStatus');
+    var res=await fn({});
+    A._backupStatus={exists:!!res?.data?.exists,createdAt:res?.data?.createdAt||0,updatedAt:res?.data?.updatedAt||0,codeUpdatedAt:res?.data?.codeUpdatedAt||0,version:res?.data?.version||0};
+    A._backupLoaded=true;
+    return A._backupStatus;
+  }catch(e){
+    if(D())console.warn('[backup] status',e?.message||e);
+    if(!A._backupLoaded)A._backupStatus={exists:false,createdAt:0,updatedAt:0,codeUpdatedAt:0,version:0};
+    return A._backupStatus;
+  }finally{A._backupLoading=false;render();}
+}
+async function fsSaveUserBackup(){
+  if(A.isGuest||!firebase?.functions||!A.myId||!A.myName)throw new Error('backup-unavailable');
+  var fn=firebase.functions().httpsCallable('saveUserBackup');
+  var res=await fn({package:buildBackupPackage()});
+  var data=res?.data||{};
+  A._backupStatus={exists:true,createdAt:data.createdAt||Date.now(),updatedAt:data.updatedAt||Date.now(),codeUpdatedAt:data.codeUpdatedAt||Date.now(),version:data.version||BACKUP_SCHEMA_VERSION};
+  A._backupLoaded=true;
+  return data;
+}
+async function fsRecoverUserBackup(code){
+  if(A.isGuest||!firebase?.functions)throw new Error('backup-unavailable');
+  var fn=firebase.functions().httpsCallable('recoverUserBackup');
+  var res=await fn({code:String(code||'')});
+  return res?.data||null;
+}
 function fsWriteJobRef(uid,jid,fields){if(!hasFS()||!uid||!jid)return;try{fbDb.collection('users').doc(uid).collection('jobRefs').doc(jid).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] jobRef write',e);});}catch(e){}}
 function fsWriteDMRef(uid,peerId,fields){if(!hasFS()||!uid||!peerId)return;try{fbDb.collection('users').doc(uid).collection('dmRefs').doc(peerId).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] dmRef write',e);});}catch(e){}}
 function fsWriteGroupRef(uid,gid,fields){if(!hasFS()||!uid||!gid)return;try{fbDb.collection('users').doc(uid).collection('groupRefs').doc(gid).set({...fields,updatedAt:Date.now()},{merge:true}).catch(e=>{if(D())console.warn('[FS] groupRef write',e);});}catch(e){}}
@@ -2333,7 +2508,7 @@ window.go=(s,p)=>{if(D())_navTapT0=performance.now();if(D())console.log('[go]',{
   const nav=$('nav');const noNav=['setup','onboarding','create','groupCreated','jobChat','dm'];
   if(nav)nav.style.display=noNav.includes(s)?'none':'block';
   ['feed','grp','mine','prof'].forEach(k=>{const el=$('nb-'+k);if(!el)return;
-    const act=(s==='feed'&&k==='feed')||(['groups','groupDetail','groupMembers','createGroup','groupCreated'].includes(s)&&k==='grp')||(s==='mine'&&k==='mine')||(['profile','chatHub','dm','jobChat','contacts','repProfile','settings','search'].includes(s)&&k==='prof');
+    const act=(s==='feed'&&k==='feed')||(['groups','groupDetail','groupMembers','createGroup','groupCreated'].includes(s)&&k==='grp')||(s==='mine'&&k==='mine')||(['profile','chatHub','dm','jobChat','contacts','repProfile','settings','backup','search'].includes(s)&&k==='prof');
     el.className='nb'+(act?' act':'');});
   if(s==='feed')A.unreadFeed=0;
   if(s==='groups')A.unreadGroups=0;
@@ -2394,7 +2569,7 @@ window.go=(s,p)=>{if(D())_navTapT0=performance.now();if(D())console.log('[go]',{
 var _rCount=0,_rTotalMs=0,_rBootTs=0;
 function render(){const el=$('app');if(!el)return;if(D())console.log('[R]',A.screen,new Date().toISOString().substr(11,12));var _rt0=D()?performance.now():0;
   const map={onboarding:vOB,setup:vSetup,feed:vFeed,create:vCreate,mine:vMine,jobDetail:vDetail,interests:vInterests,
-    chatHub:vChatHub,jobChat:vJobChat,dm:vDM,contacts:vContacts,repProfile:vRep,profile:vProfile,settings:vSettings,
+    chatHub:vChatHub,jobChat:vJobChat,dm:vDM,contacts:vContacts,repProfile:vRep,profile:vProfile,settings:vSettings,backup:vBackup,
     groups:vGroups,groupDetail:vGroupDetail,groupMembers:vGroupMembers,createGroup:vCreateGroup,groupCreated:vGroupCreated,search:vSearch,privacy:vPrivacy,terms:vTerms,report:vReport,support:vSupport};
   try{const newHtml=(map[A.screen]||vFeed)();if(el._lastHtml===newHtml)return;el._lastHtml=newHtml;el.innerHTML=newHtml;}
   catch(e){console.error('[render]',A.screen,e);el.innerHTML='<div class="scr"><button class="bk" onclick="go(\'feed\')">Tilbake</button><div class="emp"><div class="emp-i">⚠️</div><div class="emp-t">Noe gikk galt.</div></div></div>';}
@@ -2436,9 +2611,14 @@ function vSetup(){const step=A.params.step||1;const sf=A.nb._sf||'';const komm=s
     ${A.nb._sb==='_annet'?`<input class="fi" style="margin-top:6px" id="sba" placeholder="Skriv kommune..." maxlength="30" value="${esc(A.nb._sba||'')}" oninput="A.nb._sba=this.value">`:''}
     </div>`:''}
   <div class="fld"><label class="fl">Om deg (valgfritt)</label><textarea class="fi" id="sb" rows="3" placeholder="Skriv litt om deg selv. Hva kan du hjelpe med?" maxlength="200" oninput="A.nb._bio=this.value">${esc(A.nb._bio||'')}</textarea></div>
-  <div class="fld" style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--t2);line-height:1.5">
-    <input type="checkbox" id="sCons" ${A.nb._consent?'checked':''} onchange="A.nb._consent=this.checked;if(this.checked)ls('oConsentV1',String(Date.now()));render()" style="margin-top:3px;flex-shrink:0">
-    <label for="sCons" style="cursor:pointer">Jeg har lest og godtar <a href="#" onclick="event.preventDefault();go('privacy',{from:'setup'})" style="color:var(--pr);text-decoration:underline">personvern</a> og <a href="#" onclick="event.preventDefault();go('terms',{from:'setup'})" style="color:var(--pr);text-decoration:underline">brukervilkår</a></label>
+  <div class="fld">
+    <div style="display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border:1px solid ${A.nb._consent?'var(--pbb)':'var(--s3)'};border-radius:16px;background:${A.nb._consent?'var(--pb)':'#fff'};font-size:13px;color:var(--t2);line-height:1.5;cursor:pointer" onclick="A.nb._consent=!A.nb._consent;if(A.nb._consent)ls('oConsentV1',String(Date.now()));render()">
+      <input type="checkbox" id="sCons" ${A.nb._consent?'checked':''} onchange="A.nb._consent=this.checked;if(this.checked)ls('oConsentV1',String(Date.now()));render()" onclick="event.stopPropagation()" style="margin-top:2px;flex-shrink:0;width:18px;height:18px;accent-color:var(--pr)">
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:2px">Jeg har lest og godtar</div>
+        <div><a href="#" onclick="event.preventDefault();event.stopPropagation();go('privacy',{from:'setup'})" style="color:var(--pr);text-decoration:underline">personvern</a> og <a href="#" onclick="event.preventDefault();event.stopPropagation();go('terms',{from:'setup'})" style="color:var(--pr);text-decoration:underline">brukervilkår</a></div>
+      </div>
+    </div>
   </div>
   <button class="btn bp" onclick="obStep1()" ${A.nb._consent?'':'disabled style="opacity:0.5;cursor:not-allowed"'}>Neste steg →</button></div>`;
   if(step===2)return`<div class="obw">${dots}<div style="font-size:20px;font-weight:800;margin-bottom:4px">Hva vil du bruke appen til?</div><div style="font-size:13px;color:var(--t2);margin-bottom:20px">Velg det som passer deg. Du kan velge flere.</div>
@@ -2497,7 +2677,8 @@ window.finishSetup=async()=>{
   await fsRegisterUser();persist();if(!A.peer||A.peer.destroyed)initPeer();$('nav').style.display='block';A.nb={};
   var _st=A._shareTarget;A._shareTarget=null;A.isGuest=false;
   if(!(await openEntryTarget(_st)))go('feed');
-  setTimeout(showInstallPopup,500);setTimeout(maybeShowPushNudge,1200);setTimeout(()=>{syncPushRegistration({force:true}).catch(()=>{});},1800);};
+  A.pushMode=A.pushMode||getPushMode();ss('oPushMode',A.pushMode);
+  setTimeout(showInstallPopup,500);setTimeout(()=>{maybeShowPushNudge({force:true,source:'setup',delayMs:0});},1400);setTimeout(()=>{syncPushRegistration({force:true}).catch(()=>{});},2200);setTimeout(()=>{maybeShowBackupNudge({force:true,delayMs:0});},2800);};
 
 // ═══ FEED ═══
 async function _loadGuestPosts(){if(A._guestPostsLoaded||!hasFS())return;A._guestPostsLoaded=true;
@@ -3766,7 +3947,57 @@ function vSupport(){if(!A._supportLoaded)fsLoadSupportThread();
   <div class="fld" style="margin-top:16px"><textarea class="fi" id="sup-ta" rows="3" maxlength="2000" placeholder="Beskriv problemet..."></textarea></div>
   <button class="btn bp" onclick="doSendSupport()">Send</button>
   </div></div>`;}
+window.openBackupScreen=()=>{go('backup');setTimeout(()=>{fsGetBackupStatus(true).catch(()=>{});},50);};
+window.backupSave=()=>{if(A._backupBusy)return;const run=async()=>{A._backupBusy=true;render();
+  try{
+    var data=await fsSaveUserBackup();
+    markBackupNudgeSeen();
+    notify('✅','Sikkerhetskopi lagret');
+    showBackupCodeModal(data.code||'',data.updatedAt||Date.now());
+    go('backup');
+  }catch(e){
+    var msg=String(e?.message||'');
+    notify('⚠️',msg.includes('backup-unavailable')?'Kunne ikke lage sikkerhetskopi akkurat nå':'Kunne ikke lagre sikkerhetskopi');
+  }finally{A._backupBusy=false;render();}};
+  if(backupHasStatus()){showConfirm('Oppdatere sikkerhetskopien?','Den nye sikkerhetskopien blir den nyeste kopien du kan gjenopprette fra.','Oppdater',()=>{run();});}
+  else run();};
+window.backupRefresh=()=>{if(!backupHasStatus()){notify('ℹ️','Lag en sikkerhetskopi først');return;}backupSave();};
+window.backupRecover=()=>{if(A._backupBusy)return;var code=$('backup-code')?.value?.trim()||'';if(!code){notify('⚠️','Skriv inn gjenopprettingskoden');return;}
+  showConfirm('Gjenopprette på denne enheten?','Dette erstatter OptoU-dataene på denne enheten. Det som ligger her nå blir byttet ut.','Gjenopprett',async()=>{
+    A._backupBusy=true;render();
+    try{
+      var data=await fsRecoverUserBackup(code);
+      if(!data?.pkg)throw new Error('recover-missing-package');
+      notify('✅','Sikkerhetskopi funnet. Starter på nytt...');
+      await applyRecoveredPackage(data.pkg);
+      location.reload();
+    }catch(e){
+      var errCode=String(e?.code||'').toLowerCase();
+      var msg=String(e?.message||'').toLowerCase();
+      if(errCode.includes('permission-denied')||errCode.includes('not-found')||errCode.includes('invalid')||msg.includes('permission-denied')||msg.includes('not-found')||msg.includes('invalid'))notify('⚠️','Fant ingen sikkerhetskopi som passer til koden');
+      else notify('⚠️','Kunne ikke gjenopprette akkurat nå');
+    }finally{A._backupBusy=false;render();}
+  });};
+function vBackup(){if(A.myName&&!A._backupLoaded&&!A._backupLoading)fsGetBackupStatus().catch(()=>{});
+  var busy=!!A._backupBusy;
+  return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('settings')">Tilbake</button><div class="pgt">Sikkerhetskopi</div></div>
+  <div class="cd" style="padding:18px;margin-bottom:14px">
+    <div style="font-size:17px;font-weight:800;margin-bottom:6px">Sikkerhetskopi og gjenoppretting</div>
+    <div style="font-size:14px;color:var(--t2);line-height:1.7;margin-bottom:12px">${backupStatusLead()}</div>
+    <div style="font-size:13px;color:var(--t3);line-height:1.6">${backupStatusSub()}</div>
+  </div>
+  <div class="ibox" style="margin-bottom:14px">Hvis du lager en sikkerhetskopi, kan du hente tilbake profilen din på en ny enhet med gjenopprettingskoden din.</div>
+  <div class="ibox" style="margin-bottom:18px">${backupRecoverNote()}</div>
+  <button class="btn bp" style="margin-bottom:8px;${busy?'opacity:0.6;cursor:not-allowed;':''}" onclick="backupSave()" ${busy?'disabled':''}>${busy?'Jobber...':backupHasStatus()?'Oppdater sikkerhetskopi':'Lag sikkerhetskopi'}</button>
+  <div class="fld" style="margin-top:18px"><label class="fl">Gjenopprettingskode</label>
+    <input class="fi" id="backup-code" placeholder="Skriv inn koden din" autocomplete="off" spellcheck="false">
+    <div style="font-size:12px;color:var(--t3);line-height:1.6;margin-top:6px">Du kan bruke koden på denne enheten selv om det ikke finnes noen lokal sikkerhetskopi her ennå.</div>
+  </div>
+  <button class="btn bs" style="${busy?'opacity:0.6;cursor:not-allowed;':''}" onclick="backupRecover()" ${busy?'disabled':''}>Gjenopprett fra sikkerhetskopi</button>
+  <div class="dv" style="margin:24px 0"></div>
+  <div style="font-size:12px;color:var(--t3);line-height:1.7">Dette er en enkel, trygg sikkerhetskopi av profilen din. Den prøver ikke å slå sammen gammel og ny lokal data på magisk vis. Gjenoppretting betyr at denne enheten begynner å bruke den lagrede OptoU-profilen.</div></div>`;}
 function vSettings(){
+  if(A.myName&&!A._backupLoaded&&!A._backupLoading)fsGetBackupStatus().catch(()=>{});
   return`<div class="scr"><div class="tbar"><button class="bk" onclick="go('profile')">Tilbake</button><div class="pgt">Innstillinger</div></div>
   <div class="fld" style="text-align:center"><label style="cursor:pointer;display:inline-block">
     ${ls('oAvatar')?`<img src="${esc(ls('oAvatar'))}" style="width:72px;height:72px;border-radius:36px;object-fit:cover;border:3px solid var(--pbb)">`
@@ -3781,6 +4012,11 @@ function vSettings(){
   <div class="fld"><label class="fl">By</label><input class="fi" id="stc" value="${esc(A.myBy||A.myCity)}" maxlength="30"></div>
   <div class="fld"><label class="fl">Om deg</label><textarea class="fi" id="stb" rows="3" maxlength="200">${esc(A.myBio)}</textarea></div>
   <button class="btn bp" onclick="saveS()">Lagre endringer</button>
+  <div class="dv" style="margin:24px 0"></div>
+  <div class="slbl">🛟 SIKKERHETSKOPI OG GJENOPPRETTING</div>
+  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:4px">${backupStatusLead()}</div>
+  <div style="font-size:11px;color:var(--t3);line-height:1.5;margin-bottom:12px">${backupStatusSub()}</div>
+  <button class="btn bs" style="margin-bottom:16px" onclick="openBackupScreen()">🛟 Åpne sikkerhetskopi</button>
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">📱 LAGRING</div>
   <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:4px">Mine aktive jobber: <strong>${countMyActiveJobs()}</strong></div>
@@ -3801,8 +4037,9 @@ function vSettings(){
     ${[['off','Av','Ingen browser-varsler. In-app varsler virker fortsatt.'],['personal','Bare det som gjelder meg','Mest relevante signaler om ting som gjelder deg.'],['all','Mer aktivitet / alt','Mye bredere varsler, men fortsatt med appens truth-modell']].map(([v,n,d])=>
       `<div class="ttype${A.pushMode===v?' act':''}" onclick="setPushMode('${v}',${v==='off'?'{}':'{ask:true}'})"><div style="display:flex;align-items:center;gap:12px"><div class="ttype-i">${v==='off'?'🔕':v==='all'?'🔔':'✨'}</div><div style="text-align:left;flex:1"><div class="ttype-n">${n}${v==='personal'?' (standard)':''}</div><div class="ttype-d">${d}</div></div></div></div>`).join('')}
   </div>
-  <div class="ibox" style="margin-bottom:12px">${pushTransportSupported()?`Nettleserstøtte: ${pushEnabledNow()?'På':'Ikke på ennå'}${pushPermissionState()==='denied'?' · Blokkert i nettleseren':''}`:'Denne nettleseren støtter ikke push-varsler.'}</div>
-  ${pushTransportSupported()&&A.pushMode!==PUSH_MODES.off&&pushPermissionState()==='default'?`<button class="btn bp" style="margin-bottom:12px" onclick="askPushPermission()">Tillat varsler</button>`:''}
+  <div class="ibox" style="margin-bottom:12px">${pushStatusText()}</div>
+  ${pushTransportSupported()&&A.pushMode!==PUSH_MODES.off&&pushPermissionState()==='default'?`<button class="btn bp" style="margin-bottom:12px" onclick="askPushPermission({source:'settings-button'})">Tillat varsler</button>`:''}
+  ${pushTransportSupported()&&A.pushMode!==PUSH_MODES.off&&pushPermissionState()==='granted'&&!pushDeviceReady()?`<button class="btn bs" style="margin-bottom:12px" onclick="retryPushRegistration()">Prøv å aktivere denne enheten igjen</button>`:''}
   ${pushTransportSupported()&&pushPermissionState()==='denied'?`<div class="ibox" style="margin-bottom:12px">Varsler er blokkert i nettleseren. Du kan slå dem på igjen i nettleserens sideinnstillinger.</div>`:''}
   <div class="dv" style="margin:24px 0"></div>
   <div class="slbl">📄 JURIDISK</div>
